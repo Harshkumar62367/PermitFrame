@@ -1,0 +1,47 @@
+import type { PermissionPassport, ProductFacts, Visibility } from "../types";
+import type { KaEnvelope } from "./schemas";
+
+export interface KaRecord {
+  ual: string;
+  explorerUrl: string;
+  name: string;
+  content: Record<string, unknown>;
+  publishedAt: string;
+  mode: DkgMode;
+}
+
+export type DkgMode = "dkg-testnet" | "local-evidence";
+
+export interface DkgHealth {
+  mode: DkgMode;
+  healthy: boolean;
+  endpoint?: string;
+  blockchain?: string;
+  detail: string;
+}
+
+/**
+ * The DKG layer governs what the production agent may do:
+ * rights + facts go in, policy decisions and receipts come out.
+ */
+export interface DkgAdapter {
+  readonly mode: DkgMode;
+  health(): Promise<DkgHealth>;
+  publish(ka: KaEnvelope, visibility: Visibility): Promise<KaRecord>;
+  get(ual: string): Promise<KaRecord | null>;
+  sparql(query: string): Promise<Array<Record<string, unknown>>>;
+  findApplicablePassports(filter: {
+    creatorId: string;
+    platform: string;
+    country: string;
+    onDate: string;
+  }): Promise<PermissionPassport[]>;
+  /** All passports for a creator regardless of platform/country/validity — used to explain blocks. */
+  listPassports(creatorId: string): Promise<PermissionPassport[]>;
+  findProductFacts(brand: string, productName: string): Promise<ProductFacts | null>;
+  listAssets(): Promise<KaRecord[]>;
+}
+
+export function explorerUrlFor(ual: string): string {
+  return `https://dkg.origintrail.io/explore?ual=${encodeURIComponent(ual)}`;
+}
