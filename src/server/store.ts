@@ -7,6 +7,7 @@ const DATA_DIR = process.env.PERMITFRAME_DATA_DIR ?? path.join(process.cwd(), ".
 const DATA_FILE = path.join(DATA_DIR, "permitframe.json");
 
 let cache: Database | null = null;
+let cacheMtime = 0;
 
 function emptyDb(): Database {
   return {
@@ -21,16 +22,21 @@ function emptyDb(): Database {
 }
 
 export function loadDb(): Database {
-  if (cache) return cache;
+  // Reload when another module instance / process has written the file since our
+  // last read — route handlers and RSC pages hold separate module caches in dev.
   try {
     if (fs.existsSync(DATA_FILE)) {
+      const mtime = fs.statSync(DATA_FILE).mtimeMs;
+      if (cache && mtime <= cacheMtime) return cache;
       cache = JSON.parse(fs.readFileSync(DATA_FILE, "utf8")) as Database;
+      cacheMtime = mtime;
       return cache;
     }
   } catch {
     // corrupted file -> start fresh rather than crash the demo
   }
   cache = emptyDb();
+  cacheMtime = 0;
   persist();
   return cache;
 }
@@ -40,6 +46,7 @@ export function persist(): void {
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true });
     fs.writeFileSync(DATA_FILE, JSON.stringify(cache, null, 2), "utf8");
+    cacheMtime = fs.statSync(DATA_FILE).mtimeMs;
   } catch {
     // read-only FS (e.g. serverless): keep state in memory for this instance
   }

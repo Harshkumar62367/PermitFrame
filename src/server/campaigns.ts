@@ -61,7 +61,7 @@ export async function rePreflight(id: string): Promise<Campaign | undefined> {
 }
 
 /** Kick off production: job records are created synchronously, execution runs in background. */
-export async function startProduction(id: string): Promise<{ started: boolean; error?: string }> {
+export async function startProduction(id: string, capabilityOverride?: string): Promise<{ started: boolean; error?: string }> {
   const campaign = loadCampaign(id);
   if (!campaign) return { started: false, error: "Campaign not found" };
   if (campaign.preflight?.decision !== "allow") return { started: false, error: "Preflight has not approved this campaign" };
@@ -73,6 +73,7 @@ export async function startProduction(id: string): Promise<{ started: boolean; e
       if (c) {
         for (const j of c.jobs) {
           if (j.status === "failed") {
+            if (capabilityOverride?.trim()) j.capability = capabilityOverride.trim();
             j.status = "queued";
             j.error = undefined;
           }
@@ -141,6 +142,9 @@ export async function approveCampaign(id: string): Promise<{ approved: boolean; 
   const campaign = loadCampaign(id);
   if (!campaign) return { approved: false, error: "Campaign not found" };
   if (campaign.status === "blocked") return { approved: false, error: "Blocked campaigns cannot be approved" };
+  if (campaign.jobs.filter((j) => j.status === "succeeded").length === 0) {
+    return { approved: false, error: "Produce the campaign pack before approving — there is nothing to sign off yet" };
+  }
   updateDb((d) => {
     const c = d.campaigns.find((x) => x.id === id);
     if (c) {

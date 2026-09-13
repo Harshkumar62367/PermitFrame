@@ -3,9 +3,10 @@ import { startProduction } from "@/server/campaigns";
 
 export const dynamic = "force-dynamic";
 
-export async function POST(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const result = await startProduction(id);
+  const body = await request.json().catch(() => ({}));
+  const result = await startProduction(id, body.capabilityOverride);
   if (!result.started) return NextResponse.json({ error: result.error }, { status: 400 });
   return NextResponse.json({ started: true });
 }
