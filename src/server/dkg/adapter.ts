@@ -10,7 +10,7 @@ export interface KaRecord {
   mode: DkgMode;
 }
 
-export type DkgMode = "dkg-testnet" | "local-evidence";
+export type DkgMode = "dkg-testnet" | "edge-node" | "local-evidence";
 
 export interface DkgHealth {
   mode: DkgMode;

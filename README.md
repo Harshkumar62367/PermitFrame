@@ -81,7 +81,7 @@ LIVEPEER_IMAGE_CAPABILITY=flux-schnell
 LIVEPEER_VIDEO_CAPABILITY=seedance-mini-i2v
 ```
 
-**DKG modes.** Without DKG config the app runs in *local evidence mode*: identical Knowledge Asset schemas and SPARQL semantics persisted under `.data/dkg/`, clearly labelled in the UI. Set `DKG_MODE=real` with a node endpoint + funded testnet wallet to publish with real UALs and explorer links (`dkg.origintrail.io/explore?ual=...`).
+**DKG modes.** Without DKG config the app runs in *local evidence mode*: identical Knowledge Asset schemas and SPARQL semantics persisted under `.data/dkg/`, clearly labelled in the UI. The demo workspace in this repo runs in **Edge Node mode** (`DKG_MODE=edge`): a local OriginTrail Edge Node daemon (DKG v10, Base Sepolia testnet) — `npm i -g @origintrail-official/dkg`, `dkg init --role edge --network testnet` (auto-funds wallets via the testnet faucet), `dkg start`. Passport/facts/media/campaign/receipt publishes return real `did:dkg:context-graph:…` assertion URIs with Merkle roots, and every preflight decision is a live SPARQL query against the node. `DKG_MODE=real` (dkg.js to a remote OT-node) remains available for classic deployments with explorer links.
 
 **Livepeer auth.** The raw surface honours keyless demo credit; for reliable demos create a key at app.daydream.live and set `LIVEPEER_MCP_BEARER`.
 
