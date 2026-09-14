@@ -85,15 +85,59 @@
   * {
     @apply border-border outline-ring/50;
   }
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
   body {
     @apply bg-background text-foreground;
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    overflow-x: clip;
+  }
+  /* Visible keyboard focus everywhere (both themes). */
+  :where(a, button, input, select, textarea, [tabindex]):focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+  /* Consistent disabled affordance beyond opacity. */
+  :where(button, a)[aria-disabled="true"] {
+    cursor: not-allowed;
   }
 }
 
 .font-display {
   font-family: var(--font-sans);
   letter-spacing: -0.035em;
+}
+
+/**
+ * Explicitly scoped dark promotional surface.
+ * Use on hardcoded dark sections (landing hero/header/CTA, verify
+ * certificate, desktop sidebar) so nested semantic tokens still resolve
+ * to dark-readable values when the root theme is light.
+ * Foreground, muted, border, button and hover colors inside must stay
+ * explicit (white/emerald on #0b0f0e) — never bare light-theme tokens.
+ */
+.pf-dark-scope {
+  color-scheme: dark;
+  --background: oklch(0.176 0.008 260);
+  --foreground: oklch(0.968 0.003 95);
+  --card: oklch(0.213 0.009 260);
+  --card-foreground: oklch(0.968 0.003 95);
+  --popover: oklch(0.213 0.009 260);
+  --popover-foreground: oklch(0.968 0.003 95);
+  --primary: oklch(0.723 0.13 165);
+  --primary-foreground: oklch(0.176 0.008 260);
+  --secondary: oklch(0.274 0.011 260);
+  --secondary-foreground: oklch(0.968 0.003 95);
+  --muted: oklch(0.253 0.01 260);
+  --muted-foreground: oklch(0.704 0.012 261);
+  --accent: oklch(0.29 0.03 168);
+  --accent-foreground: oklch(0.9 0.05 168);
+  --destructive: oklch(0.637 0.2 27);
+  --destructive-foreground: oklch(0.968 0.004 95);
+  --border: oklch(0.3 0.011 260);
+  --input: oklch(0.3 0.011 260);
+  --ring: oklch(0.723 0.13 165);
 }
 
 .grain::before {
@@ -104,4 +148,32 @@
   opacity: 0.5;
   background-image: radial-gradient(rgba(255, 255, 255, 0.045) 1px, transparent 1px);
   background-size: 3px 3px;
+}
+
+/* Long DKG identifiers: truncate visually, keep full value in title/copy. */
+.pf-id {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Guard against horizontal overflow on small screens. */
+.pf-page {
+  min-width: 0;
+  overflow-x: clip;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-marquee {
+    animation: none;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

@@ -19,16 +19,16 @@ import { preflight } from "./policy/engine";
  * claims-safe captions, cost estimation, client share links, comments.
  */
 
-function campaigns(): Campaign[] {
-  return loadDb().campaigns;
+async function campaigns(): Promise<Campaign[]> {
+  return (await loadDb()).campaigns;
 }
 
 function normalize(c: Campaign): Campaign {
   return { ...c, comments: c.comments ?? [], captions: c.captions ?? [] };
 }
 
-export function findCampaign(id: string): Campaign | undefined {
-  const c = campaigns().find((x) => x.id === id);
+export async function findCampaign(id: string): Promise<Campaign | undefined> {
+  const c = (await campaigns()).find((x) => x.id === id);
   return c ? normalize(c) : undefined;
 }
 
@@ -43,7 +43,7 @@ export async function upsertProductFacts(input: {
   guidelines: string[];
   evidenceNotes: string;
 }): Promise<ProductFacts> {
-  const db = loadDb();
+  const db = await loadDb();
   const existing = input.id ? db.productFacts.find((f) => f.id === input.id) : undefined;
   const facts: ProductFacts = {
     id: existing?.id ?? newId("facts"),
@@ -61,7 +61,7 @@ export async function upsertProductFacts(input: {
   } catch {
     // local mode writes succeed; real-mode failures surface in health panel
   }
-  updateDb((d) => {
+  await updateDb((d) => {
     const at = d.productFacts.findIndex((f) => f.id === facts.id);
     if (at >= 0) d.productFacts[at] = { ...facts, ual };
     else d.productFacts.push({ ...facts, ual });
@@ -98,7 +98,7 @@ export async function registerSourceMedia(input: {
   } catch {
     // keep the record locally if publication fails
   }
-  updateDb((d) => {
+  await updateDb((d) => {
     d.sourceMedia.push({ ...media, ual });
     d.events.push({
       id: newId("evt"),
@@ -114,7 +114,7 @@ export async function registerSourceMedia(input: {
 /* ------------------------- passport revoke / amend ------------------------ */
 
 export async function revokePassport(passportId: string, note: string): Promise<{ revoked: boolean; blockedCampaigns: string[] }> {
-  const db = loadDb();
+  const db = await loadDb();
   const passport = db.passports.find((p) => p.id === passportId);
   if (!passport) throw new Error("Passport not found");
   if (passport.status === "revoked") return { revoked: false, blockedCampaigns: [] };
@@ -127,7 +127,7 @@ export async function revokePassport(passportId: string, note: string): Promise<
     // amendment stored locally; still enforceable in the app layer
   }
 
-  updateDb((d) => {
+  await updateDb((d) => {
     const p = d.passports.find((x) => x.id === passportId);
     if (p) {
       p.status = "revoked";
@@ -143,11 +143,11 @@ export async function revokePassport(passportId: string, note: string): Promise<
   });
 
   // Re-run preflight on every campaign of this creator — revocation takes effect immediately.
-  const affected = campaigns().filter((c) => c.creatorId === passport.creatorId && c.status !== "approved");
+  const affected = (await campaigns()).filter((c) => c.creatorId === passport.creatorId && c.status !== "approved");
   const blocked: string[] = [];
   for (const c of affected) {
     const decision = await preflight(normalize(c));
-    updateDb((d) => {
+    await updateDb((d) => {
       const t = d.campaigns.find((x) => x.id === c.id);
       if (t) {
         t.preflight = decision;
@@ -161,7 +161,7 @@ export async function revokePassport(passportId: string, note: string): Promise<
 }
 
 export async function renewPassport(passportId: string, validUntil: string): Promise<PermissionPassport | undefined> {
-  const db = loadDb();
+  const db = await loadDb();
   const passport = db.passports.find((p) => p.id === passportId);
   if (!passport) return undefined;
   const renewed: PermissionPassport = {
@@ -180,7 +180,7 @@ export async function renewPassport(passportId: string, validUntil: string): Pro
   } catch {
     // keep old UAL on failure
   }
-  updateDb((d) => {
+  await updateDb((d) => {
     const p = d.passports.find((x) => x.id === passportId);
     if (p) {
       p.validUntil = validUntil;
@@ -207,8 +207,8 @@ export interface ExpiryWarning {
   affectedCampaigns: string[];
 }
 
-export function expiryWarnings(withinDays = 30): ExpiryWarning[] {
-  const db = loadDb();
+export async function expiryWarnings(withinDays = 30): Promise<ExpiryWarning[]> {
+  const db = await loadDb();
   const today = new Date();
   return db.passports
     .filter((p) => p.status === "active")
@@ -235,8 +235,8 @@ const DISCLOSURE = "#ad";
  * Deterministic, claims-safe captions: only verified claims
  * (campaign.preflight.allowedClaims) may appear, always with disclosure.
  */
-export function generateCaptions(campaignId: string): CampaignCaption[] {
-  const campaign = findCampaign(campaignId);
+export async function generateCaptions(campaignId: string): Promise<CampaignCaption[]> {
+  const campaign = await findCampaign(campaignId);
   if (!campaign) throw new Error("Campaign not found");
   const decision = campaign.preflight;
   if (decision?.decision !== "allow") throw new Error("Captions are only generated for policy-approved campaigns");
@@ -268,7 +268,7 @@ export function generateCaptions(campaignId: string): CampaignCaption[] {
     disclosure: DISCLOSURE,
     text: `Proud to launch ${product}.${claimSentence} Built with verified product claims and creator permissions. ${DISCLOSURE}`
   });
-  updateDb((d) => {
+  await updateDb((d) => {
     const c = d.campaigns.find((x) => x.id === campaignId);
     if (c) {
       c.captions = captions;
@@ -305,9 +305,9 @@ export function campaignCostRollup(campaign: Campaign): { spent: number; estimat
 
 /* ------------------------- share links + comments ------------------------- */
 
-export function createShareLink(campaignId: string): string {
+export async function createShareLink(campaignId: string): Promise<string> {
   const token = newId("share");
-  updateDb((d) => {
+  await updateDb((d) => {
     const c = d.campaigns.find((x) => x.id === campaignId);
     if (!c) throw new Error("Campaign not found");
     c.shareToken = token;
@@ -315,17 +315,17 @@ export function createShareLink(campaignId: string): string {
   return token;
 }
 
-export function resolveShare(token: string): Campaign | undefined {
-  return campaigns().find((c) => c.shareToken === token);
+export async function resolveShare(token: string): Promise<Campaign | undefined> {
+  return (await campaigns()).find((c) => c.shareToken === token);
 }
 
-export function clientReview(
+export async function clientReview(
   token: string,
   input: { decision: "approved" | "changes_requested"; clientName?: string; comment?: string }
-): Campaign {
-  const campaign = resolveShare(token);
+): Promise<Campaign> {
+  const campaign = await resolveShare(token);
   if (!campaign) throw new Error("Share link not found");
-  updateDb((d) => {
+  await updateDb((d) => {
     const c = d.campaigns.find((x) => x.id === campaign.id);
     if (!c) return;
     c.comments = [...(c.comments ?? []), {
@@ -345,20 +345,20 @@ export function clientReview(
       refs: [c.id]
     });
   });
-  return findCampaign(campaign.id)!;
+  return (await findCampaign(campaign.id))!;
 }
 
-export function addComment(campaignId: string, author: string, text: string): Campaign {
-  updateDb((d) => {
+export async function addComment(campaignId: string, author: string, text: string): Promise<Campaign> {
+  await updateDb((d) => {
     const c = d.campaigns.find((x) => x.id === campaignId);
     if (!c) throw new Error("Campaign not found");
     c.comments = [...(c.comments ?? []), { id: newId("cmt"), author, text: text.trim(), at: nowIso() }];
   });
-  return findCampaign(campaignId)!;
+  return (await findCampaign(campaignId))!;
 }
 
-export function campaignTimeline(campaign: Campaign) {
-  const events = loadDb().events.filter((e) => e.refs.includes(campaign.id));
+export async function campaignTimeline(campaign: Campaign) {
+  const events = (await loadDb()).events.filter((e) => e.refs.includes(campaign.id));
   const comments = (campaign.comments ?? []).map((c) => ({ kind: "comment", at: c.at, summary: `${c.author}: ${c.text}`, id: c.id }));
   const evts = events.map((e) => ({ kind: e.kind, at: e.at, summary: e.summary, id: e.id }));
   return [...evts, ...comments].sort((a, b) => a.at.localeCompare(b.at)).reverse();
@@ -367,14 +367,14 @@ export function campaignTimeline(campaign: Campaign) {
 /* --------------------------- platform variants ---------------------------- */
 
 export async function cloneForPlatforms(campaignId: string, platforms: Platform[]): Promise<Campaign[]> {
-  const base = findCampaign(campaignId);
+  const base = await findCampaign(campaignId);
   if (!base) throw new Error("Campaign not found");
   const created: Campaign[] = [];
   for (const platform of platforms) {
     if (platform === base.request.platform) continue;
     const { createCampaign } = await import("./campaigns");
     const variant = await createCampaign({
-      title: `${base.title.replace(/ \(.*\)$/, "")} — ${platform} variant`,
+      title: `${base.title.replace(/ \(.*\)$/, "")} - ${platform} variant`,
       brand: base.brand,
       productName: base.productName,
       creatorId: base.creatorId,
@@ -382,7 +382,7 @@ export async function cloneForPlatforms(campaignId: string, platforms: Platform[
       passportId: base.passportId,
       productFactsId: base.productFactsId,
       request: { ...base.request, platform },
-      demoNote: `Platform variant of ${base.id} — preflighted independently for ${platform}.`
+      demoNote: `Platform variant of ${base.id} - preflighted independently for ${platform}.`
     });
     created.push(variant);
   }

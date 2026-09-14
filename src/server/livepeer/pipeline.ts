@@ -35,7 +35,7 @@ export function createJobRecords(campaign: Campaign): ProductionJob[] {
 }
 
 export async function runProduction(campaignId: string): Promise<{ finished: boolean; error?: string }> {
-  const db = loadDb();
+  const db = await loadDb();
   const campaign = db.campaigns.find((c) => c.id === campaignId);
   if (!campaign) return { finished: true, error: "Campaign not found" };
   if (campaign.preflight?.decision !== "allow") {
@@ -54,7 +54,7 @@ export async function runProduction(campaignId: string): Promise<{ finished: boo
     }
     if (anyFailure) break; // a failed stage halts dependent stages
 
-    updateDb((d) => {
+    await updateDb((d) => {
       const c = d.campaigns.find((x) => x.id === campaignId);
       const j = c?.jobs.find((x) => x.id === job.id);
       if (c) c.status = "generating";
@@ -91,7 +91,7 @@ export async function runProduction(campaignId: string): Promise<{ finished: boo
         const replacement = (firstError as Error).message.match(/recommended replacement is ([a-z0-9-]+)/i);
         if (!replacement) throw firstError;
         result = await client.runCapability({ capability: replacement[1], ...baseInput });
-        updateDb((d) => {
+        await updateDb((d) => {
           const c = d.campaigns.find((x) => x.id === campaignId);
           const j = c?.jobs.find((x) => x.id === job.id);
           if (j) j.capability = `${j.capability} → ${replacement[1]} (auto-recovered)`;
@@ -101,7 +101,7 @@ export async function runProduction(campaignId: string): Promise<{ finished: boo
       if (!result.outputUrl) throw new Error("Generation completed without an output URL.");
       previousOutputUrl = result.outputUrl;
 
-      updateDb((d) => {
+      await updateDb((d) => {
         const c = d.campaigns.find((x) => x.id === campaignId);
         const j = c?.jobs.find((x) => x.id === job.id);
         if (j) {
@@ -118,7 +118,7 @@ export async function runProduction(campaignId: string): Promise<{ finished: boo
       await publishReceipt(campaignId, job.id, result.outputUrl, result.capability ?? job.capability);
     } catch (error) {
       anyFailure = true;
-      updateDb((d) => {
+      await updateDb((d) => {
         const c = d.campaigns.find((x) => x.id === campaignId);
         const j = c?.jobs.find((x) => x.id === job.id);
         if (c) c.status = "review";
@@ -131,10 +131,10 @@ export async function runProduction(campaignId: string): Promise<{ finished: boo
     }
   }
 
-  const finalDb = loadDb();
+  const finalDb = await loadDb();
   const finalCampaign = finalDb.campaigns.find((c) => c.id === campaignId);
   const succeeded = finalCampaign?.jobs.filter((j) => j.status === "succeeded").length ?? 0;
-  updateDb((d) => {
+  await updateDb((d) => {
     const c = d.campaigns.find((x) => x.id === campaignId);
     if (c) {
       c.status = anyFailure && succeeded === 0 ? "blocked" : "review";
@@ -157,7 +157,7 @@ async function publishReceipt(
   outputUrl: string,
   capability: string
 ): Promise<void> {
-  const db = loadDb();
+  const db = await loadDb();
   const campaign = db.campaigns.find((c) => c.id === campaignId);
   const job = campaign?.jobs.find((j) => j.id === jobId);
   if (!campaign || !job) return;
@@ -193,7 +193,7 @@ async function publishReceipt(
     // keep the receipt locally even if publication fails; the UI will show it unpublished
   }
 
-  updateDb((d) => {
+  await updateDb((d) => {
     const c = d.campaigns.find((x) => x.id === campaignId);
     if (c) c.receipts.push(receipt);
     d.events.push({
@@ -207,12 +207,12 @@ async function publishReceipt(
 }
 
 export async function publishCampaignRecord(campaignId: string): Promise<string | undefined> {
-  const db = loadDb();
+  const db = await loadDb();
   const campaign = db.campaigns.find((c) => c.id === campaignId);
   if (!campaign) return undefined;
   try {
     const record = await getDkg().publish(campaignKa(campaign), "shared");
-    updateDb((d) => {
+    await updateDb((d) => {
       const c = d.campaigns.find((x) => x.id === campaignId);
       if (c) c.campaignUAL = record.ual;
     });

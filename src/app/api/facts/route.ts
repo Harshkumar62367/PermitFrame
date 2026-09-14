@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
   await ensureSeed();
-  return NextResponse.json({ facts: loadDb().productFacts });
+  return NextResponse.json({ facts: (await loadDb()).productFacts });
 }
 
 export async function POST(request: NextRequest) {

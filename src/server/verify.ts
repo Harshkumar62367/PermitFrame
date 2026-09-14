@@ -2,8 +2,8 @@ import { loadDb } from "./store";
 import { explorerUrlFor } from "./dkg/adapter";
 
 /** Resolve any PermitFrame reference (receipt id, UAL, campaign id) to public verification data. */
-export function lookupVerification(ref: string) {
-  const db = loadDb();
+export async function lookupVerification(ref: string) {
+  const db = await loadDb();
 
   const receipt = db.campaigns.flatMap((c) => c.receipts).find((r) => r.id === ref || r.ual === ref);
   if (receipt) {
@@ -73,4 +73,4 @@ export function lookupVerification(ref: string) {
   return { found: false as const, ref };
 }
 
-export type VerificationResult = ReturnType<typeof lookupVerification>;
+export type VerificationResult = Awaited<ReturnType<typeof lookupVerification>>;

@@ -2,11 +2,12 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
-import { BadgeCheck, Check, Copy, History, Link2, MessageSquare, Sparkles, Zap } from "lucide-react";
+import { BadgeCheck, Copy, History, Link2, MessageSquare, Sparkles, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
 import { FadeIn } from "@/components/motion-primitives";
+import { apiGet, apiPost } from "@/lib/api";
 import { CAPABILITY_PRICE_MAP, type Campaign } from "@/server/types";
 import { cn } from "@/lib/utils";
 
@@ -28,17 +29,24 @@ export function CampaignExtras({ campaign }: { campaign: Campaign }) {
   const [captions, setCaptions] = useState<Caption[]>(campaign.captions ?? []);
   const [captionMsg, setCaptionMsg] = useState<string | null>(null);
   const [shareUrl, setShareUrl] = useState<string | null>(campaign.shareToken ? `/share/${campaign.shareToken}` : null);
+  const [shareError, setShareError] = useState<string | null>(null);
   const [timeline, setTimeline] = useState<TimelineEntry[] | null>(null);
+  const [timelineError, setTimelineError] = useState<string | null>(null);
   const [comment, setComment] = useState("");
+  const [commentError, setCommentError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
+  const [variants, setVariants] = useState<{ id: string; title: string }[] | null>(null);
   const [variantMsg, setVariantMsg] = useState<string | null>(null);
 
   const loadTimeline = useCallback(() => {
-    fetch(`/api/campaigns/${campaign.id}/timeline`)
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("load failed"))))
-      .then((d) => setTimeline(d.timeline))
-      .catch(() => undefined);
+    apiGet<{ timeline: TimelineEntry[] }>(`/api/campaigns/${campaign.id}/timeline`)
+      .then((d) => {
+        setTimeline(d.timeline);
+        setTimelineError(null);
+      })
+      .catch((e) => setTimelineError(e instanceof Error ? e.message : "Timeline failed to load."));
   }, [campaign.id]);
 
   useEffect(loadTimeline, [loadTimeline]);
@@ -52,63 +60,79 @@ export function CampaignExtras({ campaign }: { campaign: Campaign }) {
   const spent = campaign.jobs.filter((j) => j.status === "succeeded").reduce((s, j) => s + (j.costUsd ?? 0), 0);
 
   async function generateCaptions() {
+    if (busy) return;
     setBusy("captions");
     setCaptionMsg(null);
     try {
-      const res = await fetch(`/api/campaigns/${campaign.id}/captions`, { method: "POST" });
-      const j = await res.json();
-      if (!res.ok) throw new Error(j.error);
+      const j = await apiPost<{ captions: Caption[] }>(`/api/campaigns/${campaign.id}/captions`);
       setCaptions(j.captions);
     } catch (e) {
-      setCaptionMsg((e as Error).message);
+      setCaptionMsg(e instanceof Error ? e.message : "Caption generation failed.");
     } finally {
       setBusy(null);
     }
   }
 
   async function createShare() {
+    if (busy) return;
     setBusy("share");
+    setShareError(null);
     try {
-      const res = await fetch(`/api/campaigns/${campaign.id}/share`, { method: "POST" });
-      const j = await res.json();
-      if (!res.ok) throw new Error(j.error);
+      const j = await apiPost<{ token: string; url: string }>(`/api/campaigns/${campaign.id}/share`);
       setShareUrl(j.url);
       setCopied(false);
+      setCopyFailed(false);
+    } catch (e) {
+      setShareError(e instanceof Error ? e.message : "Share link creation failed.");
     } finally {
       setBusy(null);
     }
   }
 
-  async function postComment() {
-    if (!comment.trim()) return;
-    setBusy("comment");
+  async function copyShare() {
+    if (!shareUrl) return;
+    setCopyFailed(false);
     try {
-      await fetch(`/api/campaigns/${campaign.id}/comments`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ author: "manager", text: comment })
-      });
+      await navigator.clipboard.writeText(window.location.origin + shareUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1600);
+    } catch {
+      setCopied(false);
+      setCopyFailed(true);
+    }
+  }
+
+  async function postComment() {
+    if (!comment.trim() || busy) return;
+    setBusy("comment");
+    setCommentError(null);
+    try {
+      await apiPost(`/api/campaigns/${campaign.id}/comments`, { author: "manager", text: comment });
       setComment("");
       loadTimeline();
+    } catch (e) {
+      // Draft is preserved for retry.
+      setCommentError(e instanceof Error ? e.message : "Note failed to post. Your draft is preserved.");
     } finally {
       setBusy(null);
     }
   }
 
   async function createVariants(platforms: string[]) {
+    if (busy) return;
     setBusy("variants");
     setVariantMsg(null);
+    setVariants(null);
     try {
-      const res = await fetch(`/api/campaigns/${campaign.id}/variants`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ platforms })
-      });
-      const j = await res.json();
-      if (!res.ok) throw new Error(j.error);
-      setVariantMsg(`Created: ${j.campaigns.map((c: { title: string }) => c.title).join(", ")} — each independently preflighted.`);
+      const j = await apiPost<{ campaigns: { id: string; title: string }[] }>(`/api/campaigns/${campaign.id}/variants`, { platforms });
+      setVariants(j.campaigns);
+      setVariantMsg(
+        j.campaigns.length > 0
+          ? `${j.campaigns.length} variant(s) created — each independently preflighted.`
+          : "No variants created — that platform matches this campaign."
+      );
     } catch (e) {
-      setVariantMsg((e as Error).message);
+      setVariantMsg(e instanceof Error ? e.message : "Variant creation failed.");
     } finally {
       setBusy(null);
     }
@@ -137,7 +161,7 @@ export function CampaignExtras({ campaign }: { campaign: Campaign }) {
                 <Sparkles className={cn("h-3.5 w-3.5", busy === "captions" && "animate-pulse")} />
                 {captions.length > 0 ? "Regenerate captions" : "Generate captions & claims manifest"}
               </Button>
-              {captionMsg && <p className="mt-2 text-[12px] text-rose-600">{captionMsg}</p>}
+              {captionMsg && <p role="alert" className="mt-2 break-words text-[12px] text-rose-600 dark:text-rose-300">{captionMsg}</p>}
               {captions.length > 0 && (
                 <div className="mt-4 grid gap-3 md:grid-cols-2">
                   {captions.map((c, i) => (
@@ -162,9 +186,20 @@ export function CampaignExtras({ campaign }: { campaign: Campaign }) {
 
           <div className="mt-5 flex flex-wrap items-center gap-3 border-t border-border pt-5">
             {!shareUrl ? (
-              <Button variant="outline" size="sm" onClick={createShare} disabled={busy !== null || campaign.receipts.length === 0} className="rounded-full">
-                <Link2 className="h-3.5 w-3.5" /> Create client share link
-              </Button>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={createShare}
+                  disabled={busy !== null || campaign.receipts.length === 0}
+                  aria-busy={busy === "share"}
+                  title={campaign.receipts.length === 0 ? "Produce the pack first — a share link needs outputs to review" : undefined}
+                  className="rounded-full"
+                >
+                  <Link2 className="h-3.5 w-3.5" aria-hidden /> {busy === "share" ? "Creating…" : "Create client share link"}
+                </Button>
+                {shareError && <p role="alert" className="break-words text-[12px] text-rose-600 dark:text-rose-300">{shareError}</p>}
+              </div>
             ) : (
               <>
                 <Link href={shareUrl} className="rounded-full bg-muted/60 px-3.5 py-1.5 font-mono text-[11.5px] text-emerald-700 ring-1 ring-border hover:text-emerald-800 dark:text-emerald-300">
@@ -174,13 +209,16 @@ export function CampaignExtras({ campaign }: { campaign: Campaign }) {
                   variant="ghost"
                   size="sm"
                   className="h-7 rounded-full px-2.5"
-                  onClick={() => {
-                    navigator.clipboard.writeText(window.location.origin + shareUrl);
-                    setCopied(true);
-                  }}
+                  onClick={copyShare}
+                  aria-label={copyFailed ? "Copy failed — select the link manually" : "Copy client share link"}
                 >
-                  <Copy className="h-3.5 w-3.5" /> {copied ? "Copied" : "Copy"}
+                  <Copy className="h-3.5 w-3.5" aria-hidden /> {copied ? "Copied" : "Copy"}
                 </Button>
+                {copyFailed && (
+                  <p role="alert" className="text-[12px] text-amber-600 dark:text-amber-300">
+                    Clipboard blocked — long-press the link to copy it manually.
+                  </p>
+                )}
               </>
             )}
             {campaign.receipts.length === 0 && <p className="text-[12px] text-muted-foreground">Produce the pack first — a share link needs outputs to review.</p>}
@@ -201,7 +239,18 @@ export function CampaignExtras({ campaign }: { campaign: Campaign }) {
               </Button>
             ))}
           </div>
-          {variantMsg && <p className="mt-3 text-[12.5px] text-muted-foreground">{variantMsg}</p>}
+          {variantMsg && <p role="status" className="mt-3 break-words text-[12.5px] text-muted-foreground">{variantMsg}</p>}
+          {variants && variants.length > 0 && (
+            <ul className="mt-2 space-y-1.5">
+              {variants.map((v) => (
+                <li key={v.id}>
+                  <Link href={`/campaigns/${v.id}`} className="text-[12.5px] font-medium text-emerald-700 hover:underline dark:text-emerald-300">
+                    {v.title} →
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
         </section>
       </FadeIn>
 
@@ -212,12 +261,41 @@ export function CampaignExtras({ campaign }: { campaign: Campaign }) {
             <History className="h-4 w-4 text-muted-foreground" /> Comments & audit timeline
           </h2>
           <div className="mt-4 flex gap-2">
-            <Input value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Add an internal note…" className="h-9 rounded-lg" />
-            <Button size="sm" variant="outline" onClick={postComment} disabled={!comment.trim() || busy !== null} className="h-9 rounded-lg">
-              <MessageSquare className="h-3.5 w-3.5" /> Note
+            <div className="min-w-0 flex-1 space-y-1.5">
+              <Label htmlFor={`note-${campaign.id}`} className="sr-only">Add an internal note</Label>
+              <Input
+                id={`note-${campaign.id}`}
+                value={comment}
+                onChange={(e) => {
+                  setComment(e.target.value);
+                  setCommentError(null);
+                }}
+                placeholder="Add an internal note…"
+                aria-invalid={Boolean(commentError)}
+                className="h-9 rounded-lg"
+              />
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={postComment}
+              disabled={!comment.trim() || busy !== null}
+              aria-busy={busy === "comment"}
+              title={!comment.trim() ? "Write a note to enable posting" : undefined}
+              className="h-9 shrink-0 rounded-lg"
+            >
+              <MessageSquare className="h-3.5 w-3.5" aria-hidden /> {busy === "comment" ? "Posting…" : "Note"}
             </Button>
           </div>
+          {commentError && <p role="alert" className="mt-2 break-words text-[12px] text-rose-600 dark:text-rose-300">{commentError}</p>}
           <div className="mt-4 space-y-0">
+            {!timeline && !timelineError && <p className="text-[12.5px] text-muted-foreground">Loading timeline…</p>}
+            {timelineError && (
+              <p role="alert" className="break-words text-[12.5px] text-rose-600 dark:text-rose-300">
+                Timeline unavailable: {timelineError}{" "}
+                <button type="button" onClick={loadTimeline} className="font-medium underline underline-offset-2">Retry</button>
+              </p>
+            )}
             {(timeline ?? []).slice(0, 12).map((entry, idx, arr) => (
               <div key={entry.id} className="relative flex gap-3 pb-4 last:pb-0">
                 {!arr.slice(idx + 1).length || <span className="absolute left-[5px] top-4 h-full w-px bg-border" />}

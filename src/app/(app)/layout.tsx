@@ -1,13 +1,16 @@
-import { AppSidebar, MobileTopbar } from "@/components/app-sidebar";
+import { AppAccessGate } from "@/components/app-access-gate";
+import { WorkspaceBridge } from "@/components/workspace/workspace-bridge";
+import { BootstrapProvider } from "@/lib/bootstrap";
+import { AppShell } from "@/components/app-shell";
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="min-h-screen">
-      <AppSidebar />
-      <MobileTopbar />
-      <main className="lg:pl-60">
-        <div className="mx-auto max-w-5xl px-6 py-10">{children}</div>
-      </main>
-    </div>
+    <AppAccessGate>
+      <WorkspaceBridge>
+        <BootstrapProvider>
+          <AppShell>{children}</AppShell>
+        </BootstrapProvider>
+      </WorkspaceBridge>
+    </AppAccessGate>
   );
 }

@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
 
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
-  const campaign = resolveShare(token);
+  const campaign = await resolveShare(token);
   if (!campaign) return NextResponse.json({ error: "Share link not found" }, { status: 404 });
   return NextResponse.json({
     campaign: {
@@ -37,7 +37,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     return NextResponse.json({ error: "decision must be approved or changes_requested" }, { status: 400 });
   }
   try {
-    const campaign = clientReview(token, {
+    const campaign = await clientReview(token, {
       decision: body.decision,
       clientName: body.clientName,
       comment: body.comment

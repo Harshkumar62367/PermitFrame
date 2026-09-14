@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 /** Re-publish any receipts that were stored locally (e.g. the DKG node was down at generation time). */
 export async function POST(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const db = loadDb();
+  const db = await loadDb();
   const campaign = db.campaigns.find((c) => c.id === id);
   if (!campaign) return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
 
@@ -17,7 +17,7 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
     if (receipt.ual) continue;
     try {
       const record = await getDkg().publish(receiptKa(receipt), receipt.visibility);
-      updateDb((d) => {
+      await updateDb((d) => {
         const c = d.campaigns.find((x) => x.id === id);
         const r = c?.receipts.find((x) => x.id === receipt.id);
         if (r) {
@@ -30,7 +30,7 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
       // leave unpublished; UI shows "receipt stored locally"
     }
   }
-  updateDb((d) => {
+  await updateDb((d) => {
     d.events.push({
       id: newId("evt"),
       at: nowIso(),

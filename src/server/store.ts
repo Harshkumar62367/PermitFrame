@@ -1,15 +1,14 @@
-import fs from "node:fs";
-import path from "node:path";
 import crypto from "node:crypto";
+import "server-only";
+import { eq } from "drizzle-orm";
+import { getDb } from "./db/client";
+import { applicationState, workspaceState } from "./db/schema";
+import { requireCurrentSession } from "./auth";
 import type { Database } from "./types";
 
-const DATA_DIR = process.env.PERMITFRAME_DATA_DIR ?? path.join(process.cwd(), ".data");
-const DATA_FILE = path.join(DATA_DIR, "permitframe.json");
+const PRIMARY_STATE_ID = "primary";
 
-let cache: Database | null = null;
-let cacheMtime = 0;
-
-function emptyDb(): Database {
+export function emptyDb(): Database {
   return {
     creators: [],
     passports: [],
@@ -21,42 +20,45 @@ function emptyDb(): Database {
   };
 }
 
-export function loadDb(): Database {
-  // Reload when another module instance / process has written the file since our
-  // last read — route handlers and RSC pages hold separate module caches in dev.
-  try {
-    if (fs.existsSync(DATA_FILE)) {
-      const mtime = fs.statSync(DATA_FILE).mtimeMs;
-      if (cache && mtime <= cacheMtime) return cache;
-      cache = JSON.parse(fs.readFileSync(DATA_FILE, "utf8")) as Database;
-      cacheMtime = mtime;
-      return cache;
-    }
-  } catch {
-    // corrupted file -> start fresh rather than crash the demo
-  }
-  cache = emptyDb();
-  cacheMtime = 0;
-  persist();
-  return cache;
+export async function loadDb(): Promise<Database> {
+  const session = await requireCurrentSession();
+  const db = getDb();
+  const [row] = await db
+    .select({ data: workspaceState.data })
+    .from(workspaceState)
+    .where(eq(workspaceState.workspaceId, session.workspaceId))
+    .limit(1);
+
+  if (row) return row.data;
+
+  const data = emptyDb();
+  await db.insert(workspaceState).values({ workspaceId: session.workspaceId, data }).onConflictDoNothing();
+  return data;
 }
 
-export function persist(): void {
-  if (!cache) return;
-  try {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-    fs.writeFileSync(DATA_FILE, JSON.stringify(cache, null, 2), "utf8");
-    cacheMtime = fs.statSync(DATA_FILE).mtimeMs;
-  } catch {
-    // read-only FS (e.g. serverless): keep state in memory for this instance
-  }
-}
-
-export function updateDb(mutator: (db: Database) => void): Database {
-  const db = loadDb();
+export async function updateDb(mutator: (db: Database) => void): Promise<Database> {
+  const session = await requireCurrentSession();
+  const db = await loadDb();
   mutator(db);
-  persist();
+  await getDb()
+    .insert(workspaceState)
+    .values({ workspaceId: session.workspaceId, data: db, updatedAt: new Date() })
+    .onConflictDoUpdate({
+      target: workspaceState.workspaceId,
+      set: { data: db, updatedAt: new Date() }
+    });
   return db;
+}
+
+/** The original seeded state remains publicly readable for proof and demo links. */
+export async function loadPublicDb(): Promise<Database> {
+  const db = getDb();
+  const [row] = await db
+    .select({ data: applicationState.data })
+    .from(applicationState)
+    .where(eq(applicationState.id, PRIMARY_STATE_ID))
+    .limit(1);
+  return row?.data ?? emptyDb();
 }
 
 export function newId(prefix: string): string {

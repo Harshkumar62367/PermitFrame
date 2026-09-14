@@ -6,12 +6,9 @@ import { promisify } from "node:util";
 import type { PermissionPassport, ProductFacts, Visibility } from "../types";
 import { type DkgAdapter, type DkgHealth, type KaRecord } from "./adapter";
 import type { KaEnvelope } from "./schemas";
-import { toList } from "./file-adapter";
 
 const execFileAsync = promisify(execFile);
 const CG_ENV = process.env.DKG_CONTEXT_GRAPH ?? "permitframe";
-
-/* eslint-disable @typescript-eslint/no-explicit-any */
 
 /**
  * Edge Node adapter: talks to a local OriginTrail Edge Node (DKG v10) through the
@@ -101,16 +98,21 @@ export class EdgeNodeAdapter implements DkgAdapter {
       await new Promise((r) => setTimeout(r, attempt * 2000));
     }
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
-    let assertionUri = out.match(/Assertion URI:\s+(\S+)/)?.[1];
-    let merkle = out.match(/Merkle root:\s+(\S+)/)?.[1];
+    const assertionUri = out.match(/Assertion URI:\s+(\S+)/)?.[1];
+    const merkle = out.match(/Merkle root:\s+(\S+)/)?.[1];
     if (!out.includes("complete") && !assertionUri) {
       throw new Error(`KA publish failed: ${out.slice(0, 300)}`);
     }
     return {
-      ual: assertionUri ?? `did:dkg:context-graph:${cg}/${name}`,
+      // `ka create --share` produces Shared Working Memory evidence, not an
+      // explorer-resolvable Verifiable Memory UAL. Leave `ual` empty until the
+      // explicit VM publish path has completed.
+      ual: "",
+      evidenceUri: assertionUri,
+      merkleRoot: merkle,
       name,
       explorerUrl: "",
-      content: { ...ka.content, "pf:merkleRoot": merkle ?? "", "pf:contextGraph": cg },
+      content: { ...ka.content, "pf:contextGraph": cg },
       publishedAt: new Date().toISOString(),
       mode: this.mode
     };
@@ -250,7 +252,10 @@ PREFIX schema: <https://schema.org/>
 SELECT ?asset ?type ?name WHERE { ?asset a ?type ; schema:name ?name .
   FILTER (STRSTARTS(STR(?type), "https://permitframe.app/ns#")) }`);
     return rows.map((row) => ({
-      ual: String(row.asset ?? ""),
+      // The graph subject is a Shared Working Memory identifier, not an
+      // on-chain Verifiable Memory UAL.
+      ual: "",
+      evidenceUri: String(row.asset ?? ""),
       explorerUrl: "",
       name: String(row.name ?? ""),
       content: { "@type": String(row.type ?? "") },

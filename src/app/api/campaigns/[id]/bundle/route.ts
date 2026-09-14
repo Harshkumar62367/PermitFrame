@@ -9,9 +9,9 @@ export const dynamic = "force-dynamic";
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   await ensureSeed();
   const { id } = await params;
-  const campaign = loadCampaign(id);
+  const campaign = await loadCampaign(id);
   if (!campaign) return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
-  const db = loadDb();
+  const db = await loadDb();
 
   const payload = {
     product: "PermitFrame proof bundle",

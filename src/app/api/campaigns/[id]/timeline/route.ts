@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
 
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const campaign = findCampaign(id);
+  const campaign = await findCampaign(id);
   if (!campaign) return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
-  return NextResponse.json({ timeline: campaignTimeline(campaign) });
+  return NextResponse.json({ timeline: await campaignTimeline(campaign) });
 }

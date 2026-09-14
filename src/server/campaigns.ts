@@ -3,8 +3,8 @@ import { loadDb, newId, nowIso, updateDb } from "./store";
 import { preflight, composeStagePrompt } from "./policy/engine";
 import { createJobRecords, publishCampaignRecord, runProduction } from "./livepeer/pipeline";
 
-export function loadCampaign(id: string): Campaign | undefined {
-  return loadDb().campaigns.find((c) => c.id === id);
+export async function loadCampaign(id: string): Promise<Campaign | undefined> {
+  return (await loadDb()).campaigns.find((c) => c.id === id);
 }
 
 export async function createCampaign(input: {
@@ -39,17 +39,17 @@ export async function createCampaign(input: {
   };
   campaign.preflight = await preflight(campaign);
   if (campaign.preflight.decision === "block") campaign.status = "blocked";
-  updateDb((d) => d.campaigns.push(campaign));
+  await updateDb((d) => d.campaigns.push(campaign));
   return campaign;
 }
 
 /** Re-check an existing campaign against the current graph (rights may have changed). */
 export async function rePreflight(id: string): Promise<Campaign | undefined> {
-  const campaign = loadCampaign(id);
+  const campaign = await loadCampaign(id);
   if (!campaign) return undefined;
   campaign.preflight = await preflight(campaign);
   campaign.status = campaign.preflight.decision === "block" ? "blocked" : campaign.status === "blocked" ? "draft" : campaign.status;
-  updateDb((d) => {
+  await updateDb((d) => {
     const c = d.campaigns.find((x) => x.id === id);
     if (c) {
       c.preflight = campaign.preflight;
@@ -62,13 +62,13 @@ export async function rePreflight(id: string): Promise<Campaign | undefined> {
 
 /** Kick off production: job records are created synchronously, execution runs in background. */
 export async function startProduction(id: string, capabilityOverride?: string): Promise<{ started: boolean; error?: string }> {
-  const campaign = loadCampaign(id);
+  const campaign = await loadCampaign(id);
   if (!campaign) return { started: false, error: "Campaign not found" };
   if (campaign.preflight?.decision !== "allow") return { started: false, error: "Preflight has not approved this campaign" };
 
   if (campaign.jobs.length > 0) {
     // resume: keep succeeded stages, reset failed/queued ones
-    updateDb((d) => {
+    await updateDb((d) => {
       const c = d.campaigns.find((x) => x.id === id);
       if (c) {
         for (const j of c.jobs) {
@@ -84,7 +84,7 @@ export async function startProduction(id: string, capabilityOverride?: string): 
     });
   } else {
     const jobs = createJobRecords(campaign);
-    updateDb((d) => {
+    await updateDb((d) => {
       const c = d.campaigns.find((x) => x.id === id);
       if (c) {
         c.jobs = jobs;
@@ -100,7 +100,7 @@ export async function startProduction(id: string, capabilityOverride?: string): 
 
 /** Reviewer refinement: regenerate one stage with new instructions. */
 export async function reviseStage(id: string, stageId: string, instructions: string): Promise<{ started: boolean; error?: string }> {
-  const campaign = loadCampaign(id);
+  const campaign = await loadCampaign(id);
   if (!campaign) return { started: false, error: "Campaign not found" };
   const stage = campaign.preflight?.plan.find((s) => s.id === stageId);
   if (!stage) return { started: false, error: "Unknown stage" };
@@ -115,7 +115,7 @@ export async function reviseStage(id: string, stageId: string, instructions: str
     status: "queued",
     startedAt: nowIso()
   };
-  updateDb((d) => {
+  await updateDb((d) => {
     const c = d.campaigns.find((x) => x.id === id);
     if (c) c.jobs.push(revised);
   });
@@ -125,7 +125,7 @@ export async function reviseStage(id: string, stageId: string, instructions: str
 
 async function runSingleJob(campaignId: string, jobId: string): Promise<void> {
   // Reuse the pipeline by marking only the target job as pending work
-  updateDb((d) => {
+  await updateDb((d) => {
     const c = d.campaigns.find((x) => x.id === campaignId);
     if (!c) return;
     for (const j of c.jobs) {
@@ -139,13 +139,13 @@ async function runSingleJob(campaignId: string, jobId: string): Promise<void> {
 }
 
 export async function approveCampaign(id: string): Promise<{ approved: boolean; ual?: string; error?: string }> {
-  const campaign = loadCampaign(id);
+  const campaign = await loadCampaign(id);
   if (!campaign) return { approved: false, error: "Campaign not found" };
   if (campaign.status === "blocked") return { approved: false, error: "Blocked campaigns cannot be approved" };
   if (campaign.jobs.filter((j) => j.status === "succeeded").length === 0) {
     return { approved: false, error: "Produce the campaign pack before approving — there is nothing to sign off yet" };
   }
-  updateDb((d) => {
+  await updateDb((d) => {
     const c = d.campaigns.find((x) => x.id === id);
     if (c) {
       c.status = "approved";

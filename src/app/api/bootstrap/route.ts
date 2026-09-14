@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
   await ensureSeed();
-  const db = loadDb();
+  const db = await loadDb();
   const dkgHealth = await getDkg().health();
   return NextResponse.json({
     campaigns: db.campaigns.map((c) => ({

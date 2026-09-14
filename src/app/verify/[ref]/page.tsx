@@ -7,15 +7,15 @@ export const dynamic = "force-dynamic";
 
 export default async function VerifyPage({ params }: { params: Promise<{ ref: string }> }) {
   const { ref } = await params;
-  const v = lookupVerification(ref);
+  const v = await lookupVerification(ref);
 
   if (!v.found) {
     return (
-      <div className="mx-auto max-w-xl px-6 py-24 text-center">
-        <PermitFrameMark className="mx-auto h-10 w-10 text-emerald-700" />
+      <div className="mx-auto w-full max-w-xl px-4 py-24 text-center sm:px-6">
+        <PermitFrameMark className="mx-auto h-10 w-10 text-emerald-700 dark:text-emerald-300" />
         <h1 className="font-display mt-5 text-2xl font-semibold tracking-tight">Reference not found</h1>
-        <p className="mt-2 font-mono text-sm text-muted-foreground">{ref}</p>
-        <Link href="/verifier" className="mt-6 inline-flex items-center gap-1.5 text-[13px] font-medium text-emerald-700 hover:underline">
+        <p className="mt-2 break-all font-mono text-sm text-muted-foreground">{ref}</p>
+        <Link href="/verifier" className="mt-6 inline-flex items-center gap-1.5 text-[13px] font-medium text-emerald-700 hover:underline dark:text-emerald-300">
           <ArrowLeft className="h-4 w-4" /> Back to verifier
         </Link>
       </div>
@@ -23,10 +23,10 @@ export default async function VerifyPage({ params }: { params: Promise<{ ref: st
   }
 
   return (
-    <div className="min-h-screen bg-background">
-      <div className="mx-auto max-w-3xl px-6 py-14">
-        {/* Certificate header */}
-        <div className="grain relative overflow-hidden rounded-3xl bg-[#0c110f] p-10 text-center text-white">
+    <div className="pf-page min-h-screen bg-background">
+      <div className="mx-auto w-full max-w-3xl px-4 py-14 sm:px-6">
+        {/* Certificate header — explicitly scoped dark surface */}
+        <div className="pf-dark-scope grain relative overflow-hidden rounded-3xl bg-[#0c110f] p-6 text-center text-white sm:p-10">
           <div
             className="pointer-events-none absolute inset-0"
             style={{ background: "radial-gradient(55% 55% at 50% 0%, rgba(16,185,129,0.18), transparent 70%)" }}
@@ -48,17 +48,22 @@ export default async function VerifyPage({ params }: { params: Promise<{ ref: st
                     : "bg-amber-400/10 text-amber-300 ring-amber-400/30"
                 }`}
               >
-                {v.published ? "published to DKG" : "local evidence store"}
+                {v.published ? "recorded on the DKG" : "local evidence store"}
               </span>
             </div>
             {v.ual && (
-              <p className="mt-4 font-mono text-[11.5px] text-emerald-300/90">
+              <p className="mt-4 break-all font-mono text-[11.5px] text-emerald-300/90" title={v.ual}>
                 UAL:{" "}
                 {v.explorerUrl ? (
                   <a href={v.explorerUrl} target="_blank" rel="noreferrer" className="underline underline-offset-2">{v.ual}</a>
                 ) : (
                   v.ual
                 )}
+              </p>
+            )}
+            {v.ual && !v.explorerUrl && (
+              <p className="mx-auto mt-1.5 max-w-md text-[11px] text-white/45">
+                Working Memory record — not yet anchored on-chain, so no public explorer proof exists yet.
               </p>
             )}
           </div>
@@ -83,7 +88,7 @@ export default async function VerifyPage({ params }: { params: Promise<{ ref: st
         {/* Generation evidence */}
         {v.generation && (
           <div className="mt-6 rounded-3xl border border-border bg-card p-7">
-            <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-emerald-700">Generation evidence</p>
+            <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-emerald-700 dark:text-emerald-300">Generation evidence</p>
             <dl className="mt-4 grid gap-4 text-[13.5px] sm:grid-cols-2">
               <div>
                 <dt className="text-[11.5px] text-muted-foreground">Livepeer capability</dt>
@@ -99,7 +104,7 @@ export default async function VerifyPage({ params }: { params: Promise<{ ref: st
               </div>
               <div className="sm:col-span-2">
                 <dt className="text-[11.5px] text-muted-foreground">Verified claims used</dt>
-                <dd className="mt-0.5 text-emerald-800">{v.claimsUsed.join("; ") || "none"}</dd>
+                <dd className="mt-0.5 text-emerald-700 dark:text-emerald-300">{v.claimsUsed.join("; ") || "none"}</dd>
               </div>
             </dl>
           </div>
@@ -108,7 +113,7 @@ export default async function VerifyPage({ params }: { params: Promise<{ ref: st
         {/* Lineage */}
         {v.lineage && (
           <div className="mt-6 rounded-3xl border border-border bg-card p-7">
-            <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-emerald-700">Lineage</p>
+            <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-emerald-700 dark:text-emerald-300">Lineage</p>
             <div className="mt-4 space-y-3 text-[13.5px]">
               {v.lineage.permissionPassport && (
                 <div className="rounded-2xl bg-muted/60 p-4 ring-1 ring-border">
@@ -119,7 +124,7 @@ export default async function VerifyPage({ params }: { params: Promise<{ ref: st
                     <span className="capitalize">{v.lineage.permissionPassport.status}</span>
                   </p>
                   {v.lineage.permissionPassport.ual && (
-                    <p className="mt-1 font-mono text-[10.5px] text-emerald-700">{v.lineage.permissionPassport.ual}</p>
+                    <p className="mt-1 break-all font-mono text-[10.5px] text-emerald-700 dark:text-emerald-300" title={v.lineage.permissionPassport.ual}>{v.lineage.permissionPassport.ual}</p>
                   )}
                 </div>
               )}
@@ -129,7 +134,7 @@ export default async function VerifyPage({ params }: { params: Promise<{ ref: st
                   <p className="mt-1 text-[12.5px] text-muted-foreground">approved: {v.lineage.productFacts.approvedClaims.join(", ")}</p>
                   <p className="text-[12.5px] text-muted-foreground">prohibited: {v.lineage.productFacts.prohibitedClaims.join(", ")}</p>
                   {v.lineage.productFacts.ual && (
-                    <p className="mt-1 font-mono text-[10.5px] text-emerald-700">{v.lineage.productFacts.ual}</p>
+                    <p className="mt-1 break-all font-mono text-[10.5px] text-emerald-700 dark:text-emerald-300" title={v.lineage.productFacts.ual}>{v.lineage.productFacts.ual}</p>
                   )}
                 </div>
               )}
@@ -141,7 +146,7 @@ export default async function VerifyPage({ params }: { params: Promise<{ ref: st
                     <ul className="mt-2 space-y-1 text-[12.5px]">
                       {v.lineage.receipts.map((r) => (
                         <li key={r.id}>
-                          <Link href={`/verify/${r.id}`} className="text-sky-700 hover:underline">
+                          <Link href={`/verify/${r.id}`} className="text-sky-700 hover:underline dark:text-sky-300">
                             {r.label} receipt {r.ual ? `· ${r.ual}` : "(local)"}
                           </Link>
                         </li>

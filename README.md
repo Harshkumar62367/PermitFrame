@@ -45,7 +45,7 @@ Next.js (App Router, TypeScript)
 └── src/server         Framework-agnostic backend core (liftable into a dedicated service)
     ├── policy/        Preflight engine: DKG queries → allow/block + compiled prompt constraints
     ├── livepeer/      MCP client (raw surface, exact-dispatch run_capability) + production pipeline
-    ├── dkg/           Adapter interface: dkg.js testnet adapter + local-evidence adapter, KA schemas, SPARQL
+    ├── dkg/           OriginTrail DKG V10 Edge Node adapter + local-evidence adapter, KA schemas, SPARQL
     └── store.ts       Operational state (campaigns, jobs) — rights/facts truth lives in the DKG layer
 ```
 
@@ -68,20 +68,18 @@ LIVEPEER_MCP_URL=https://agent.livepeer.org/api/mcp/raw
 LIVEPEER_MCP_BEARER=            # optional: sk_... key from app.daydream.live
                                 # empty = keyless demo credit (~$10 / address)
 
-# OriginTrail DKG
-DKG_MODE=real                   # "real" = publish/query the public DKG via dkg.js
-DKG_ENDPOINT=                   # your DKG node RPC endpoint (hosted node recommended)
-DKG_PORT=8900
-DKG_BLOCKCHAIN=otp:20430        # NeuroWeb testnet (also: base:84532, gnosis:10200)
-DKG_PRIVATE_KEY=                # wallet key holding testnet tokens for publication fees
-DKG_EPOCHS=2
+# OriginTrail DKG V10 Edge Node
+DKG_MODE=edge
+DKG_CLI_BIN=dkg
+DKG_CONTEXT_GRAPH=permitframe
+DKG_CONTEXT_GRAPH_ID=<primary-operational-wallet-address>/permitframe
 
 # Custom capabilities (optional overrides)
 LIVEPEER_IMAGE_CAPABILITY=flux-schnell
 LIVEPEER_VIDEO_CAPABILITY=seedance-mini-i2v
 ```
 
-**DKG modes.** Without DKG config the app runs in *local evidence mode*: identical Knowledge Asset schemas and SPARQL semantics persisted under `.data/dkg/`, clearly labelled in the UI. The demo workspace in this repo runs in **Edge Node mode** (`DKG_MODE=edge`): a local OriginTrail Edge Node daemon (DKG v10, Base Sepolia testnet) — `npm i -g @origintrail-official/dkg`, `dkg init --role edge --network testnet` (auto-funds wallets via the testnet faucet), `dkg start`. Passport/facts/media/campaign/receipt publishes return real `did:dkg:context-graph:…` assertion URIs with Merkle roots, and every preflight decision is a live SPARQL query against the node. `DKG_MODE=real` (dkg.js to a remote OT-node) remains available for classic deployments with explorer links.
+**DKG modes.** Without DKG configuration the app runs in *local evidence mode*: identical Knowledge Asset schemas and SPARQL semantics persisted under `.data/dkg/`, clearly labelled in the UI. `DKG_MODE=edge` uses an OriginTrail **DKG V10 Edge Node** (Base Sepolia testnet): `npm i -g @origintrail-official/dkg`, `dkg init --role edge --network testnet`, then `dkg start`. Passport/facts/media/campaign/receipt publishes first create Shared Working Memory evidence: an assertion URI and Merkle root, with every preflight decision using live SPARQL against the node. A real, explorer-resolvable UAL exists only after the separate Verifiable Memory on-chain publish succeeds.
 
 **Livepeer auth.** The raw surface honours keyless demo credit; for reliable demos create a key at app.daydream.live and set `LIVEPEER_MCP_BEARER`.
 
@@ -94,7 +92,7 @@ LIVEPEER_VIDEO_CAPABILITY=seedance-mini-i2v
 
 ## Tech stack
 
-Next.js 16 (App Router) · TypeScript · React 19 · Tailwind CSS 4 · dkg.js (DKG v8) · Livepeer Agent MCP (streamable HTTP JSON-RPC)
+Next.js 16 (App Router) · TypeScript · React 19 · Tailwind CSS 4 · OriginTrail DKG V10 Edge Node · Livepeer Agent MCP (streamable HTTP JSON-RPC)
 
 ## Roadmap after the hackathon
 

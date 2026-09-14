@@ -6,5 +6,5 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
   await ensureSeed();
-  return NextResponse.json({ warnings: expiryWarnings() });
+  return NextResponse.json({ warnings: await expiryWarnings() });
 }

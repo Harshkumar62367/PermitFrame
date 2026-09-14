@@ -8,9 +8,9 @@ export const dynamic = "force-dynamic";
 
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
-  const invite = loadInvite(token);
+  const invite = await loadInvite(token);
   if (!invite) return NextResponse.json({ error: "Consent link not found" }, { status: 404 });
-  const creator = loadDb().creators.find((c) => c.id === invite.creatorId);
+  const creator = (await loadDb()).creators.find((c) => c.id === invite.creatorId);
   return NextResponse.json({
     status: invite.status,
     draft: invite.draft,
@@ -26,16 +26,15 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     allowedTransformations?: string[];
     validUntil?: string;
   };
-  const db = updateDb(() => undefined);
-  void db;
-  const invite = loadInvite(token);
+  const db = await loadDb();
+  const invite = db.consentInvites.find((i) => i.token === token) ?? null;
   if (!invite) return NextResponse.json({ error: "Consent link not found" }, { status: 404 });
   if (invite.status === "completed") return NextResponse.json({ error: "Consent already attested" }, { status: 400 });
 
   const passport: PermissionPassport = {
     id: newId("passport"),
     creatorId: invite.creatorId,
-    creatorName: loadDb().creators.find((c) => c.id === invite.creatorId)?.name ?? "Creator",
+    creatorName: db.creators.find((c) => c.id === invite.creatorId)?.name ?? "Creator",
     sourceMediaIds: invite.draft.sourceMediaIds,
     platforms: (body.platforms?.length ? body.platforms : invite.draft.platforms) as PermissionPassport["platforms"],
     countries: (body.countries?.length ? body.countries : invite.draft.countries).map((c) => c.toUpperCase()),
@@ -64,7 +63,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     // publication failure shouldn't lose the attestation; passport is stored locally
   }
 
-  updateDb((d) => {
+  await updateDb((d) => {
     d.passports.push({ ...passport, ual });
     const invite2 = d.consentInvites.find((i) => i.token === token);
     if (invite2) invite2.status = "completed";
@@ -80,6 +79,6 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   return NextResponse.json({ attested: true, passportId: passport.id, ual, explorerUrl });
 }
 
-function loadInvite(token: string) {
-  return loadDb().consentInvites.find((i) => i.token === token) ?? null;
+async function loadInvite(token: string) {
+  return (await loadDb()).consentInvites.find((i) => i.token === token) ?? null;
 }

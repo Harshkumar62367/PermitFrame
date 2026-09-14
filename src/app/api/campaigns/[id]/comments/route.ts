@@ -8,7 +8,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const body = await request.json();
   if (!body.text?.trim()) return NextResponse.json({ error: "text is required" }, { status: 400 });
   try {
-    return NextResponse.json({ campaign: addComment(id, body.author?.trim() || "manager", body.text) });
+    return NextResponse.json({ campaign: await addComment(id, body.author?.trim() || "manager", body.text) });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 400 });
   }

@@ -52,19 +52,19 @@ const FACTS: ProductFacts = {
   approvedClaims: ["made with recycled materials", "carbon-neutral shipping"],
   prohibitedClaims: ["waterproof", "machine washable", "medical grade"],
   guidelines: [
-    "Earthy, natural palette — forest greens and warm sand tones.",
+    "Earthy, natural palette - forest greens and warm sand tones.",
     "Real urban environments, natural light; no studio chrome.",
     "Calm confident tone; avoid aggressive superlatives."
   ],
   evidenceNotes:
-    "Product spec sheet v3.2 (March 2026); recycled-content certification FR-0921. Waterproofing is NOT certified — do not imply water resistance.",
+    "Product spec sheet v3.2 (March 2026); recycled-content certification FR-0921. Waterproofing is NOT certified - do not imply water resistance.",
   visibility: "shared"
 };
 
 const MEDIA: SourceMedia = {
   id: DEMO.sourceMediaId,
   creatorId: DEMO.creatorId,
-  title: "Maya — TerraRunner street walk (vertical)",
+  title: "Maya - TerraRunner street walk (vertical)",
   type: "image",
   url: DEMO.sourceImageUrl,
   hash: ""
@@ -73,19 +73,19 @@ const MEDIA: SourceMedia = {
 const LEO_MEDIA: SourceMedia = {
   id: "media_leo_01",
   creatorId: "creator_leo",
-  title: "Leo — TerraRunner unboxing vertical",
+  title: "Leo - TerraRunner unboxing vertical",
   type: "image",
   url: "https://images.unsplash.com/photo-1608231387042-66d1773070a5?w=1200&q=80&fm=jpg",
   hash: ""
 };
 
 export async function ensureSeed(): Promise<{ seeded: boolean }> {
-  const db = loadDb();
+  const db = await loadDb();
   if (db.campaigns.length > 0 && db.passports.length > 0) return { seeded: false };
 
   MEDIA.hash = sha256(MEDIA.url);
 
-  updateDb((d) => {
+  await updateDb((d) => {
     if (!d.creators.some((c) => c.id === DEMO.creatorId)) {
       d.creators.push({ id: DEMO.creatorId, name: DEMO.creatorName, handle: DEMO.creatorHandle });
     }
@@ -141,7 +141,7 @@ export async function ensureSeed(): Promise<{ seeded: boolean }> {
   } catch {
     // local mode writes succeed; real-mode failures surface in the health panel
   }
-  updateDb((d) => {
+  await updateDb((d) => {
     const p = d.passports.find((x) => x.id === PASSPORT.id);
     if (p) p.ual = published.passport;
     const f = d.productFacts.find((x) => x.id === FACTS.id);
@@ -153,7 +153,7 @@ export async function ensureSeed(): Promise<{ seeded: boolean }> {
   // Campaign A: the blocked demo
   const blocked = baseCampaign({
     id: DEMO.campaignAId,
-    title: "TikTok push — Germany (blocked demo)",
+    title: "TikTok push - Germany (blocked demo)",
     request: {
       platform: "tiktok",
       country: "DE",
@@ -163,12 +163,12 @@ export async function ensureSeed(): Promise<{ seeded: boolean }> {
         "Creator-style close-up of the TerraRunner splashing through a rainy street at dusk, slow motion puddle impacts."
     },
     demoNote:
-      "Requested for TikTok in Germany with the claim \"waterproof\" — the DKG blocks all three: platform not permitted, country not covered, claim not supported by verified facts."
+      "Requested for TikTok in Germany with the claim \"waterproof\" - the DKG blocks all three: platform not permitted, country not covered, claim not supported by verified facts."
   });
   // Campaign B: the approved demo
   const approved = baseCampaign({
     id: DEMO.campaignBId,
-    title: "Instagram Reels — Greece launch",
+    title: "Instagram Reels - Greece launch",
     request: {
       platform: "instagram",
       country: "GR",
@@ -178,7 +178,7 @@ export async function ensureSeed(): Promise<{ seeded: boolean }> {
         "Golden-hour rooftop shot of the TerraRunner with the Athens skyline behind; natural creator-made feel, gentle motion."
     },
     demoNote:
-      "Requested for Instagram in Greece highlighting recycled materials — permitted and claim-supported, so the agent may generate."
+      "Requested for Instagram in Greece highlighting recycled materials - permitted and claim-supported, so the agent may generate."
   });
 
   updateDb((d) => {
@@ -189,10 +189,10 @@ export async function ensureSeed(): Promise<{ seeded: boolean }> {
   // Run preflight immediately so the demo opens with decisions ready
   for (const id of [blocked.id, approved.id]) {
     const { loadCampaign } = await import("./campaigns");
-    const campaign = loadCampaign(id);
+    const campaign = await loadCampaign(id);
     if (!campaign) continue;
     const decision = await preflight(campaign);
-    updateDb((d) => {
+    await updateDb((d) => {
       const c = d.campaigns.find((x) => x.id === id);
       if (c) {
         c.preflight = decision;

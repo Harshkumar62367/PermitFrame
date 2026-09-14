@@ -1,68 +1,93 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { ArrowRight, ArrowUpRight, Ban, CheckCircle2, Clock3, Plus, Sparkles } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
+import { ArrowRight, ArrowUpRight, Clock3, Plus, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AnimatedNumber, FadeIn, Stagger, StaggerItem } from "@/components/motion-primitives";
 import { NewCampaignForm } from "@/components/new-campaign-form";
+import { PageHeader } from "@/components/ui/page-header";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { EmptyState } from "@/components/ui/empty-state";
+import { ErrorState } from "@/components/ui/error-state";
+import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
+import { useBootstrap } from "@/lib/bootstrap";
+import { apiGet } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { AlertTriangle } from "lucide-react";
 
-interface BootstrapResponse {
-  campaigns: { id: string; title: string; status: string; platform: string; country: string; demoNote?: string; updatedAt: string }[];
-  creators: { id: string; name: string; handle: string }[];
-  dkg: { mode: string; healthy: boolean; detail: string; blockchain?: string };
-  livepeer: { endpoint: string; keyless: boolean };
+interface ExpiryWarning {
+  passportId: string;
+  creatorName: string;
+  validUntil: string;
+  daysLeft: number;
+  level: string;
 }
 
-const statusStyles: Record<string, string> = {
-  blocked: "bg-rose-50 text-rose-700 ring-rose-600/20",
-  draft: "bg-sky-50 text-sky-700 ring-sky-600/20",
-  generating: "bg-amber-50 text-amber-700 ring-amber-600/20",
-  review: "bg-violet-50 text-violet-700 ring-violet-600/20",
-  approved: "bg-emerald-50 text-emerald-700 ring-emerald-600/20"
-};
-
 export default function WorkspaceOverviewPage() {
-  const [data, setData] = useState<BootstrapResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const boot = useBootstrap();
+  const router = useRouter();
   const [formOpen, setFormOpen] = useState(false);
 
-  const [warnings, setWarnings] = useState<{ passportId: string; creatorName: string; validUntil: string; daysLeft: number; level: string }[]>([]);
+  const [warnings, setWarnings] = useState<ExpiryWarning[]>([]);
+  const [warningsError, setWarningsError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/bootstrap")
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`bootstrap failed (${r.status})`))))
-      .then(setData)
-      .catch((e) => setError(String(e.message ?? e)));
-    fetch("/api/expiry")
-      .then((r) => r.json())
+    const controller = new AbortController();
+    apiGet<{ warnings: ExpiryWarning[] }>("/api/expiry", controller.signal)
       .then((d) => setWarnings(d.warnings ?? []))
-      .catch(() => undefined);
+      .catch((e) => {
+        if (!(e instanceof DOMException && e.name === "AbortError")) setWarningsError(e instanceof Error ? e.message : "Expiry check failed.");
+      });
+    return () => controller.abort();
   }, []);
 
-  const campaigns = data?.campaigns ?? [];
+  if (boot.status === "loading") {
+    return (
+      <div className="pf-page space-y-8">
+        <LoadingSkeleton rows={4} />
+      </div>
+    );
+  }
+
+  if (boot.status === "failed") {
+    return (
+      <div className="pf-page space-y-8">
+        <ErrorState message={boot.error} onRetry={boot.refresh} />
+      </div>
+    );
+  }
+
+  const { snapshot, refresh } = boot;
+
+  const campaigns = snapshot.campaigns;
   const spend = campaigns.length > 0 ? 0.82 : 0; // demo workspace reference
   const blocked = campaigns.filter((c) => c.status === "blocked").length;
+  // Seed-proof: derive the workspace line from live data, never hardcoded names.
+  const creatorName = snapshot.creators[0]?.name;
+  const brandLine = creatorName
+    ? `${creatorName} · every campaign is policy-checked before a single render.`
+    : "Clean workspace · add a creator consent, then create your first campaign.";
 
   return (
-    <div className="space-y-8">
+    <div className="pf-page space-y-8">
       <FadeIn>
-        <div className="flex flex-wrap items-end justify-between gap-4">
-          <div>
-            <p className="font-mono text-[10.5px] uppercase tracking-[0.18em] text-emerald-700">Workspace</p>
-            <h1 className="font-display mt-1.5 text-3xl font-semibold tracking-tight">Overview</h1>
-            <p className="mt-1.5 text-[13.5px] text-muted-foreground">
-              Verdi Steps × {data?.creators[0]?.name ?? "creator"} · every campaign is policy-checked before a single render.
-            </p>
-          </div>
-          <Button onClick={() => setFormOpen((v) => !v)} className="rounded-full bg-emerald-700 font-medium text-emerald-50 hover:bg-emerald-600">
-            <Plus className="h-4 w-4" /> New campaign
-          </Button>
-        </div>
+        <PageHeader
+          eyebrow="Workspace"
+          title="Overview"
+          description={brandLine}
+          actions={
+            <Button onClick={() => setFormOpen((v) => !v)} aria-expanded={formOpen} className="rounded-full bg-emerald-700 font-medium text-emerald-50 hover:bg-emerald-600 dark:bg-emerald-500 dark:text-emerald-950 dark:hover:bg-emerald-400">
+              <Plus className="h-4 w-4" aria-hidden /> {formOpen ? "Close form" : "New campaign"}
+            </Button>
+          }
+        />
       </FadeIn>
+
+      {warningsError && (
+        <ErrorState message={`Expiry check unavailable: ${warningsError}`} onRetry={() => window.location.reload()} />
+      )}
 
       {warnings.length > 0 && (
         <FadeIn>
@@ -93,7 +118,13 @@ export default function WorkspaceOverviewPage() {
 
       {formOpen && (
         <FadeIn>
-          <NewCampaignForm onCreated={() => window.location.reload()} />
+          <NewCampaignForm
+            onCreated={(id) => {
+              setFormOpen(false);
+              refresh();
+              router.push(`/campaigns/${id}`);
+            }}
+          />
         </FadeIn>
       )}
 
@@ -152,26 +183,23 @@ export default function WorkspaceOverviewPage() {
                 href={`/campaigns/${c.id}`}
                 className="group block h-full rounded-2xl border border-border bg-card p-5 transition-all duration-300 hover:-translate-y-0.5 hover:border-emerald-600/30 hover:shadow-[0_12px_40px_-16px_rgba(16,185,129,0.2)]"
               >
-                <div className="flex items-center justify-between">
-                  <Badge variant="outline" className={`rounded-full font-medium capitalize ${statusStyles[c.status] ?? ""}`}>
-                    {c.status === "blocked" && <Ban className="h-3 w-3" />}
-                    {c.status === "approved" && <CheckCircle2 className="h-3 w-3" />}
-                    {c.status}
-                  </Badge>
-                  <span className="font-mono text-[10.5px] uppercase tracking-[0.12em] text-muted-foreground">
+                <div className="flex items-center justify-between gap-2">
+                  <StatusBadge status={c.status} />
+                  <span className="truncate font-mono text-[10.5px] uppercase tracking-[0.12em] text-muted-foreground">
                     {c.platform} · {c.country}
                   </span>
                 </div>
                 <h3 className="mt-3.5 text-[15px] font-semibold leading-snug tracking-tight">{c.title}</h3>
                 {c.demoNote && <p className="mt-2 line-clamp-2 text-[12.5px] leading-relaxed text-muted-foreground">{c.demoNote}</p>}
-                <p className="mt-4 inline-flex items-center gap-1 text-[12px] font-medium text-emerald-700 opacity-0 transition group-hover:opacity-100">
-                  Open workspace <ArrowRight className="h-3.5 w-3.5" />
+                <p className="mt-4 inline-flex items-center gap-1 text-[12px] font-medium text-emerald-700 dark:text-emerald-300 opacity-0 transition group-hover:opacity-100 group-focus-visible:opacity-100">
+                  Open workspace <ArrowRight className="h-3.5 w-3.5" aria-hidden />
                 </p>
               </Link>
             </StaggerItem>
           ))}
-          {!data && !error && <p className="text-sm text-muted-foreground">Loading workspace…</p>}
-          {error && <p className="text-sm text-rose-600">{error}</p>}
+          {campaigns.length === 0 && (
+            <EmptyState title="No campaigns yet" body="Create the first request — preflight will check rights and claims before anything generates." />
+          )}
         </Stagger>
       </section>
     </div>

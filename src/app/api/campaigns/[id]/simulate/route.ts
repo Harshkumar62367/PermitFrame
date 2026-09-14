@@ -15,7 +15,7 @@ export const dynamic = "force-dynamic";
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   await ensureSeed();
   const { id } = await params;
-  const original = loadCampaign(id);
+  const original = await loadCampaign(id);
   if (!original) return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
 
   const body = (await request.json().catch(() => ({}))) as {

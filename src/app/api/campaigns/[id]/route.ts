@@ -8,9 +8,9 @@ export const dynamic = "force-dynamic";
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   await ensureSeed();
   const { id } = await params;
-  const campaign = findCampaign(id);
+  const campaign = await findCampaign(id);
   if (!campaign) return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
-  const db = loadDb();
+  const db = await loadDb();
   return NextResponse.json({
     campaign,
     sourceMedia: db.sourceMedia.find((m) => m.id === campaign.sourceMediaId) ?? null,

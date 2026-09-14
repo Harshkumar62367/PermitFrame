@@ -1,31 +1,79 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Plus, ShieldCheck } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
+import { useEffect, useId, useState } from "react";
+import { Plus, ShieldCheck, Wand2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { FadeIn, Stagger, StaggerItem } from "@/components/motion-primitives";
+import { PageHeader } from "@/components/ui/page-header";
+import { SectionCard } from "@/components/ui/section-card";
+import { CopyableIdentifier } from "@/components/ui/identifier";
+import { EmptyState } from "@/components/ui/empty-state";
+import { ErrorState } from "@/components/ui/error-state";
+import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
+import { apiGet, apiPost, describeRecord } from "@/lib/api";
+import { cn } from "@/lib/utils";
 import type { ProductFacts } from "@/server/types";
 
+const EMPTY_FORM = { brand: "", productName: "", approved: "", prohibited: "", guidelines: "", evidence: "" };
+
+const EXAMPLE_FORM = {
+  brand: "Verdi Steps",
+  productName: "TerraRunner",
+  approved: "made with recycled materials, carbon-neutral shipping",
+  prohibited: "waterproof",
+  guidelines: "Earthy, natural palette.\nNo aggressive superlatives.",
+  evidence: "Product spec sheet v3.2; certification FR-0921"
+};
+
 export default function ProductsPage() {
+  const uid = useId();
   const [factsList, setFactsList] = useState<ProductFacts[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [editing, setEditing] = useState<ProductFacts | null>(null);
-  const [form, setForm] = useState({ brand: "", productName: "", approved: "", prohibited: "", guidelines: "", evidence: "" });
+  const [form, setForm] = useState(EMPTY_FORM);
+  const [fieldErrors, setFieldErrors] = useState<{ brand?: string; productName?: string; overlap?: string }>({});
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
+  const [result, setResult] = useState<{ ok: boolean; text: string; ual?: string } | null>(null);
+
+  function requestFacts(signal?: AbortSignal) {
+    return apiGet<{ facts: ProductFacts[] }>("/api/facts", signal);
+  }
 
   useEffect(() => {
-    fetch("/api/facts")
-      .then((r) => r.json())
-      .then((d) => setFactsList(d.facts))
-      .catch(() => setFactsList([]));
+    const controller = new AbortController();
+    requestFacts(controller.signal).then(
+      (d) => {
+        setFactsList(d.facts);
+        setLoadError(null);
+      },
+      (e: unknown) => {
+        if (e instanceof DOMException && e.name === "AbortError") return;
+        setLoadError(e instanceof Error ? e.message : "Product facts failed to load.");
+      }
+    );
+    return () => controller.abort();
   }, []);
+
+  async function reloadFacts(signal?: AbortSignal) {
+    try {
+      const d = await requestFacts(signal);
+      if (signal?.aborted) return;
+      setFactsList(d.facts);
+      setLoadError(null);
+    } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") return;
+      if (signal?.aborted) return;
+      setLoadError(e instanceof Error ? e.message : "Product facts failed to load.");
+    }
+  }
 
   function startEdit(f: ProductFacts) {
     setEditing(f);
+    setResult(null);
+    setFieldErrors({});
     setForm({
       brand: f.brand,
       productName: f.productName,
@@ -36,116 +84,231 @@ export default function ProductsPage() {
     });
   }
 
+  function cancelEdit() {
+    setEditing(null);
+    setForm(EMPTY_FORM);
+    setFieldErrors({});
+  }
+
+  function fillExample() {
+    setForm(EXAMPLE_FORM);
+    setFieldErrors({});
+    setResult(null);
+  }
+
   async function save() {
+    if (busy) return;
+    const errors: typeof fieldErrors = {};
+    if (!form.brand.trim()) errors.brand = "Brand is required.";
+    if (!form.productName.trim()) errors.productName = "Product name is required.";
+    const approved = form.approved.split(",").map((c) => c.trim()).filter(Boolean);
+    const prohibited = form.prohibited.split(",").map((c) => c.trim()).filter(Boolean);
+    const overlap = approved.filter((c) => prohibited.some((p) => p.toLowerCase() === c.toLowerCase()));
+    if (overlap.length > 0) errors.overlap = `A claim cannot be both approved and prohibited: ${overlap.join(", ")}.`;
+    setFieldErrors(errors);
+    setResult(null);
+    if (errors.brand || errors.productName || errors.overlap) return;
+
     setBusy(true);
-    setMsg(null);
     try {
-      const res = await fetch("/api/facts", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          id: editing?.id,
-          brand: form.brand,
-          productName: form.productName,
-          approvedClaims: form.approved.split(",").map((c) => c.trim()).filter(Boolean),
-          prohibitedClaims: form.prohibited.split(",").map((c) => c.trim()).filter(Boolean),
-          guidelines: form.guidelines.split("\n").map((g) => g.trim()).filter(Boolean),
-          evidenceNotes: form.evidence
-        })
+      const j = await apiPost<{ facts: ProductFacts }>("/api/facts", {
+        id: editing?.id,
+        brand: form.brand,
+        productName: form.productName,
+        approvedClaims: approved,
+        prohibitedClaims: prohibited,
+        guidelines: form.guidelines.split("\n").map((g) => g.trim()).filter(Boolean),
+        evidenceNotes: form.evidence
       });
-      const j = await res.json();
-      if (!res.ok) throw new Error(j.error ?? "save failed");
-      setMsg(`Published to the DKG: ${j.facts.ual ?? "local evidence"}`);
-      setEditing(null);
-      setForm({ brand: "", productName: "", approved: "", prohibited: "", guidelines: "", evidence: "" });
-      const r2 = await fetch("/api/facts");
-      setFactsList((await r2.json()).facts);
+      const record = describeRecord(j.facts.ual);
+      setResult({
+        ok: true,
+        text: editing
+          ? `${record.headline} — ${j.facts.brand} ${j.facts.productName} updated. ${record.detail}`
+          : `${record.headline} — ${j.facts.brand} ${j.facts.productName} is now enforced by preflight. ${record.detail}`,
+        ual: j.facts.ual
+      });
+      cancelEdit();
+      await reloadFacts();
     } catch (e) {
-      setMsg((e as Error).message);
+      // Form input is preserved for retry.
+      setResult({ ok: false, text: e instanceof Error ? e.message : "Save failed. Your input is preserved." });
     } finally {
       setBusy(false);
     }
   }
 
+  const canSubmit = form.brand.trim().length > 0 && form.productName.trim().length > 0;
+  const submitHint = `${uid}-submit-hint`;
+
   return (
-    <div className="space-y-6">
+    <div className="pf-page space-y-6">
       <FadeIn>
-        <p className="font-mono text-[10.5px] uppercase tracking-[0.18em] text-emerald-700">Brand governance</p>
-        <h1 className="font-display mt-1.5 text-3xl font-semibold tracking-tight">Products & verified facts</h1>
-        <p className="mt-1.5 max-w-2xl text-[13.5px] text-muted-foreground">
-          Approved and prohibited advertising claims live here as Knowledge Assets. The
-          preflight engine refuses campaigns that state anything unverified.
-        </p>
+        <PageHeader
+          eyebrow="Brand governance"
+          title="Products & verified facts"
+          description="Approved and prohibited advertising claims live here as Knowledge Assets. The preflight engine refuses campaigns that state anything unverified."
+        />
       </FadeIn>
 
       <FadeIn delay={0.05}>
-        <div className="rounded-2xl border border-border bg-card p-6">
-          <h2 className="text-[14.5px] font-semibold">{editing ? `Editing ${editing.brand} ${editing.productName}` : "Publish new product facts"}</h2>
-          <div className="mt-4 grid gap-4 sm:grid-cols-2">
+        <SectionCard
+          title={editing ? `Editing ${editing.brand} ${editing.productName}` : "Publish new product facts"}
+          description="Every field starts empty — grey placeholder text is only an example, never a value. Use “Fill example values” for a one-click demo."
+          actions={
+            !editing && (
+              <Button variant="outline" size="sm" onClick={fillExample} className="h-7 rounded-full px-2.5 text-[11.5px]">
+                <Wand2 className="h-3 w-3" aria-hidden /> Fill example values
+              </Button>
+            )
+          }
+        >
+          <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
-              <Label className="text-[12px] text-muted-foreground">Brand</Label>
-              <Input value={form.brand} onChange={(e) => setForm((f) => ({ ...f, brand: e.target.value }))} placeholder="Verdi Steps" className="rounded-xl" />
+              <Label htmlFor={`${uid}-brand`} className="text-[12px] text-muted-foreground">Brand</Label>
+              <Input
+                id={`${uid}-brand`}
+                value={form.brand}
+                aria-invalid={Boolean(fieldErrors.brand)}
+                aria-describedby={fieldErrors.brand ? `${uid}-brand-error` : undefined}
+                onChange={(e) => {
+                  setForm((f) => ({ ...f, brand: e.target.value }));
+                  setFieldErrors((p) => ({ ...p, brand: undefined }));
+                }}
+                placeholder="Verdi Steps"
+                className={cn("rounded-xl placeholder:italic placeholder:text-muted-foreground/50", fieldErrors.brand && "border-rose-500")}
+              />
+              {fieldErrors.brand && <p id={`${uid}-brand-error`} role="alert" className="text-[12px] text-rose-600 dark:text-rose-300">{fieldErrors.brand}</p>}
             </div>
             <div className="space-y-1.5">
-              <Label className="text-[12px] text-muted-foreground">Product</Label>
-              <Input value={form.productName} onChange={(e) => setForm((f) => ({ ...f, productName: e.target.value }))} placeholder="TerraRunner" className="rounded-xl" />
+              <Label htmlFor={`${uid}-product`} className="text-[12px] text-muted-foreground">Product</Label>
+              <Input
+                id={`${uid}-product`}
+                value={form.productName}
+                aria-invalid={Boolean(fieldErrors.productName)}
+                aria-describedby={fieldErrors.productName ? `${uid}-product-error` : undefined}
+                onChange={(e) => {
+                  setForm((f) => ({ ...f, productName: e.target.value }));
+                  setFieldErrors((p) => ({ ...p, productName: undefined }));
+                }}
+                placeholder="TerraRunner"
+                className={cn("rounded-xl placeholder:italic placeholder:text-muted-foreground/50", fieldErrors.productName && "border-rose-500")}
+              />
+              {fieldErrors.productName && <p id={`${uid}-product-error`} role="alert" className="text-[12px] text-rose-600 dark:text-rose-300">{fieldErrors.productName}</p>}
             </div>
             <div className="space-y-1.5">
-              <Label className="text-[12px] text-muted-foreground">Approved claims (comma-separated)</Label>
-              <Input value={form.approved} onChange={(e) => setForm((f) => ({ ...f, approved: e.target.value }))} placeholder="made with recycled materials" className="rounded-xl" />
+              <Label htmlFor={`${uid}-approved`} className="text-[12px] text-muted-foreground">Approved claims (comma-separated)</Label>
+              <Input
+                id={`${uid}-approved`}
+                value={form.approved}
+                onChange={(e) => setForm((f) => ({ ...f, approved: e.target.value }))}
+                placeholder="made with recycled materials"
+                className="rounded-xl placeholder:italic placeholder:text-muted-foreground/50"
+              />
             </div>
             <div className="space-y-1.5">
-              <Label className="text-[12px] text-muted-foreground">Prohibited claims (comma-separated)</Label>
-              <Input value={form.prohibited} onChange={(e) => setForm((f) => ({ ...f, prohibited: e.target.value }))} placeholder="waterproof" className="rounded-xl" />
+              <Label htmlFor={`${uid}-prohibited`} className="text-[12px] text-muted-foreground">Prohibited claims (comma-separated)</Label>
+              <Input
+                id={`${uid}-prohibited`}
+                value={form.prohibited}
+                onChange={(e) => setForm((f) => ({ ...f, prohibited: e.target.value }))}
+                placeholder="waterproof"
+                className="rounded-xl placeholder:italic placeholder:text-muted-foreground/50"
+              />
+            </div>
+            {fieldErrors.overlap && (
+              <p role="alert" className="text-[12px] text-rose-600 sm:col-span-2 dark:text-rose-300">{fieldErrors.overlap}</p>
+            )}
+            <div className="space-y-1.5 sm:col-span-2">
+              <Label htmlFor={`${uid}-guidelines`} className="text-[12px] text-muted-foreground">Brand guidelines (one per line)</Label>
+              <Textarea
+                id={`${uid}-guidelines`}
+                value={form.guidelines}
+                onChange={(e) => setForm((f) => ({ ...f, guidelines: e.target.value }))}
+                rows={3}
+                placeholder={"Earthy, natural palette.\nNo aggressive superlatives."}
+                className="rounded-xl placeholder:italic placeholder:text-muted-foreground/50"
+              />
             </div>
             <div className="space-y-1.5 sm:col-span-2">
-              <Label className="text-[12px] text-muted-foreground">Brand guidelines (one per line)</Label>
-              <Textarea value={form.guidelines} onChange={(e) => setForm((f) => ({ ...f, guidelines: e.target.value }))} rows={3} placeholder={"Earthy, natural palette.\nNo aggressive superlatives."} className="rounded-xl" />
-            </div>
-            <div className="space-y-1.5 sm:col-span-2">
-              <Label className="text-[12px] text-muted-foreground">Evidence notes (where the facts come from)</Label>
-              <Input value={form.evidence} onChange={(e) => setForm((f) => ({ ...f, evidence: e.target.value }))} placeholder="Product spec sheet v3.2; certification FR-0921" className="rounded-xl" />
+              <Label htmlFor={`${uid}-evidence`} className="text-[12px] text-muted-foreground">Evidence notes (where the facts come from)</Label>
+              <Input
+                id={`${uid}-evidence`}
+                value={form.evidence}
+                onChange={(e) => setForm((f) => ({ ...f, evidence: e.target.value }))}
+                placeholder="Product spec sheet v3.2; certification FR-0921"
+                className="rounded-xl placeholder:italic placeholder:text-muted-foreground/50"
+              />
             </div>
           </div>
-          <div className="mt-4 flex items-center gap-3">
-            <Button onClick={save} disabled={busy || !form.brand.trim() || !form.productName.trim()} className="rounded-full bg-emerald-700 font-medium text-emerald-50 hover:bg-emerald-600">
-              <ShieldCheck className="h-4 w-4" /> {busy ? "Publishing…" : "Publish to DKG"}
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <Button
+              onClick={save}
+              disabled={busy || !canSubmit}
+              aria-busy={busy}
+              aria-describedby={submitHint}
+              title={!canSubmit ? "Enter a brand and product name to enable publishing" : undefined}
+              className="rounded-full bg-emerald-700 font-medium text-emerald-50 hover:bg-emerald-600 dark:bg-emerald-500 dark:text-emerald-950 dark:hover:bg-emerald-400"
+            >
+              <ShieldCheck className="h-4 w-4" aria-hidden /> {busy ? "Publishing…" : editing ? "Save changes" : "Publish to DKG"}
             </Button>
             {editing && (
-              <Button variant="ghost" onClick={() => { setEditing(null); setForm({ brand: "", productName: "", approved: "", prohibited: "", guidelines: "", evidence: "" }); }} className="rounded-full">
+              <Button variant="ghost" onClick={cancelEdit} disabled={busy} className="rounded-full">
                 Cancel
               </Button>
             )}
-            {msg && <p className="font-mono text-[11px] text-muted-foreground">{msg}</p>}
           </div>
-        </div>
+          <p id={submitHint} className="mt-2 text-[11.5px] text-muted-foreground">
+            {!canSubmit
+              ? "Publish is disabled until brand and product name are filled — placeholders don't count."
+              : busy
+                ? "Publishing — duplicate clicks are ignored and your input is preserved on failure."
+                : "Saves to the workspace and records a Knowledge Asset; preflight enforces it immediately."}
+          </p>
+          {result && (
+            <div
+              role={result.ok ? "status" : "alert"}
+              className={cn(
+                "mt-3 rounded-xl px-4 py-3 text-[13px] ring-1",
+                result.ok
+                  ? "bg-emerald-50 text-emerald-800 ring-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:ring-emerald-900"
+                  : "bg-rose-50 text-rose-800 ring-rose-200 dark:bg-rose-950/40 dark:text-rose-200 dark:ring-rose-900"
+              )}
+            >
+              <p>{result.text}</p>
+              {result.ual && <CopyableIdentifier value={result.ual} className="mt-1.5 max-w-full text-[11px]" />}
+            </div>
+          )}
+        </SectionCard>
       </FadeIn>
 
+      {loadError && <ErrorState message={loadError} onRetry={() => reloadFacts()} />}
+      {!factsList && !loadError && <LoadingSkeleton rows={2} />}
       <Stagger className="grid gap-4 md:grid-cols-2">
         {(factsList ?? []).map((f) => (
           <StaggerItem key={f.id}>
-            <div className="h-full rounded-2xl border border-border bg-card p-5">
-              <div className="flex items-start justify-between">
-                <div>
+            <div className="h-full min-w-0 rounded-2xl border border-border bg-card p-5">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
                   <p className="text-[14.5px] font-semibold">{f.brand} {f.productName}</p>
-                  <p className="font-mono text-[10px] text-muted-foreground">{f.id}</p>
+                  <CopyableIdentifier value={f.id} className="mt-0.5 max-w-full text-[10px]" />
                 </div>
-                <Button variant="ghost" size="sm" onClick={() => startEdit(f)} className="h-7 rounded-full px-2.5 text-[11.5px]">
-                  <Plus className="h-3 w-3" /> Edit
+                <Button variant="ghost" size="sm" onClick={() => startEdit(f)} className="h-7 shrink-0 rounded-full px-2.5 text-[11.5px]">
+                  <Plus className="h-3 w-3" aria-hidden /> Edit
                 </Button>
               </div>
               <div className="mt-3 space-y-2 text-[12.5px]">
-                <p><span className="text-emerald-700 dark:text-emerald-400">approved:</span> {f.approvedClaims.join(", ") || "—"}</p>
-                <p><span className="text-rose-600 dark:text-rose-400">prohibited:</span> {f.prohibitedClaims.join(", ") || "—"}</p>
+                <p><span className="text-emerald-700 dark:text-emerald-300">approved:</span> {f.approvedClaims.join(", ") || "—"}</p>
+                <p><span className="text-rose-600 dark:text-rose-300">prohibited:</span> {f.prohibitedClaims.join(", ") || "—"}</p>
                 {f.guidelines.length > 0 && <p className="text-muted-foreground">guidelines: {f.guidelines.join(" · ")}</p>}
-                {f.ual && <p className="truncate font-mono text-[10px] text-muted-foreground">{f.ual}</p>}
+                {f.ual && <CopyableIdentifier value={f.ual} className="max-w-full text-[10px]" />}
               </div>
             </div>
           </StaggerItem>
         ))}
       </Stagger>
-      {factsList && factsList.length === 0 && (
-        <Badge variant="outline" className="rounded-full">No product facts yet — publish the first set above.</Badge>
+      {factsList && factsList.length === 0 && !loadError && (
+        <EmptyState title="No product facts yet" body="Publish the first set above — preflight refuses any claim without verified facts." />
       )}
     </div>
   );

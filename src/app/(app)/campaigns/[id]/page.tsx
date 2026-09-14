@@ -2,11 +2,10 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   ArrowRight,
-  Ban,
   Check,
   ChevronDown,
   CircleDot,
@@ -24,6 +23,10 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { FadeIn, VerdictCheck, VerdictCross } from "@/components/motion-primitives";
 import { CampaignExtras } from "@/components/campaign-extras";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { ErrorState } from "@/components/ui/error-state";
+import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
+import { apiGet, apiPost } from "@/lib/api";
 import type { Campaign, PermissionPassport, ProductFacts, SourceMedia } from "@/server/types";
 import { cn } from "@/lib/utils";
 
@@ -54,15 +57,38 @@ export default function CampaignWorkspacePage() {
   const [showSparql, setShowSparql] = useState(false);
   const [sim, setSim] = useState({ platform: "", country: "", claims: "" });
   const [simResult, setSimResult] = useState<{ decision: string; blockers: { code: string; message: string }[]; allowedClaims: string[]; plan: unknown[] } | null>(null);
+  const [simError, setSimError] = useState<string | null>(null);
 
-  const load = useCallback(() => {
-    fetch(`/api/campaigns/${id}`)
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`load failed (${r.status})`))))
-      .then(setData)
-      .catch((e) => setError(String(e.message ?? e)));
+  const [lastAction, setLastAction] = useState<{ label: string; path: string; body?: unknown } | null>(null);
+
+  function requestCampaign(signal?: AbortSignal) {
+    return apiGet<CampaignResponse>(`/api/campaigns/${id}`, signal);
+  }
+
+  useEffect(() => {
+    const controller = new AbortController();
+    requestCampaign(controller.signal).then(
+      (d) => {
+        setData(d);
+        setError(null);
+      },
+      (e: unknown) => {
+        if (e instanceof DOMException && e.name === "AbortError") return;
+        setError(e instanceof Error ? e.message : "Campaign failed to load.");
+      }
+    );
+    return () => controller.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  useEffect(load, [load]);
+  async function reloadCampaign() {
+    try {
+      setData(await requestCampaign());
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Campaign failed to load.");
+    }
+  }
 
   const active = useMemo(
     () => data?.campaign.jobs.some((j) => j.status === "queued" || j.status === "running") ?? false,
@@ -71,78 +97,68 @@ export default function CampaignWorkspacePage() {
 
   useEffect(() => {
     if (!active) return;
-    const t = setInterval(load, 3000);
+    const t = setInterval(() => void reloadCampaign(), 3000);
     return () => clearInterval(t);
-  }, [active, load]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active]);
 
   async function action(label: string, path: string, body?: unknown) {
+    if (busy) return;
     setBusy(label);
+    setLastAction({ label, path, body });
     setError(null);
     try {
-      const res = await fetch(`/api/campaigns/${id}${path}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: body ? JSON.stringify(body) : undefined
-      });
-      if (!res.ok) {
-        const j = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(j.error ?? `${path} failed (${res.status})`);
-      }
-      load();
+      await apiPost(`/api/campaigns/${id}${path}`, body);
+      await reloadCampaign();
     } catch (e) {
-      setError((e as Error).message);
+      // Campaign state is untouched; the buttons below retry the same action.
+      setError(e instanceof Error ? e.message : `${label} failed.`);
     } finally {
       setBusy(null);
     }
   }
 
   async function runSimulation() {
+    if (busy) return;
     setSimResult(null);
+    setSimError(null);
+    setBusy("simulate");
     try {
-      const res = await fetch(`/api/campaigns/${id}/simulate`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
+      const j = await apiPost<{ decision: { decision: string; blockers: { code: string; message: string }[]; allowedClaims: string[]; plan: unknown[] } }>(
+        `/api/campaigns/${id}/simulate`,
+        {
           platform: sim.platform || undefined,
           country: sim.country || undefined,
           requestedClaims: sim.claims ? sim.claims.split(",").map((c) => c.trim()).filter(Boolean) : undefined
-        })
-      });
-      const j = await res.json();
-      if (!res.ok) throw new Error(j.error ?? "simulation failed");
+        }
+      );
       setSimResult(j.decision);
     } catch (e) {
-      setError((e as Error).message);
+      // Simulator inputs are preserved for retry.
+      setSimError(e instanceof Error ? e.message : "Simulation failed. Your inputs are preserved.");
+    } finally {
+      setBusy(null);
     }
   }
 
   if (error && !data) {
-    return <p className="rounded-2xl bg-rose-50 p-4 text-sm text-rose-700 dark:text-rose-300 ring-1 ring-rose-200">{error}</p>;
+    return <div className="pf-page"><ErrorState message={error} onRetry={reloadCampaign} /></div>;
   }
-  if (!data) return <p className="text-sm text-muted-foreground">Loading campaign…</p>;
+  if (!data) return <div className="pf-page"><LoadingSkeleton rows={3} /></div>;
 
   const { campaign, sourceMedia, passport, productFacts } = data;
   const decision = campaign.preflight;
   const allowed = decision?.decision === "allow";
 
   return (
-    <div className="space-y-7">
+    <div className="pf-page space-y-7">
       {/* Header */}
       <FadeIn>
         <div className="flex flex-wrap items-start justify-between gap-5">
-          <div className="max-w-2xl">
+          <div className="min-w-0 max-w-2xl">
             <div className="flex flex-wrap items-center gap-3">
-              <h1 className="font-display text-3xl font-semibold tracking-tight">{campaign.title}</h1>
-              <Badge variant="outline" className={cn(
-                "rounded-full font-medium capitalize",
-                campaign.status === "blocked" && "bg-rose-50 text-rose-700 dark:text-rose-300 ring-rose-600/20",
-                campaign.status === "approved" && "bg-emerald-50 text-emerald-700 dark:text-emerald-300 ring-emerald-600/20",
-                campaign.status === "review" && "bg-violet-50 text-violet-700 ring-violet-600/20",
-                campaign.status === "generating" && "bg-amber-50 text-amber-700 ring-amber-600/20",
-                campaign.status === "draft" && "bg-sky-50 text-sky-700 ring-sky-600/20"
-              )}>
-                {campaign.status}
-              </Badge>
+              <h1 className="font-display text-balance text-3xl font-semibold tracking-tight">{campaign.title}</h1>
+              <StatusBadge status={campaign.status} />
             </div>
             <p className="mt-2 font-mono text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
               {campaign.brand} {campaign.productName} · {campaign.request.platform} · {campaign.request.country} · {campaign.request.transformation} pack
@@ -160,6 +176,36 @@ export default function CampaignWorkspacePage() {
           <Chip label="facts" value={productFacts?.id ?? "—"} mono />
         </div>
       </FadeIn>
+
+      {/* Action errors: visible, retryable, dismissible — state is untouched */}
+      {error && (
+        <div
+          role="alert"
+          className="flex flex-wrap items-center gap-2.5 rounded-xl bg-rose-50 px-4 py-3 text-[13px] text-rose-800 ring-1 ring-rose-200 dark:bg-rose-950/40 dark:text-rose-200 dark:ring-rose-900"
+        >
+          <span className="min-w-0 flex-1 break-words">{error}</span>
+          {lastAction && (
+            <button
+              type="button"
+              onClick={() => action(lastAction.label, lastAction.path, lastAction.body)}
+              disabled={busy !== null}
+              className="shrink-0 rounded-full px-3 py-1 text-[12px] font-medium underline underline-offset-2 hover:no-underline disabled:opacity-50"
+            >
+              Retry{busy ? "…" : ""}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => {
+              setError(null);
+              setLastAction(null);
+            }}
+            className="shrink-0 rounded-full px-3 py-1 text-[12px] font-medium text-rose-700 underline underline-offset-2 hover:no-underline dark:text-rose-300"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* Verdict */}
       {decision && (
@@ -187,17 +233,31 @@ export default function CampaignWorkspacePage() {
                 </div>
               </div>
               <div className="flex gap-2">
-                <Button variant="outline" size="sm" onClick={() => action("repreflight", "/repreflight")} disabled={busy !== null} className="rounded-full">
-                  <RefreshCw className={cn("h-3.5 w-3.5", busy === "repreflight" && "animate-spin")} /> Re-check policy
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => action("repreflight", "/repreflight")}
+                  disabled={busy !== null}
+                  aria-busy={busy === "repreflight"}
+                  className="rounded-full"
+                >
+                  <RefreshCw className={cn("h-3.5 w-3.5", busy === "repreflight" && "animate-spin")} aria-hidden /> {busy === "repreflight" ? "Checking…" : "Re-check policy"}
                 </Button>
                 {allowed && campaign.status !== "approved" && (
-                  <Button size="sm" onClick={() => action("produce", "/produce")} disabled={busy !== null || active} className="rounded-full bg-emerald-700 font-medium text-emerald-50 hover:bg-emerald-600">
-                    {busy === "produce" ? "Starting…" : active ? "Producing…" : <><Sparkles className="h-3.5 w-3.5" /> Produce campaign pack</>}
+                  <Button
+                    size="sm"
+                    onClick={() => action("produce", "/produce")}
+                    disabled={busy !== null || active}
+                    aria-busy={busy === "produce" || active}
+                    title={active ? "Production is running — this resumes automatically" : "Generate the keyframe, variations and video through Livepeer"}
+                    className="rounded-full bg-emerald-700 font-medium text-emerald-50 hover:bg-emerald-600 dark:bg-emerald-500 dark:text-emerald-950 dark:hover:bg-emerald-400"
+                  >
+                    {busy === "produce" ? "Starting…" : active ? "Producing…" : <><Sparkles className="h-3.5 w-3.5" aria-hidden /> Produce campaign pack</>}
                   </Button>
                 )}
                 {campaign.status === "approved" && (
-                  <Badge variant="outline" className="rounded-full bg-emerald-50 font-medium text-emerald-700 dark:text-emerald-300 ring-emerald-600/20">
-                    <Check className="h-3 w-3" /> approved & published
+                  <Badge variant="outline" className="rounded-full bg-emerald-50 font-medium text-emerald-700 ring-emerald-600/20 dark:bg-emerald-950/40 dark:text-emerald-300 dark:ring-emerald-800">
+                    <Check className="h-3 w-3" aria-hidden /> approved & published
                   </Badge>
                 )}
               </div>
@@ -217,7 +277,7 @@ export default function CampaignWorkspacePage() {
                       <span className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full bg-rose-600 text-white"><X className="h-3 w-3" /></span>
                       <div>
                         <p className="text-[13.5px] font-medium leading-snug text-rose-950 dark:text-rose-100">{b.message}</p>
-                        <p className="mt-0.5 font-mono text-[10px] uppercase tracking-[0.1em] text-rose-700 dark:text-rose-300/60 dark:text-rose-300/70">
+                        <p className="mt-0.5 font-mono text-[10px] uppercase tracking-[0.1em] text-rose-700 dark:text-rose-300/70">
                           {b.code} · evidence: {b.evidenceRefs.join(", ") || "graph query returned nothing"}
                         </p>
                       </div>
@@ -230,12 +290,13 @@ export default function CampaignWorkspacePage() {
                     <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-emerald-800/80 dark:text-emerald-300/80">Why this was allowed</p>
                     <ul className="mt-2.5 space-y-2 text-[13px] leading-relaxed text-emerald-950/85 dark:text-emerald-100/90">
                       {decision.queriedRights.length > 0 && (
-                        <li className="flex gap-2"><ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-700 dark:text-emerald-300" />
-                          Passport {decision.queriedRights[0]} — {passport?.platforms.join(", ")} · {passport?.countries.join(", ")} · valid to {passport?.validUntil} · {passport?.allowedTransformations.join(", ")}
+                        <li className="flex min-w-0 gap-2"><ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-700 dark:text-emerald-300" aria-hidden />
+                          <span className="min-w-0 break-all">Passport {decision.queriedRights[0]} — {passport?.platforms.join(", ")} · {passport?.countries.join(", ")} · valid to {passport?.validUntil} · {passport?.allowedTransformations.join(", ")}
+                          </span>
                         </li>
                       )}
                       {decision.allowedClaims.length > 0 && (
-                        <li className="flex gap-2"><Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-700 dark:text-emerald-300" />Verified claims: {decision.allowedClaims.join("; ")}</li>
+                        <li className="flex gap-2"><Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-700 dark:text-emerald-300" aria-hidden />Verified claims: {decision.allowedClaims.join("; ")}</li>
                       )}
                       {decision.queriedFacts.length > 0 && (
                         <li className="flex gap-2"><Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-700 dark:text-emerald-300" />Facts asset {decision.queriedFacts[0]}</li>
@@ -257,16 +318,30 @@ export default function CampaignWorkspacePage() {
                   <Gauge className="h-3.5 w-3.5" /> Policy simulator — what-if only, never changes this campaign
                 </p>
                 <div className="mt-3 flex flex-wrap items-end gap-2">
-                  <Select value={sim.platform} onValueChange={(v) => setSim((s) => ({ ...s, platform: v }))}>
-                    <SelectTrigger className="h-9 w-[140px] rounded-lg"><SelectValue placeholder="platform" /></SelectTrigger>
-                    <SelectContent>
-                      {PLATFORMS.map((p) => <SelectItem key={p} value={p} className="capitalize">{p}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                  <Input placeholder="country (DE)" maxLength={2} value={sim.country} onChange={(e) => setSim((s) => ({ ...s, country: e.target.value.toUpperCase() }))} className="h-9 w-[110px] rounded-lg" />
-                  <Input placeholder="claims, comma-separated" value={sim.claims} onChange={(e) => setSim((s) => ({ ...s, claims: e.target.value }))} className="h-9 min-w-[200px] flex-1 rounded-lg" />
-                  <Button size="sm" variant="outline" onClick={runSimulation} className="rounded-lg">Simulate</Button>
+                  <div className="space-y-1">
+                    <Label htmlFor="sim-platform" className="sr-only">Simulated platform</Label>
+                    <Select value={sim.platform} onValueChange={(v) => setSim((s) => ({ ...s, platform: v }))}>
+                      <SelectTrigger id="sim-platform" className="h-9 w-[140px] rounded-lg"><SelectValue placeholder="platform" /></SelectTrigger>
+                      <SelectContent>
+                        {PLATFORMS.map((p) => <SelectItem key={p} value={p} className="capitalize">{p}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="sim-country" className="sr-only">Simulated country code</Label>
+                    <Input id="sim-country" placeholder="country (DE)" maxLength={2} value={sim.country} onChange={(e) => setSim((s) => ({ ...s, country: e.target.value.toUpperCase() }))} className="h-9 w-[110px] rounded-lg" />
+                  </div>
+                  <div className="min-w-[200px] flex-1 space-y-1">
+                    <Label htmlFor="sim-claims" className="sr-only">Simulated claims, comma-separated</Label>
+                    <Input id="sim-claims" placeholder="claims, comma-separated" value={sim.claims} onChange={(e) => setSim((s) => ({ ...s, claims: e.target.value }))} className="h-9 w-full rounded-lg" />
+                  </div>
+                  <Button size="sm" variant="outline" onClick={runSimulation} disabled={busy !== null} aria-busy={busy === "simulate"} className="rounded-lg">
+                    {busy === "simulate" ? "Simulating…" : "Simulate"}
+                  </Button>
                 </div>
+                {simError && (
+                  <p role="alert" className="mt-2 break-words text-[12px] text-rose-600 dark:text-rose-300">{simError}</p>
+                )}
                 <AnimatePresence>
                   {simResult && (
                     <motion.div
@@ -275,7 +350,7 @@ export default function CampaignWorkspacePage() {
                       exit={{ opacity: 0, height: 0 }}
                       className="overflow-hidden"
                     >
-                      <div className={cn("mt-3 rounded-lg p-3 text-[12.5px] leading-relaxed", simResult.decision === "allow" ? "bg-emerald-50 text-emerald-900 dark:text-emerald-200 ring-1 ring-emerald-200" : "bg-rose-50 text-rose-900 dark:text-rose-200 ring-1 ring-rose-200")}>
+                      <div className={cn("mt-3 rounded-lg p-3 text-[12.5px] leading-relaxed ring-1", simResult.decision === "allow" ? "bg-emerald-50 text-emerald-900 ring-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-200 dark:ring-emerald-900" : "bg-rose-50 text-rose-900 ring-rose-200 dark:bg-rose-950/40 dark:text-rose-200 dark:ring-rose-900")}>
                         <p className="font-semibold">Simulated: {simResult.decision === "allow" ? "would be allowed" : "would be blocked"}</p>
                         {simResult.decision === "allow" ? (
                           <p className="mt-0.5">Verified claims: {simResult.allowedClaims.join("; ") || "none"} · {simResult.plan.length} production stages</p>
@@ -334,8 +409,8 @@ export default function CampaignWorkspacePage() {
                           )}
                           <span className={cn("text-[12px] font-medium capitalize",
                             job.status === "succeeded" && "text-emerald-700 dark:text-emerald-300",
-                            job.status === "failed" && "text-rose-600",
-                            job.status === "running" && "animate-pulse text-amber-600",
+                            job.status === "failed" && "text-rose-600 dark:text-rose-300",
+                            job.status === "running" && "animate-pulse text-amber-600 dark:text-amber-300",
                             job.status === "queued" && "text-muted-foreground"
                           )}>
                             {job.status}
@@ -347,14 +422,34 @@ export default function CampaignWorkspacePage() {
                           )}
                         </div>
                       </div>
-                      {job.error && <p className="mt-2 text-[12px] text-rose-600">{job.error}</p>}
+                      {job.error && <p className="mt-2 break-words text-[12px] text-rose-600 dark:text-rose-300">{job.error}</p>}
                       {job.humanSummary && <p className="mt-1 text-[12px] italic text-muted-foreground">{job.humanSummary}</p>}
                       {reviseFor === job.id && (
-                        <div className="mt-3 flex gap-2">
-                          <Input value={instructions} onChange={(e) => setInstructions(e.target.value)} placeholder="e.g. warmer light, more space above the shoe" className="h-9 rounded-lg" />
-                          <Button size="sm" onClick={() => { action(`revise-${job.id}`, "/revise", { stageId: job.stageId, instructions }); setReviseFor(null); }} disabled={!instructions.trim() || busy !== null} className="h-9 rounded-lg bg-violet-600 font-medium text-white hover:bg-violet-500">
-                            Regenerate
-                          </Button>
+                        <div className="mt-3 space-y-1.5">
+                          <div className="flex gap-2">
+                            <Label htmlFor={`revise-${job.id}`} className="sr-only">Reviewer instructions for {stage?.label ?? job.stageId}</Label>
+                            <Input
+                              id={`revise-${job.id}`}
+                              value={instructions}
+                              onChange={(e) => setInstructions(e.target.value)}
+                              placeholder="e.g. warmer light, more space above the shoe"
+                              aria-describedby={`revise-${job.id}-hint`}
+                              className="h-9 rounded-lg"
+                            />
+                            <Button
+                              size="sm"
+                              onClick={() => { action(`revise-${job.id}`, "/revise", { stageId: job.stageId, instructions }); setReviseFor(null); }}
+                              disabled={!instructions.trim() || busy !== null}
+                              aria-busy={busy === `revise-${job.id}`}
+                              title={!instructions.trim() ? "Describe the change to enable regeneration" : undefined}
+                              className="h-9 shrink-0 rounded-lg bg-violet-600 font-medium text-white hover:bg-violet-500"
+                            >
+                              {busy === `revise-${job.id}` ? "Starting…" : "Regenerate"}
+                            </Button>
+                          </div>
+                          <p id={`revise-${job.id}-hint`} className="text-[11px] text-muted-foreground">
+                            Regenerate is disabled until you describe the change. Only this stage re-runs; the rest of the pack is kept.
+                          </p>
                         </div>
                       )}
                     </div>
@@ -377,7 +472,14 @@ export default function CampaignWorkspacePage() {
                   <a href={`/api/campaigns/${campaign.id}/bundle`} download><Download className="h-3.5 w-3.5" /> Proof bundle</a>
                 </Button>
                 {campaign.status !== "approved" && (
-                  <Button size="sm" onClick={() => action("approve", "/approve")} disabled={busy !== null || active} className="rounded-full bg-emerald-700 font-medium text-emerald-50 hover:bg-emerald-600">
+                  <Button
+                    size="sm"
+                    onClick={() => action("approve", "/approve")}
+                    disabled={busy !== null || active || campaign.jobs.filter((j) => j.status === "succeeded").length === 0}
+                    aria-busy={busy === "approve"}
+                    title={campaign.jobs.filter((j) => j.status === "succeeded").length === 0 ? "Produce the pack first — there is nothing to approve yet" : active ? "Wait for production to finish before approving" : "Approve the pack and publish the campaign record"}
+                    className="rounded-full bg-emerald-700 font-medium text-emerald-50 hover:bg-emerald-600 dark:bg-emerald-500 dark:text-emerald-950 dark:hover:bg-emerald-400"
+                  >
                     {busy === "approve" ? "Publishing…" : "Approve & publish"}
                   </Button>
                 )}
@@ -395,8 +497,8 @@ export default function CampaignWorkspacePage() {
                   <div className="space-y-1 p-3">
                     <p className="text-[12.5px] font-medium leading-tight">{r.label}</p>
                     <p className="font-mono text-[9.5px] uppercase tracking-[0.1em] text-muted-foreground">{r.format} · {r.capability}</p>
-                    {r.ual && <p className="truncate font-mono text-[10px] text-emerald-700 dark:text-emerald-300">{r.ual}</p>}
-                    <Link href={`/verify/${r.id}`} className="inline-flex items-center gap-1 text-[11px] font-medium text-sky-700 hover:underline">
+                    {r.ual && <p className="truncate font-mono text-[10px] text-emerald-700 dark:text-emerald-300" title={r.ual}>{r.ual}</p>}
+                    <Link href={`/verify/${r.id}`} className="inline-flex items-center gap-1 text-[11px] font-medium text-sky-700 hover:underline dark:text-sky-300">
                       Verify <ArrowRight className="h-3 w-3" />
                     </Link>
                   </div>
@@ -404,7 +506,7 @@ export default function CampaignWorkspacePage() {
               ))}
             </div>
             {campaign.campaignUAL && (
-              <p className="mt-4 font-mono text-[11px] text-muted-foreground">
+              <p className="mt-4 min-w-0 break-all font-mono text-[11px] text-muted-foreground" title={campaign.campaignUAL}>
                 Campaign record: <span className="text-emerald-700 dark:text-emerald-300">{campaign.campaignUAL}</span>
               </p>
             )}
@@ -419,9 +521,9 @@ export default function CampaignWorkspacePage() {
 
 function Chip({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
-    <span className="inline-flex items-center gap-1.5 rounded-full bg-secondary px-3 py-1.5 text-[11.5px] ring-1 ring-border">
-      <span className="font-mono text-[9.5px] uppercase tracking-[0.12em] text-muted-foreground">{label}</span>
-      <span className={cn("text-foreground/80", mono && "font-mono text-[11px]")}>{value}</span>
+    <span className="inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-full bg-secondary px-3 py-1.5 text-[11.5px] ring-1 ring-border">
+      <span className="shrink-0 font-mono text-[9.5px] uppercase tracking-[0.12em] text-muted-foreground">{label}</span>
+      <span className={cn("pf-id text-foreground/80", mono && "font-mono text-[11px]")} title={value}>{value}</span>
     </span>
   );
 }

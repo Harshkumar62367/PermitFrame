@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
   await ensureSeed();
-  return NextResponse.json({ campaigns: loadDb().campaigns });
+  return NextResponse.json({ campaigns: (await loadDb()).campaigns });
 }
 
 export async function POST(request: NextRequest) {
@@ -23,7 +23,7 @@ export async function POST(request: NextRequest) {
     brand?: string;
     productName?: string;
   };
-  const db = loadDb();
+  const db = await loadDb();
   const creator = db.creators[0];
   const passport = db.passports.find((p) => p.creatorId === creator?.id);
   const facts = db.productFacts.find((f) => f.brand === (body.brand ?? "Verdi Steps"));

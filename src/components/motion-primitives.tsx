@@ -1,6 +1,6 @@
 "use client";
 
-import { motion, useInView, useSpring, useTransform } from "framer-motion";
+import { motion, useInView, useReducedMotion, useSpring, useTransform } from "framer-motion";
 import { useEffect, useRef, type ReactNode } from "react";
 
 export function FadeIn({
@@ -14,6 +14,8 @@ export function FadeIn({
   y?: number;
   className?: string;
 }) {
+  const reduce = useReducedMotion();
+  if (reduce) return <div className={className}>{children}</div>;
   return (
     <motion.div
       className={className}
@@ -49,6 +51,8 @@ export function Stagger({
 }
 
 export function StaggerItem({ children, className }: { children: ReactNode; className?: string }) {
+  const reduce = useReducedMotion();
+  if (reduce) return <div className={className}>{children}</div>;
   return (
     <motion.div
       className={className}
@@ -70,7 +74,7 @@ export function Marquee({ items }: { items: string[] }) {
         {doubled.map((item, i) => (
           <span
             key={i}
-            className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-1.5 font-mono text-[11px] uppercase tracking-[0.14em] text-white/60"
+            className="rounded-full border border-border bg-muted px-4 py-1.5 font-mono text-[11px] uppercase tracking-[0.14em] text-muted-foreground dark:border-white/10 dark:bg-white/[0.04] dark:text-white/60"
           >
             {item}
           </span>

@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 
 export default async function SharePage({ params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
-  const campaign = resolveShare(token);
+  const campaign = await resolveShare(token);
   if (!campaign) notFound();
 
   const claims = campaign.preflight?.allowedClaims ?? [];

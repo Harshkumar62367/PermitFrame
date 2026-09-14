@@ -2,7 +2,11 @@ import type { PermissionPassport, ProductFacts, Visibility } from "../types";
 import type { KaEnvelope } from "./schemas";
 
 export interface KaRecord {
+  /** A public, on-chain Verifiable Memory locator. Empty until VM publish succeeds. */
   ual: string;
+  /** DKG V10 Shared Working Memory evidence. This is not an on-chain UAL. */
+  evidenceUri?: string;
+  merkleRoot?: string;
   explorerUrl: string;
   name: string;
   content: Record<string, unknown>;
@@ -10,7 +14,7 @@ export interface KaRecord {
   mode: DkgMode;
 }
 
-export type DkgMode = "dkg-testnet" | "edge-node" | "local-evidence";
+export type DkgMode = "edge-node" | "local-evidence";
 
 export interface DkgHealth {
   mode: DkgMode;
