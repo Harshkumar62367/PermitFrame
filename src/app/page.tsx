@@ -5,7 +5,7 @@ import { FadeIn, Marquee } from "@/components/motion-primitives";
 import { PermitFrameMark } from "@/components/logo";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { WorkspaceCta } from "@/components/workspace-cta";
-import { DemoShowcase, HowItWorks, PlatformFeatures } from "@/components/landing/landing-sections";
+import { HowItWorks, PlatformFeatures, PolicyScenarios } from "@/components/landing/landing-sections";
 
 export default function LandingPage() {
   return (
@@ -21,7 +21,7 @@ export default function LandingPage() {
           </Link>
           <nav className="hidden items-center gap-6 text-[13px] text-muted-foreground md:flex dark:text-white/60" aria-label="Landing">
             <a href="#how" className="transition hover:text-foreground dark:hover:text-white">How it works</a>
-            <a href="#demo" className="transition hover:text-foreground dark:hover:text-white">The demo</a>
+            <a href="#policy" className="transition hover:text-foreground dark:hover:text-white">Policy</a>
             <a href="#features" className="transition hover:text-foreground dark:hover:text-white">Platform</a>
           </nav>
           <div className="flex shrink-0 items-center gap-2">
@@ -80,7 +80,7 @@ export default function LandingPage() {
       </section>
 
       <HowItWorks />
-      <DemoShowcase />
+      <PolicyScenarios />
       <PlatformFeatures />
 
       {/* CTA — same dark backdrop; hairline separates, not a second backdrop */}
@@ -96,8 +96,8 @@ export default function LandingPage() {
               From creator consent to verified campaign pack.
             </h2>
             <p className="mx-auto mt-4 max-w-xl text-pretty text-muted-foreground dark:text-white/55">
-              Open the demo workspace — two campaigns are waiting: one the DKG will refuse,
-              and one it will produce end-to-end.
+              Create a product record, collect creator consent, then produce campaigns inside
+              the permissions and claims your team has actually recorded.
             </p>
             <WorkspaceCta size="lg" className="mt-8 rounded-full bg-emerald-400 px-7 font-medium text-emerald-950 hover:bg-emerald-300" />
           </FadeIn>

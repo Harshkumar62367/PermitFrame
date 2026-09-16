@@ -1,15 +1,12 @@
 "use client";
 
-import { useState } from "react";
-import { FadeIn } from "@/components/motion-primitives";
+import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/page-header";
 import { SectionCard } from "@/components/ui/section-card";
-import { ErrorState } from "@/components/ui/error-state";
-import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
-import { useBootstrap } from "@/lib/bootstrap";
 import { apiGet } from "@/lib/api";
+import type { DkgHealth } from "@/server/dkg/adapter";
 
 interface CapabilitiesResponse {
   ok: boolean;
@@ -25,8 +22,16 @@ type CapsState =
   | { status: "failed"; at: string; error: string };
 
 export default function SettingsPage() {
-  const boot = useBootstrap();
+  const [health, setHealth] = useState<{ dkg: DkgHealth; livepeer: { endpoint: string; keyless: boolean; reachable?: boolean; detail?: string } } | null>(null);
   const [caps, setCaps] = useState<CapsState>({ status: "idle" });
+
+  useEffect(() => {
+    const controller = new AbortController();
+    apiGet<{ dkg: DkgHealth; livepeer: { endpoint: string; keyless: boolean; reachable?: boolean; detail?: string } }>("/api/health", controller.signal)
+      .then(setHealth)
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, []);
 
   async function checkLivepeer() {
     if (caps.status === "loading") return;
@@ -50,59 +55,45 @@ export default function SettingsPage() {
     }
   }
 
-  if (boot.status === "loading") {
-    return (
-      <div className="pf-page space-y-6">
-        <LoadingSkeleton rows={2} />
-      </div>
-    );
-  }
-
-  if (boot.status === "failed") {
-    return (
-      <div className="pf-page space-y-6">
-        <ErrorState message={boot.error} onRetry={boot.refresh} />
-      </div>
-    );
-  }
-
-  const { snapshot } = boot;
   const capCount = caps.status === "ready" ? Object.keys(caps.capabilities).length : null;
   const priceCount = caps.status === "ready" ? Object.keys(caps.pricing).length : null;
 
   return (
     <div className="pf-page space-y-6">
-      <FadeIn>
+      <div>
         <PageHeader
           eyebrow="System"
           title="Settings"
           description="Integration health for the two networks PermitFrame runs on."
           width="narrow"
         />
-      </FadeIn>
+      </div>
 
-      <FadeIn delay={0.05}>
+      <div>
         <div className="grid max-w-3xl gap-4 md:grid-cols-2">
           <SectionCard title="OriginTrail DKG">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="font-mono text-[11px] text-muted-foreground">mode</span>
-              <Badge variant="outline" className={snapshot.dkg.mode === "edge-node" ? "rounded-full bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-950/40 dark:text-emerald-300 dark:ring-emerald-800" : "rounded-full bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-800"}>
-                {snapshot.dkg.mode}
+              <Badge variant="outline" className={health?.dkg.mode === "edge-node" ? "rounded-full bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-950/40 dark:text-emerald-300 dark:ring-emerald-800" : "rounded-full bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-800"}>
+                {health?.dkg.mode ?? "checking"}
               </Badge>
             </div>
-            <p className="mt-2.5 break-words text-[12.5px] leading-relaxed text-muted-foreground">{snapshot.dkg.detail}</p>
+            <p className="mt-2.5 break-words text-[12.5px] leading-relaxed text-muted-foreground">{health?.dkg.detail ?? "Checking DKG diagnostics in the background. Workspace data does not depend on this check."}</p>
             <p className="mt-3 break-words font-mono text-[10.5px] text-muted-foreground">
-              blockchain: {snapshot.dkg.blockchain ?? "—"} · use DKG_MODE=edge for the OriginTrail DKG V10 Edge Node
+              blockchain: {health?.dkg.blockchain ?? "—"} · use DKG_MODE=edge for the OriginTrail DKG V10 Edge Node
             </p>
           </SectionCard>
           <SectionCard title="Livepeer Agent">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="font-mono text-[11px] text-muted-foreground">auth</span>
               <Badge variant="outline" className="rounded-full bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-950/40 dark:text-emerald-300 dark:ring-emerald-800">
-                {snapshot.livepeer.keyless ? "keyless demo credit" : "api key"}
+                {health?.livepeer.keyless ? "hosted access" : health ? "api key" : "checking"}
               </Badge>
             </div>
-            <p className="mt-2.5 break-all font-mono text-[11.5px] leading-relaxed text-muted-foreground">{snapshot.livepeer.endpoint}</p>
+            <p className="mt-2.5 break-all font-mono text-[11.5px] leading-relaxed text-muted-foreground">{health?.livepeer.endpoint ?? "Loading integration details…"}</p>
+            {health?.livepeer.detail && (
+              <p className="mt-2 break-words text-[12.5px] leading-relaxed text-muted-foreground">{health.livepeer.detail}</p>
+            )}
             <Button
               variant="outline"
               size="sm"
@@ -141,7 +132,7 @@ export default function SettingsPage() {
             )}
           </SectionCard>
         </div>
-      </FadeIn>
+      </div>
     </div>
   );
 }

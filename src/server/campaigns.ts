@@ -1,6 +1,7 @@
 import type { Campaign, CampaignRequest, ProductionJob } from "./types";
 import { loadDb, newId, nowIso, updateDb } from "./store";
 import { preflight, composeStagePrompt } from "./policy/engine";
+import { effectiveCampaignStatus, preflightEvent } from "./campaign-status";
 import { createJobRecords, publishCampaignRecord, runProduction } from "./livepeer/pipeline";
 
 export async function loadCampaign(id: string): Promise<Campaign | undefined> {
@@ -16,7 +17,7 @@ export async function createCampaign(input: {
   passportId: string;
   productFactsId: string;
   request: CampaignRequest;
-  demoNote?: string;
+  contextNote?: string;
 }): Promise<Campaign> {
   const campaign: Campaign = {
     id: newId("cmp"),
@@ -35,11 +36,15 @@ export async function createCampaign(input: {
     productFactsId: input.productFactsId,
     createdAt: nowIso(),
     updatedAt: nowIso(),
-    demoNote: input.demoNote
+    contextNote: input.contextNote
   };
   campaign.preflight = await preflight(campaign);
   if (campaign.preflight.decision === "block") campaign.status = "blocked";
-  await updateDb((d) => d.campaigns.push(campaign));
+  const createdEvent = preflightEvent(campaign, campaign.preflight);
+  await updateDb((d) => {
+    d.campaigns.push(campaign);
+    d.events.push(createdEvent);
+  });
   return campaign;
 }
 
@@ -49,6 +54,7 @@ export async function rePreflight(id: string): Promise<Campaign | undefined> {
   if (!campaign) return undefined;
   campaign.preflight = await preflight(campaign);
   campaign.status = campaign.preflight.decision === "block" ? "blocked" : campaign.status === "blocked" ? "draft" : campaign.status;
+  const event = preflightEvent(campaign, campaign.preflight);
   await updateDb((d) => {
     const c = d.campaigns.find((x) => x.id === id);
     if (c) {
@@ -56,6 +62,7 @@ export async function rePreflight(id: string): Promise<Campaign | undefined> {
       c.status = campaign.status;
       c.updatedAt = nowIso();
     }
+    d.events.push(event);
   });
   return loadCampaign(id);
 }
@@ -95,6 +102,15 @@ export async function startProduction(id: string, capabilityOverride?: string): 
   }
   // background execution; UI polls GET /api/campaigns/[id] for progress
   void runProduction(id).catch(() => undefined);
+  await updateDb((d) => {
+    d.events.push({
+      id: newId("evt"),
+      at: nowIso(),
+      kind: "production.start",
+      summary: `Livepeer production started for "${campaign.title}" — only preflight-approved stages may run.`,
+      refs: [id]
+    });
+  });
   return { started: true };
 }
 
@@ -141,7 +157,9 @@ async function runSingleJob(campaignId: string, jobId: string): Promise<void> {
 export async function approveCampaign(id: string): Promise<{ approved: boolean; ual?: string; error?: string }> {
   const campaign = await loadCampaign(id);
   if (!campaign) return { approved: false, error: "Campaign not found" };
-  if (campaign.status === "blocked") return { approved: false, error: "Blocked campaigns cannot be approved" };
+  // Gate on the effective verdict, not the stored label: a stale "draft" row
+  // whose preflight denies must never be approvable.
+  if (effectiveCampaignStatus(campaign) === "blocked") return { approved: false, error: "Blocked campaigns cannot be approved" };
   if (campaign.jobs.filter((j) => j.status === "succeeded").length === 0) {
     return { approved: false, error: "Produce the campaign pack before approving — there is nothing to sign off yet" };
   }
@@ -153,5 +171,14 @@ export async function approveCampaign(id: string): Promise<{ approved: boolean; 
     }
   });
   const ual = await publishCampaignRecord(id);
+  await updateDb((d) => {
+    d.events.push({
+      id: newId("evt"),
+      at: nowIso(),
+      kind: "campaign.approved",
+      summary: `Campaign pack approved for "${campaign.title}"${ual ? ` — campaign record ${ual}` : ""}.`,
+      refs: [id]
+    });
+  });
   return { approved: true, ual };
 }

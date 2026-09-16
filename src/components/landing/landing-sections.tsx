@@ -1,7 +1,5 @@
-import Link from "next/link";
-import { ArrowRight, BadgeCheck, Ban, FileCheck2, Layers, ShieldCheck, Sparkles } from "lucide-react";
+import { BadgeCheck, Ban, FileCheck2, Layers, ShieldCheck, Sparkles } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { FadeIn, Stagger, StaggerItem } from "@/components/motion-primitives";
 
 const STEPS = [
@@ -65,12 +63,12 @@ export function HowItWorks() {
   );
 }
 
-export function DemoShowcase() {
+export function PolicyScenarios() {
   return (
-    <section id="demo" className="py-20 sm:py-24">
+    <section id="policy" className="py-20 sm:py-24">
       <div className="mx-auto w-full max-w-6xl px-4 sm:px-6">
         <FadeIn>
-          <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-emerald-700 dark:text-emerald-300">The demo</p>
+          <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-emerald-700 dark:text-emerald-300">Policy in action</p>
           <h2 className="font-display mt-3 max-w-3xl text-balance text-3xl font-semibold tracking-tight sm:text-4xl">
             Watch a request get refused — then watch the compliant one ship.
           </h2>
@@ -90,9 +88,6 @@ export function DemoShowcase() {
                 <li className="flex gap-2.5"><Ban className="mt-0.5 h-4 w-4 shrink-0 text-rose-600 dark:text-rose-400" aria-hidden />Germany is not covered by any granted territory</li>
                 <li className="flex gap-2.5"><Ban className="mt-0.5 h-4 w-4 shrink-0 text-rose-600 dark:text-rose-400" aria-hidden />“Waterproof” is on the prohibited-claims list</li>
               </ul>
-              <Button asChild variant="outline" size="sm" className="mt-6 rounded-full border-rose-300 bg-white text-rose-800 hover:bg-rose-100 dark:border-rose-800 dark:bg-transparent dark:text-rose-200 dark:hover:bg-rose-950">
-                <Link href="/campaigns/campaign_blocked_demo">Open this campaign <ArrowRight className="h-3.5 w-3.5" aria-hidden /></Link>
-              </Button>
             </div>
           </FadeIn>
           <FadeIn delay={0.1}>
@@ -109,9 +104,6 @@ export function DemoShowcase() {
                 <li className="flex gap-2.5"><BadgeCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" aria-hidden />“Made with recycled materials” is a verified fact</li>
                 <li className="flex gap-2.5"><BadgeCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" aria-hidden />Keyframe → variations → video, with cost per output</li>
               </ul>
-              <Button asChild size="sm" className="mt-6 rounded-full bg-emerald-700 font-medium text-emerald-50 hover:bg-emerald-600 dark:bg-emerald-500 dark:text-emerald-950 dark:hover:bg-emerald-400">
-                <Link href="/campaigns/campaign_approved_demo">Open this campaign <ArrowRight className="h-3.5 w-3.5" aria-hidden /></Link>
-              </Button>
             </div>
           </FadeIn>
         </div>

@@ -196,7 +196,7 @@ function finalize(payload: Record<string, unknown>, jobId?: string): CapabilityR
 }
 
 export function isLivepeerConfigured(): boolean {
-  return true; // raw surface supports keyless demo mode; always callable
+  return true; // raw surface supports hosted access; always callable
 }
 
 function assertToolOk(payload: Record<string, unknown>, label: string): void {
@@ -271,7 +271,7 @@ function str(value: unknown): string | undefined {
 }
 
 function sanitize(value: string): string {
-  return value.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 60) || "demo";
+  return value.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 60) || "output";
 }
 
 function delay(ms: number): Promise<void> {

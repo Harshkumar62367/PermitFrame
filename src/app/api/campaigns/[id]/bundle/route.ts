@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { ensureSeed } from "@/server/seed";
 import { loadCampaign } from "@/server/campaigns";
 import { loadDb, nowIso, sha256 } from "@/server/store";
 
@@ -7,7 +6,6 @@ export const dynamic = "force-dynamic";
 
 /** Downloadable proof bundle: what PermitFrame recorded, without raw prompts. */
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  await ensureSeed();
   const { id } = await params;
   const campaign = await loadCampaign(id);
   if (!campaign) return NextResponse.json({ error: "Campaign not found" }, { status: 404 });

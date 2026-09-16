@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useId, useState } from "react";
+import { useId, useState } from "react";
 import { ArrowRight, SearchCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,31 +11,22 @@ import { PageHeader } from "@/components/ui/page-header";
 import { SectionCard } from "@/components/ui/section-card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
-import { apiGet } from "@/lib/api";
-
-interface ExampleCampaign {
-  id: string;
-  title: string;
-  status: string;
-}
+import { useWorkspaceSnapshot } from "@/lib/use-workspace-snapshot";
 
 export default function VerifierPage() {
   const router = useRouter();
   const uid = useId();
   const [ref, setRef] = useState("");
   const [fieldError, setFieldError] = useState<string | null>(null);
-  const [examples, setExamples] = useState<ExampleCampaign[] | null>(null);
 
-  // Example shortcuts come from live workspace data — never hardcoded —
-  // so they keep working after demo seeds are removed.
-  useEffect(() => {
-    const controller = new AbortController();
-    apiGet<{ campaigns: ExampleCampaign[] }>("/api/campaigns", controller.signal).then(
-      (d) => setExamples((d.campaigns ?? []).slice(0, 3)),
-      () => setExamples([])
-    );
-    return () => controller.abort();
-  }, []);
+  // Example shortcuts come from the shared ["workspace-snapshot"] cache —
+  // never hardcoded, never a duplicate /api/campaigns read — so public
+  // verification links remain stable as workspace data evolves. The public
+  // /verify/[ref] routes stay separate and correctly public.
+  const snapshot = useWorkspaceSnapshot();
+  const examples = snapshot.data
+    ? snapshot.data.campaigns.slice(0, 3)
+    : snapshot.isError ? [] : null;
 
   function submit() {
     if (!ref.trim()) {

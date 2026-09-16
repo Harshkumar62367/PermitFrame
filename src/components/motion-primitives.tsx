@@ -7,22 +7,27 @@ export function FadeIn({
   children,
   delay = 0,
   y = 18,
-  className
+  className,
+  subtle = false
 }: {
   children: ReactNode;
   delay?: number;
   y?: number;
   className?: string;
+  /** Subtle 150–250ms entrance for above-the-fold dashboard content. */
+  subtle?: boolean;
 }) {
   const reduce = useReducedMotion();
   if (reduce) return <div className={className}>{children}</div>;
+  const distance = subtle ? 8 : y;
+  const duration = subtle ? 0.2 : 0.6;
   return (
     <motion.div
       className={className}
-      initial={{ opacity: 0, y }}
+      initial={{ opacity: 0, y: distance }}
       whileInView={{ opacity: 1, y: 0 }}
       viewport={{ once: true, margin: "0px 0px -40px 0px" }}
-      transition={{ duration: 0.6, delay, ease: [0.21, 0.47, 0.32, 0.98] }}
+      transition={{ duration, delay: subtle ? 0 : delay, ease: [0.21, 0.47, 0.32, 0.98] }}
     >
       {children}
     </motion.div>
@@ -84,11 +89,34 @@ export function Marquee({ items }: { items: string[] }) {
   );
 }
 
-export function AnimatedNumber({ value, prefix = "", suffix = "" }: { value: number; prefix?: string; suffix?: string }) {
+/**
+ * Animated counter with explicit formatting semantics. Integer counters must
+ * pass `integer` (or `decimals={0}`) so transient spring values never render
+ * fractional digits; currency uses `decimals={2}`. A custom `format` wins.
+ */
+export function AnimatedNumber({
+  value,
+  prefix = "",
+  suffix = "",
+  decimals,
+  integer = false,
+  format
+}: {
+  value: number;
+  prefix?: string;
+  suffix?: string;
+  decimals?: number;
+  integer?: boolean;
+  format?: (v: number) => string;
+}) {
   const ref = useRef<HTMLSpanElement>(null);
   const inView = useInView(ref, { once: true, margin: "-40px" });
   const spring = useSpring(0, { stiffness: 70, damping: 18 });
-  const display = useTransform(spring, (v) => `${prefix}${v % 1 === 0 ? v.toFixed(0) : v.toFixed(2)}${suffix}`);
+  const effectiveDecimals = decimals ?? (integer ? 0 : undefined);
+  const display = useTransform(spring, (v) => {
+    const body = format ? format(v) : effectiveDecimals !== undefined ? v.toFixed(effectiveDecimals) : Math.round(v).toString();
+    return `${prefix}${body}${suffix}`;
+  });
   useEffect(() => {
     if (inView) spring.set(value);
   }, [inView, value, spring]);

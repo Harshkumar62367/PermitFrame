@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { useId, useState } from "react";
 import { Link2, Wand2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,7 +13,9 @@ import { CopyableIdentifier } from "@/components/ui/identifier";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
 import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
-import { apiGet, apiPost, describeRecord } from "@/lib/api";
+import { apiPost, describeRecord } from "@/lib/api";
+import { useInvalidateDkgGraph } from "@/lib/use-dkg-graph";
+import { useInvalidateWorkspaceSnapshot, useWorkspaceSnapshot } from "@/lib/use-workspace-snapshot";
 import { cn } from "@/lib/utils";
 import type { SourceMedia } from "@/server/types";
 
@@ -21,44 +23,20 @@ const EXAMPLE_FORM = { title: "Maya - rooftop vertical", url: "https://images.un
 
 export default function MediaLibraryPage() {
   const uid = useId();
-  const [media, setMedia] = useState<SourceMedia[] | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  // Source media reads from the shared ["workspace-snapshot"] cache: cached
+  // rows render instantly and stay visible during background refetches. An
+  // inline skeleton shows only when no cached snapshot exists at all.
+  const snapshot = useWorkspaceSnapshot();
+  const media = snapshot.data?.sourceMedia ?? null;
+  const loadError = !snapshot.data && snapshot.isError
+    ? (snapshot.error instanceof Error ? snapshot.error.message : "Media library failed to load.")
+    : null;
   const [form, setForm] = useState({ title: "", url: "", type: "image" });
   const [fieldError, setFieldError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; text: string; ual?: string } | null>(null);
-
-  function requestMedia(signal?: AbortSignal) {
-    return apiGet<{ media: SourceMedia[] }>("/api/media", signal);
-  }
-
-  useEffect(() => {
-    const controller = new AbortController();
-    requestMedia(controller.signal).then(
-      (d) => {
-        setMedia(d.media);
-        setLoadError(null);
-      },
-      (e: unknown) => {
-        if (e instanceof DOMException && e.name === "AbortError") return;
-        setLoadError(e instanceof Error ? e.message : "Media library failed to load.");
-      }
-    );
-    return () => controller.abort();
-  }, []);
-
-  async function reloadMedia(signal?: AbortSignal) {
-    try {
-      const d = await requestMedia(signal);
-      if (signal?.aborted) return;
-      setMedia(d.media);
-      setLoadError(null);
-    } catch (e) {
-      if (e instanceof DOMException && e.name === "AbortError") return;
-      if (signal?.aborted) return;
-      setLoadError(e instanceof Error ? e.message : "Media library failed to load.");
-    }
-  }
+  const invalidateSnapshot = useInvalidateWorkspaceSnapshot();
+  const invalidateDkgGraph = useInvalidateDkgGraph();
 
   function fillExample() {
     setForm(EXAMPLE_FORM);
@@ -88,7 +66,10 @@ export default function MediaLibraryPage() {
         ual: j.media.ual
       });
       setForm({ title: "", url: "", type: "image" });
-      await reloadMedia();
+      // Registration publishes a Knowledge Asset: refresh the shared snapshot
+      // (awaited, so the new row appears) and mark the cached graph stale.
+      await invalidateSnapshot();
+      invalidateDkgGraph();
     } catch (e) {
       // Form input is preserved for retry.
       setResult({ ok: false, text: e instanceof Error ? e.message : "Registration failed. Your input is preserved." });
@@ -193,7 +174,7 @@ export default function MediaLibraryPage() {
         </SectionCard>
       </FadeIn>
 
-      {loadError && <ErrorState message={loadError} onRetry={() => reloadMedia()} />}
+      {loadError && <ErrorState message={loadError} onRetry={() => { void snapshot.refetch(); }} />}
       {!media && !loadError && <LoadingSkeleton rows={3} />}
       <Stagger className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {(media ?? []).map((m) => (

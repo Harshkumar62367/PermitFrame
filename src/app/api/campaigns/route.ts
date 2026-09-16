@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { ensureSeed } from "@/server/seed";
 import { loadDb } from "@/server/store";
 import { createCampaign } from "@/server/campaigns";
 import type { CampaignRequest } from "@/server/types";
@@ -7,12 +6,10 @@ import type { CampaignRequest } from "@/server/types";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  await ensureSeed();
   return NextResponse.json({ campaigns: (await loadDb()).campaigns });
 }
 
 export async function POST(request: NextRequest) {
-  await ensureSeed();
   const body = (await request.json()) as {
     title: string;
     platform: string;
@@ -26,10 +23,10 @@ export async function POST(request: NextRequest) {
   const db = await loadDb();
   const creator = db.creators[0];
   const passport = db.passports.find((p) => p.creatorId === creator?.id);
-  const facts = db.productFacts.find((f) => f.brand === (body.brand ?? "Verdi Steps"));
+  const facts = db.productFacts.find((f) => f.brand === body.brand);
   const media = db.sourceMedia.find((m) => m.creatorId === creator?.id);
   if (!creator || !passport || !facts || !media) {
-    return NextResponse.json({ error: "Workspace is not initialized" }, { status: 400 });
+    return NextResponse.json({ error: "Add product facts, a creator permission passport, and source media before creating a campaign." }, { status: 400 });
   }
   const req: CampaignRequest = {
     platform: body.platform as CampaignRequest["platform"],

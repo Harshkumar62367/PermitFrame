@@ -6,8 +6,7 @@ import { createContext, useContext } from "react";
 export interface WorkspaceIdentity {
   id: string;
   name: string;
-  /** "demo" renders the honest demo identity; "live" renders the member workspace. */
-  mode: "demo" | "live";
+  mode: "loading" | "live";
   detail?: string;
 }
 
@@ -23,7 +22,7 @@ interface WorkspaceContextValue {
 }
 
 const WorkspaceContext = createContext<WorkspaceContextValue>({
-  workspace: { id: "demo", name: "Demo workspace", mode: "demo", detail: "Verdi Steps × Maya Chen" },
+  workspace: { id: "workspace", name: "Workspace", mode: "loading", detail: "Loading workspace" },
   account: null
 });
 
@@ -39,7 +38,7 @@ export function WorkspaceProvider({
   return (
     <WorkspaceContext.Provider
       value={{
-        workspace: workspace ?? { id: "demo", name: "Demo workspace", mode: "demo", detail: "Verdi Steps × Maya Chen" },
+        workspace: workspace ?? { id: "workspace", name: "Workspace", mode: "loading", detail: "Loading workspace" },
         account: account ?? null
       }}
     >

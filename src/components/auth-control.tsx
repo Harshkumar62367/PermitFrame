@@ -20,7 +20,7 @@ export function AuthControl({ compact = false }: { compact?: boolean }) {
   }, [authenticated, pathname, router, status]);
 
   if (!ready) {
-    return <span className="font-mono text-[10px] text-white/35">Loading identity…</span>;
+    return <span className="font-mono text-[10px] text-muted-foreground dark:text-white/35">Loading identity…</span>;
   }
 
   if (!authenticated) {
@@ -34,9 +34,9 @@ export function AuthControl({ compact = false }: { compact?: boolean }) {
   const identity = user?.email?.address ?? user?.google?.name ?? user?.wallet?.address?.slice(0, 10) ?? "Signed in";
   return (
     <div className="flex items-center gap-2">
-      {!compact && <span className="max-w-28 truncate font-mono text-[10px] text-white/55" title={identity}>{identity}</span>}
-      {user?.wallet && <Wallet className="h-3.5 w-3.5 text-emerald-400" aria-label="Wallet linked" />}
-      <Button onClick={() => void signOut()} disabled={status === "loading"} variant="ghost" size="icon" className="h-8 w-8 rounded-full text-white/55 hover:bg-white/10 hover:text-white" aria-label="Sign out">
+      {!compact && <span className="max-w-28 truncate font-mono text-[10px] text-muted-foreground dark:text-white/55" title={identity}>{identity}</span>}
+      {user?.wallet && <Wallet className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" aria-label="Wallet linked" />}
+      <Button onClick={() => void signOut()} disabled={status === "loading"} variant="ghost" size="icon" className="h-8 w-8 rounded-full text-muted-foreground hover:bg-accent hover:text-foreground dark:text-white/55 dark:hover:bg-white/10 dark:hover:text-white" aria-label="Sign out">
         <LogOut className="h-3.5 w-3.5" />
       </Button>
     </div>

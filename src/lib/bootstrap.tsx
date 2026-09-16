@@ -9,7 +9,7 @@ export interface BootstrapCampaign {
   status: string;
   platform: string;
   country: string;
-  demoNote?: string;
+  contextNote?: string;
   updatedAt: string;
 }
 
@@ -43,7 +43,7 @@ const BootstrapContext = createContext<BootstrapState>({
 let inflight: Promise<BootstrapSnapshot> | null = null;
 function fetchSnapshot(signal: AbortSignal): Promise<BootstrapSnapshot> {
   if (!inflight) {
-    inflight = apiGet<BootstrapSnapshot>("/api/bootstrap", signal).finally(() => {
+    inflight = apiGet<BootstrapSnapshot>("/api/bootstrap", signal, 10000).finally(() => {
       inflight = null;
     });
   }

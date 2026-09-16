@@ -1,12 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { ensureSeed } from "@/server/seed";
 import { loadDb } from "@/server/store";
 import { registerSourceMedia } from "@/server/platform";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  await ensureSeed();
   return NextResponse.json({ media: (await loadDb()).sourceMedia });
 }
 

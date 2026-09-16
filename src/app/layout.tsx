@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Inter, IBM_Plex_Mono } from "next/font/google";
 import { ThemeProvider } from "@/components/theme-provider";
 import { PermitFramePrivyProvider } from "@/components/privy-provider";
+import { QueryProvider } from "@/components/query-provider";
 import "./globals.css";
 
 const inter = Inter({
@@ -27,9 +28,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className={`${inter.variable} ${plexMono.variable}`} suppressHydrationWarning>
       <body className="min-h-screen bg-background font-sans text-foreground antialiased">
-        <PermitFramePrivyProvider>
-          <ThemeProvider>{children}</ThemeProvider>
-        </PermitFramePrivyProvider>
+        <QueryProvider>
+          <PermitFramePrivyProvider>
+            <ThemeProvider>{children}</ThemeProvider>
+          </PermitFramePrivyProvider>
+        </QueryProvider>
       </body>
     </html>
   );

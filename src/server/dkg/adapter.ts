@@ -7,6 +7,8 @@ export interface KaRecord {
   /** DKG V10 Shared Working Memory evidence. This is not an on-chain UAL. */
   evidenceUri?: string;
   merkleRoot?: string;
+  /** Base Sepolia transaction that finalized a Verifiable Memory publish. */
+  txHash?: string;
   explorerUrl: string;
   name: string;
   content: Record<string, unknown>;
@@ -32,6 +34,8 @@ export interface DkgAdapter {
   readonly mode: DkgMode;
   health(): Promise<DkgHealth>;
   publish(ka: KaEnvelope, visibility: Visibility): Promise<KaRecord>;
+  /** Publish a minimized, already-shared KA to on-chain Verifiable Memory. */
+  publishVerifiable(ka: KaEnvelope, visibility: Visibility): Promise<KaRecord>;
   get(ual: string): Promise<KaRecord | null>;
   sparql(query: string): Promise<Array<Record<string, unknown>>>;
   findApplicablePassports(filter: {

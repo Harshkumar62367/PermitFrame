@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { FadeIn } from "@/components/motion-primitives";
 import { apiGet, apiPost } from "@/lib/api";
+import { useInvalidateWorkspaceSnapshot } from "@/lib/use-workspace-snapshot";
 import { CAPABILITY_PRICE_MAP, type Campaign } from "@/server/types";
 import { cn } from "@/lib/utils";
 
@@ -39,6 +40,7 @@ export function CampaignExtras({ campaign }: { campaign: Campaign }) {
   const [copyFailed, setCopyFailed] = useState(false);
   const [variants, setVariants] = useState<{ id: string; title: string }[] | null>(null);
   const [variantMsg, setVariantMsg] = useState<string | null>(null);
+  const invalidateSnapshot = useInvalidateWorkspaceSnapshot();
 
   const loadTimeline = useCallback(() => {
     apiGet<{ timeline: TimelineEntry[] }>(`/api/campaigns/${campaign.id}/timeline`)
@@ -66,6 +68,7 @@ export function CampaignExtras({ campaign }: { campaign: Campaign }) {
     try {
       const j = await apiPost<{ captions: Caption[] }>(`/api/campaigns/${campaign.id}/captions`);
       setCaptions(j.captions);
+      invalidateSnapshot();
     } catch (e) {
       setCaptionMsg(e instanceof Error ? e.message : "Caption generation failed.");
     } finally {
@@ -109,6 +112,7 @@ export function CampaignExtras({ campaign }: { campaign: Campaign }) {
     try {
       await apiPost(`/api/campaigns/${campaign.id}/comments`, { author: "manager", text: comment });
       setComment("");
+      invalidateSnapshot();
       loadTimeline();
     } catch (e) {
       // Draft is preserved for retry.
@@ -126,6 +130,7 @@ export function CampaignExtras({ campaign }: { campaign: Campaign }) {
     try {
       const j = await apiPost<{ campaigns: { id: string; title: string }[] }>(`/api/campaigns/${campaign.id}/variants`, { platforms });
       setVariants(j.campaigns);
+      if (j.campaigns.length > 0) invalidateSnapshot();
       setVariantMsg(
         j.campaigns.length > 0
           ? `${j.campaigns.length} variant(s) created — each independently preflighted.`

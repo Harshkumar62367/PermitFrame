@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { ensureSeed } from "@/server/seed";
 import { loadCampaign } from "@/server/campaigns";
 import { preflight } from "@/server/policy/engine";
 import type { Campaign } from "@/server/types";
@@ -13,7 +12,6 @@ export const dynamic = "force-dynamic";
  * campaign and its real preflight decision stay untouched.
  */
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  await ensureSeed();
   const { id } = await params;
   const original = await loadCampaign(id);
   if (!original) return NextResponse.json({ error: "Campaign not found" }, { status: 404 });

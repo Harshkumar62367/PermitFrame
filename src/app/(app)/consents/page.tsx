@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useId, useState } from "react";
+import { useId, useState } from "react";
 import { AlertTriangle, ArrowRight, CalendarClock, ShieldOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,10 +11,12 @@ import { ConfirmDialog } from "@/components/confirm-dialog";
 import { PageHeader } from "@/components/ui/page-header";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { CopyableIdentifier } from "@/components/ui/identifier";
+import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
 import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
-import { useBootstrap } from "@/lib/bootstrap";
-import { apiGet, apiPost } from "@/lib/api";
+import { apiPost } from "@/lib/api";
+import { useInvalidateDkgGraph } from "@/lib/use-dkg-graph";
+import { useInvalidateWorkspaceSnapshot, useWorkspaceSnapshot } from "@/lib/use-workspace-snapshot";
 import { cn } from "@/lib/utils";
 
 interface Invite {
@@ -41,58 +43,27 @@ interface Warning {
 }
 
 export default function ConsentsPage() {
-  const boot = useBootstrap();
   const uid = useId();
-  const creators = boot.status === "ready" ? boot.snapshot.creators : [];
-  const [invites, setInvites] = useState<Invite[] | null>(null);
-  const [passports, setPassports] = useState<Passport[] | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [warnings, setWarnings] = useState<Warning[]>([]);
+  // Invitations, passport summaries, and expiry warnings all read from the
+  // shared ["workspace-snapshot"] cache — no separate /api/consents or
+  // /api/expiry reads on mount. Cached rows render instantly and stay visible
+  // during background refetches; an inline skeleton shows only when no cached
+  // snapshot exists at all.
+  const snapshot = useWorkspaceSnapshot();
+  const invites: Invite[] | null = snapshot.data?.consentInvites ?? null;
+  const passports: Passport[] | null = snapshot.data?.passports.map((p) => ({ ...p, ual: p.ual ?? undefined })) ?? null;
+  const warnings: Warning[] = snapshot.data?.warnings ?? [];
+  const loadError = !snapshot.data && snapshot.isError
+    ? (snapshot.error instanceof Error ? snapshot.error.message : "Consents failed to load.")
+    : null;
   const [renewFor, setRenewFor] = useState<string | null>(null);
   const [renewDate, setRenewDate] = useState("");
   const [renewError, setRenewError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [revokeTarget, setRevokeTarget] = useState<Passport | null>(null);
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
-
-  function requestConsents(signal?: AbortSignal) {
-    return Promise.all([
-      apiGet<{ invites: Invite[]; passports: Passport[] }>("/api/consents", signal),
-      apiGet<{ warnings: Warning[] }>("/api/expiry", signal).catch(() => ({ warnings: [] as Warning[] }))
-    ]);
-  }
-
-  useEffect(() => {
-    const controller = new AbortController();
-    requestConsents(controller.signal).then(
-      ([consents, expiry]) => {
-        setInvites(consents.invites);
-        setPassports(consents.passports);
-        setWarnings(expiry.warnings ?? []);
-        setLoadError(null);
-      },
-      (e: unknown) => {
-        if (e instanceof DOMException && e.name === "AbortError") return;
-        setLoadError(e instanceof Error ? e.message : "Consents failed to load.");
-      }
-    );
-    return () => controller.abort();
-  }, []);
-
-  async function reloadConsents(signal?: AbortSignal) {
-    try {
-      const [consents, expiry] = await requestConsents(signal);
-      if (signal?.aborted) return;
-      setInvites(consents.invites);
-      setPassports(consents.passports);
-      setWarnings(expiry.warnings ?? []);
-      setLoadError(null);
-    } catch (e) {
-      if (e instanceof DOMException && e.name === "AbortError") return;
-      if (signal?.aborted) return;
-      setLoadError(e instanceof Error ? e.message : "Consents failed to load.");
-    }
-  }
+  const invalidateSnapshot = useInvalidateWorkspaceSnapshot();
+  const invalidateDkgGraph = useInvalidateDkgGraph();
 
   async function confirmRevoke() {
     if (!revokeTarget || busyId) return;
@@ -112,7 +83,10 @@ export default function ConsentsPage() {
           : `Passport ${id} was already revoked — nothing changed.`
       });
       setRevokeTarget(null);
-      await reloadConsents();
+      // Revocation publishes an Amendment Knowledge Asset: refresh the shared
+      // snapshot (awaited) and mark the cached graph stale.
+      await invalidateSnapshot();
+      invalidateDkgGraph();
     } catch (e) {
       setNotice({ ok: false, text: e instanceof Error ? e.message : "Revocation failed." });
       setRevokeTarget(null);
@@ -139,7 +113,9 @@ export default function ConsentsPage() {
       setNotice({ ok: true, text: `Passport ${id} renewed until ${renewDate} — status is active again.` });
       setRenewFor(null);
       setRenewDate("");
-      await reloadConsents();
+      // Renewal republishes the passport Knowledge Asset: same treatment.
+      await invalidateSnapshot();
+      invalidateDkgGraph();
     } catch (e) {
       setRenewError(e instanceof Error ? e.message : "Renewal failed. The date you picked is preserved.");
     } finally {
@@ -176,7 +152,13 @@ export default function ConsentsPage() {
           </p>
         </FadeIn>
       )}
-      {loadError && <ErrorState message={loadError} onRetry={() => reloadConsents()} />}
+      {loadError && <ErrorState message={loadError} onRetry={() => { void snapshot.refetch(); }} />}
+      {invites !== null && passports !== null && invites.length === 0 && passports.length === 0 && !loadError && (
+        <EmptyState
+          title="No creator consents yet"
+          body="Permission passports and consent links will appear here once creators attest through a consent link."
+        />
+      )}
 
       {/* Expiry warnings */}
       {warnings.length > 0 && (
@@ -216,15 +198,12 @@ export default function ConsentsPage() {
         </p>
         {!passports && !loadError && <LoadingSkeleton rows={2} />}
         <Stagger className="space-y-3">
-          {(passports ?? []).map((p) => {
-            const creator = creators.find((c) => c.id === p.creatorId);
-            return (
+          {(passports ?? []).map((p) => (
               <StaggerItem key={p.id}>
                 <div className="flex min-w-0 flex-wrap items-center justify-between gap-4 rounded-2xl border border-border bg-card p-5">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2.5">
-                      <p className="text-[14.5px] font-semibold">{creator?.name ?? p.creatorName}</p>
-                      <span className="font-mono text-[11px] text-muted-foreground">{creator?.handle}</span>
+                      <p className="text-[14.5px] font-semibold">{p.creatorName}</p>
                       <StatusBadge status={p.status} />
                     </div>
                     <p className="mt-1.5 flex flex-wrap items-center gap-1.5 font-mono text-[10.5px] uppercase tracking-[0.1em] text-muted-foreground">
@@ -289,8 +268,7 @@ export default function ConsentsPage() {
                   </div>
                 )}
               </StaggerItem>
-            );
-          })}
+          ))}
         </Stagger>
       </section>
 
@@ -298,15 +276,12 @@ export default function ConsentsPage() {
       <section>
         <h2 className="mb-3 text-[15px] font-semibold tracking-tight">Consent links</h2>
         <Stagger className="space-y-3">
-          {(invites ?? []).map((invite) => {
-            const creator = creators.find((c) => c.id === invite.creatorId);
-            return (
+          {(invites ?? []).map((invite) => (
               <StaggerItem key={invite.token}>
                 <div className="flex min-w-0 flex-wrap items-center justify-between gap-4 rounded-2xl border border-border bg-card p-5">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2.5">
-                      <p className="text-[14.5px] font-semibold">{creator?.name ?? invite.creatorId}</p>
-                      <span className="font-mono text-[11px] text-muted-foreground">{creator?.handle}</span>
+                      <p className="text-[14.5px] font-semibold">{invite.creatorId}</p>
                       <StatusBadge status={invite.status === "completed" ? "attested" : "pending"} />
                     </div>
                     <p className="mt-1.5 break-all font-mono text-[10.5px] uppercase tracking-[0.1em] text-muted-foreground" title={`/consent/${invite.token}`}>/consent/{invite.token}</p>
@@ -318,8 +293,7 @@ export default function ConsentsPage() {
                   </Button>
                 </div>
               </StaggerItem>
-            );
-          })}
+          ))}
         </Stagger>
       </section>
       <ConfirmDialog

@@ -42,6 +42,12 @@ export class FileDkgAdapter implements DkgAdapter {
     };
   }
 
+  async publishVerifiable(ka: KaEnvelope, visibility: Visibility): Promise<KaRecord> {
+    // Local mode has no blockchain. Keep the same evidence shape but never claim
+    // that its did:dkg:local locator is a public, on-chain record.
+    return this.publish(ka, visibility);
+  }
+
   async get(ual: string): Promise<KaRecord | null> {
     const name = ual.replace("did:dkg:local/", "");
     const file = path.join(DKG_DIR, `${name.replace(/[^a-z0-9-_.]/gi, "-")}.json`);

@@ -178,7 +178,7 @@ export interface Campaign {
   shareToken?: string;
   createdAt: string;
   updatedAt: string;
-  demoNote?: string; // narrative for the seeded demo campaigns
+  contextNote?: string;
 }
 
 export interface ConsentDraft {

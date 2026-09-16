@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
-import { Check, Copy } from "lucide-react";
+import { useId, useState } from "react";
+import { Check, Copy, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { PageHeader } from "@/components/ui/page-header";
@@ -11,25 +11,8 @@ import { ErrorState } from "@/components/ui/error-state";
 import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { HealthDot } from "@/components/ui/integration-status";
-import { apiGet, apiPost } from "@/lib/api";
-
-interface DkgHealth {
-  mode: string;
-  healthy: boolean;
-  endpoint?: string;
-  blockchain?: string;
-  detail: string;
-}
-
-interface DkgAsset {
-  ual: string;
-  evidenceUri?: string;
-  explorerUrl: string;
-  name: string;
-  content: Record<string, unknown>;
-  publishedAt: string;
-  mode: string;
-}
+import { apiPost } from "@/lib/api";
+import { useDkgGraph, type DkgAsset, type DkgHealth } from "@/lib/use-dkg-graph";
 
 const EXAMPLE_QUERY = `PREFIX pf: <https://permitframe.app/ns#>
 SELECT ?passport ?status ?validUntil WHERE { ?passport a pf:PermitFramePermissionPassport ; pf:status ?status ; pf:validUntil ?validUntil . }`;
@@ -56,44 +39,20 @@ type QueryState =
 
 export default function GraphPage() {
   const uid = useId();
-  const [health, setHealth] = useState<DkgHealth | null>(null);
-  const [assets, setAssets] = useState<DkgAsset[]>([]);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  // Slow DKG reads live under the separate ["dkg-graph"] key — never in the
+  // workspace snapshot, never blocking app navigation. The last known health
+  // and asset list render immediately from cache and refresh in the
+  // background; the shell, explanation, and query editor below always render.
+  const graph = useDkgGraph();
+  const health: DkgHealth | null = graph.data?.health ?? null;
+  const assets: DkgAsset[] = graph.data?.assets ?? [];
+  const loadError = !graph.data && graph.isError
+    ? (graph.error instanceof Error ? graph.error.message : "Knowledge graph failed to load.")
+    : null;
 
   const [query, setQuery] = useState(EXAMPLE_QUERY);
   const [queryState, setQueryState] = useState<QueryState>({ status: "idle" });
   const [copied, setCopied] = useState(false);
-
-  function requestGraph(signal?: AbortSignal) {
-    return apiGet<{ health: DkgHealth; assets: DkgAsset[] }>("/api/dkg", signal);
-  }
-
-  useEffect(() => {
-    const controller = new AbortController();
-    requestGraph(controller.signal).then(
-      (data) => {
-        setHealth(data.health);
-        setAssets(data.assets ?? []);
-        setLoadError(null);
-      },
-      (e: unknown) => {
-        if (e instanceof DOMException && e.name === "AbortError") return;
-        setLoadError(e instanceof Error ? e.message : "Knowledge graph failed to load.");
-      }
-    );
-    return () => controller.abort();
-  }, []);
-
-  async function reloadGraph() {
-    try {
-      const data = await requestGraph();
-      setHealth(data.health);
-      setAssets(data.assets ?? []);
-      setLoadError(null);
-    } catch (e) {
-      setLoadError(e instanceof Error ? e.message : "Knowledge graph failed to load.");
-    }
-  }
 
   async function runQuery() {
     if (!query.trim() || queryState.status === "running") return;
@@ -136,7 +95,7 @@ export default function GraphPage() {
         description="Permission passports, verified product facts and derivative receipts are published to the OriginTrail DKG as Knowledge Assets. Every preflight decision and every generated frame traces back to these records."
       />
 
-      {loadError && <ErrorState message={loadError} onRetry={reloadGraph} />}
+      {loadError && <ErrorState message={loadError} onRetry={() => { void graph.refetch(); }} />}
 
       {!health && !loadError && <LoadingSkeleton rows={1} />}
 
@@ -170,15 +129,39 @@ export default function GraphPage() {
       )}
 
       <section aria-label="Knowledge Assets">
-        <div className="mb-4 flex items-baseline justify-between gap-2">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-lg font-semibold tracking-tight">Knowledge Assets</h2>
-          <span className="shrink-0 text-xs text-muted-foreground">{assets.length} published</span>
+          <div className="flex shrink-0 items-center gap-2">
+            <span className="text-xs text-muted-foreground">{assets.length} published</span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => { void graph.refetch(); }}
+              disabled={graph.isFetching}
+              aria-busy={graph.isFetching}
+              title="Force a live DKG read, ignoring the cache"
+              className="h-7 rounded-full px-2.5 text-[11.5px]"
+            >
+              <RefreshCw className={graph.isFetching ? "h-3 w-3 animate-spin" : "h-3 w-3"} aria-hidden />
+              {graph.isFetching ? "Refreshing…" : "Refresh graph"}
+            </Button>
+          </div>
         </div>
+        {graph.data && (
+          <p className="mb-3 text-[11.5px] text-muted-foreground">
+            Cached view · last synced {new Date(graph.dataUpdatedAt).toLocaleTimeString()} · Refresh graph for a live read.
+            Cached assets are never policy truth — preflight, publishing, renewal, revocation, and approval always query live.
+          </p>
+        )}
         <div className="grid gap-4 md:grid-cols-2">
-          {assets.map((a) => {
+          {assets.map((a, index) => {
             const type = typeof a.content["@type"] === "string" ? (a.content["@type"] as string) : "";
+            // SWM assets intentionally have no on-chain UAL. Their assertion URI
+            // is unique evidence; fall back to the render position only for an
+            // incomplete local record so React never receives duplicate empty keys.
+            const assetKey = a.ual || a.evidenceUri || `${a.name}-${index}`;
             return (
-              <article key={a.ual} className="min-w-0 rounded-xl border border-border bg-card p-5">
+              <article key={assetKey} className="min-w-0 rounded-xl border border-border bg-card p-5">
                 <div className="flex items-center justify-between gap-3">
                   {type ? (
                     <span className="truncate rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-emerald-700 ring-1 ring-emerald-600/20 dark:bg-emerald-950/40 dark:text-emerald-300 dark:ring-emerald-700/40">

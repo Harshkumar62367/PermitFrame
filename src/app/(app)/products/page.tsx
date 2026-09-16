@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { useId, useState } from "react";
 import { Plus, ShieldCheck, Wand2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,7 +13,9 @@ import { CopyableIdentifier } from "@/components/ui/identifier";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
 import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
-import { apiGet, apiPost, describeRecord } from "@/lib/api";
+import { apiPost, describeRecord } from "@/lib/api";
+import { useInvalidateDkgGraph } from "@/lib/use-dkg-graph";
+import { useInvalidateWorkspaceSnapshot, useWorkspaceSnapshot } from "@/lib/use-workspace-snapshot";
 import { cn } from "@/lib/utils";
 import type { ProductFacts } from "@/server/types";
 
@@ -30,45 +32,21 @@ const EXAMPLE_FORM = {
 
 export default function ProductsPage() {
   const uid = useId();
-  const [factsList, setFactsList] = useState<ProductFacts[] | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  // Product facts read from the shared ["workspace-snapshot"] cache: cached
+  // rows render instantly and stay visible during background refetches. An
+  // inline skeleton shows only when no cached snapshot exists at all.
+  const snapshot = useWorkspaceSnapshot();
+  const factsList = snapshot.data?.productFacts ?? null;
+  const loadError = !snapshot.data && snapshot.isError
+    ? (snapshot.error instanceof Error ? snapshot.error.message : "Product facts failed to load.")
+    : null;
   const [editing, setEditing] = useState<ProductFacts | null>(null);
   const [form, setForm] = useState(EMPTY_FORM);
   const [fieldErrors, setFieldErrors] = useState<{ brand?: string; productName?: string; overlap?: string }>({});
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; text: string; ual?: string } | null>(null);
-
-  function requestFacts(signal?: AbortSignal) {
-    return apiGet<{ facts: ProductFacts[] }>("/api/facts", signal);
-  }
-
-  useEffect(() => {
-    const controller = new AbortController();
-    requestFacts(controller.signal).then(
-      (d) => {
-        setFactsList(d.facts);
-        setLoadError(null);
-      },
-      (e: unknown) => {
-        if (e instanceof DOMException && e.name === "AbortError") return;
-        setLoadError(e instanceof Error ? e.message : "Product facts failed to load.");
-      }
-    );
-    return () => controller.abort();
-  }, []);
-
-  async function reloadFacts(signal?: AbortSignal) {
-    try {
-      const d = await requestFacts(signal);
-      if (signal?.aborted) return;
-      setFactsList(d.facts);
-      setLoadError(null);
-    } catch (e) {
-      if (e instanceof DOMException && e.name === "AbortError") return;
-      if (signal?.aborted) return;
-      setLoadError(e instanceof Error ? e.message : "Product facts failed to load.");
-    }
-  }
+  const invalidateSnapshot = useInvalidateWorkspaceSnapshot();
+  const invalidateDkgGraph = useInvalidateDkgGraph();
 
   function startEdit(f: ProductFacts) {
     setEditing(f);
@@ -129,7 +107,10 @@ export default function ProductsPage() {
         ual: j.facts.ual
       });
       cancelEdit();
-      await reloadFacts();
+      // Publishing facts writes a Knowledge Asset: refresh the shared
+      // snapshot (awaited, so the new row appears) and mark cached graph stale.
+      await invalidateSnapshot();
+      invalidateDkgGraph();
     } catch (e) {
       // Form input is preserved for retry.
       setResult({ ok: false, text: e instanceof Error ? e.message : "Save failed. Your input is preserved." });
@@ -154,7 +135,7 @@ export default function ProductsPage() {
       <FadeIn delay={0.05}>
         <SectionCard
           title={editing ? `Editing ${editing.brand} ${editing.productName}` : "Publish new product facts"}
-          description="Every field starts empty — grey placeholder text is only an example, never a value. Use “Fill example values” for a one-click demo."
+          description="Every field starts empty — grey placeholder text is only an example, never a value. Use suggested values to accelerate data entry."
           actions={
             !editing && (
               <Button variant="outline" size="sm" onClick={fillExample} className="h-7 rounded-full px-2.5 text-[11.5px]">
@@ -282,7 +263,7 @@ export default function ProductsPage() {
         </SectionCard>
       </FadeIn>
 
-      {loadError && <ErrorState message={loadError} onRetry={() => reloadFacts()} />}
+      {loadError && <ErrorState message={loadError} onRetry={() => { void snapshot.refetch(); }} />}
       {!factsList && !loadError && <LoadingSkeleton rows={2} />}
       <Stagger className="grid gap-4 md:grid-cols-2">
         {(factsList ?? []).map((f) => (

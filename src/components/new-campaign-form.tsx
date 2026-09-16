@@ -14,6 +14,7 @@ import {
   SelectValue
 } from "@/components/ui/select";
 import { apiPost } from "@/lib/api";
+import { useInvalidateWorkspaceSnapshot } from "@/lib/use-workspace-snapshot";
 import { cn } from "@/lib/utils";
 
 const PLATFORMS = ["instagram", "tiktok", "youtube", "linkedin"];
@@ -39,6 +40,7 @@ export function NewCampaignForm({ onCreated }: { onCreated?: (id: string) => voi
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const invalidateSnapshot = useInvalidateWorkspaceSnapshot();
 
   function validate(): FieldErrors {
     const errors: FieldErrors = {};
@@ -71,6 +73,9 @@ export function NewCampaignForm({ onCreated }: { onCreated?: (id: string) => voi
         transformation: form.transformation,
         creativeBrief: form.creativeBrief.trim()
       });
+      // The new campaign changes visible workspace data — refresh the
+      // shared snapshot in the background before navigating.
+      invalidateSnapshot();
       if (onCreated) onCreated(json.campaign.id);
       else router.push(`/campaigns/${json.campaign.id}`);
     } catch (e) {

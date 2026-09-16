@@ -1,6 +1,7 @@
 import type {
   Campaign,
   CampaignCaption,
+  Database,
   PermissionPassport,
   Platform,
   PreflightDecision,
@@ -9,12 +10,13 @@ import type {
 } from "./types";
 import { CAPABILITY_PRICE_MAP } from "./types";
 import { loadDb, newId, nowIso, sha256, updateDb } from "./store";
+import { preflightEvent } from "./campaign-status";
 import { getDkg } from "./dkg";
 import { amendmentKa, passportKa, productFactsKa, sourceMediaKa } from "./dkg/schemas";
 import { preflight } from "./policy/engine";
 
 /**
- * Platform services: the product surfaces around the core demo loop —
+ * Platform services around the core production workflow —
  * facts management, media registry, passport lifecycle (revoke/amend),
  * claims-safe captions, cost estimation, client share links, comments.
  */
@@ -150,9 +152,14 @@ export async function revokePassport(passportId: string, note: string): Promise<
     await updateDb((d) => {
       const t = d.campaigns.find((x) => x.id === c.id);
       if (t) {
+        // Keep stored status in sync with the fresh verdict in both
+        // directions: a stale "blocked" must clear when rights allow again.
         t.preflight = decision;
-        t.status = decision.decision === "block" ? "blocked" : t.status;
+        t.status = decision.decision === "block" ? "blocked" : t.status === "blocked" ? "draft" : t.status;
         t.updatedAt = nowIso();
+      }
+      if (decision.decision === "block") {
+        d.events.push(preflightEvent(c, decision));
       }
     });
     if (decision.decision === "block") blocked.push(c.id);
@@ -207,10 +214,10 @@ export interface ExpiryWarning {
   affectedCampaigns: string[];
 }
 
-export async function expiryWarnings(withinDays = 30): Promise<ExpiryWarning[]> {
-  const db = await loadDb();
+export async function expiryWarnings(withinDays = 30, db?: Database): Promise<ExpiryWarning[]> {
+  const data = db ?? (await loadDb());
   const today = new Date();
-  return db.passports
+  return data.passports
     .filter((p) => p.status === "active")
     .map((p) => {
       const daysLeft = Math.ceil((new Date(p.validUntil + "T23:59:59Z").getTime() - today.getTime()) / 86_400_000);
@@ -221,7 +228,7 @@ export async function expiryWarnings(withinDays = 30): Promise<ExpiryWarning[]> 
         validUntil: p.validUntil,
         daysLeft,
         level,
-        affectedCampaigns: db.campaigns.filter((c) => c.passportId === p.id).map((c) => c.id)
+        affectedCampaigns: data.campaigns.filter((c) => c.passportId === p.id).map((c) => c.id)
       };
     })
     .filter((w) => w.level !== "ok");
@@ -382,7 +389,7 @@ export async function cloneForPlatforms(campaignId: string, platforms: Platform[
       passportId: base.passportId,
       productFactsId: base.productFactsId,
       request: { ...base.request, platform },
-      demoNote: `Platform variant of ${base.id} - preflighted independently for ${platform}.`
+      contextNote: `Platform variant of ${base.id}, preflighted independently for ${platform}.`
     });
     created.push(variant);
   }

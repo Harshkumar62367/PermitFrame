@@ -60,6 +60,17 @@ export async function establishSession(input: { accessToken: string; email?: unk
     await db.insert(workspaceState).values({ workspaceId, data: emptyDatabase(), updatedAt: new Date() });
   }
 
+  // Idempotent renewal: a valid cookie session for the same user is reused
+  // (expiry extended) instead of inserting a new session row on every reload.
+  // A fresh token is minted only for genuine first logins and re-logins.
+  const currentToken = (await cookies()).get(SESSION_COOKIE)?.value;
+  const existing = await getCurrentSession();
+  if (existing && existing.userId === userId && currentToken) {
+    const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
+    await db.update(sessions).set({ expiresAt }).where(eq(sessions.tokenHash, tokenHash(currentToken)));
+    return { token: null, expiresAt, session: existing };
+  }
+
   const token = crypto.randomBytes(32).toString("base64url");
   const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
   await db.insert(sessions).values({ tokenHash: tokenHash(token), userId, workspaceId: workspace.id, expiresAt });

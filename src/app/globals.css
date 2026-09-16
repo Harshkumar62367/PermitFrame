@@ -110,12 +110,11 @@
 }
 
 /**
- * Explicitly scoped dark promotional surface.
- * Use on hardcoded dark sections (landing hero/header/CTA, verify
- * certificate, desktop sidebar) so nested semantic tokens still resolve
- * to dark-readable values when the root theme is light.
+ * Explicitly scoped dark surface for intentional dark cards (e.g. the verify
+ * certificate, the consent attestation card) so nested semantic tokens still
+ * resolve to dark-readable values when the root theme is light.
  * Foreground, muted, border, button and hover colors inside must stay
- * explicit (white/emerald on #0b0f0e) — never bare light-theme tokens.
+ * explicit (white/emerald on near-black) — never bare light-theme tokens.
  */
 .pf-dark-scope {
   color-scheme: dark;
@@ -162,6 +161,57 @@
 .pf-page {
   min-width: 0;
   overflow-x: clip;
+}
+
+/* App shell offset for the floating desktop sidebar. Plain CSS under the
+   same 1024px breakpoint as the sidebar's `lg:` visibility, so the content
+   offset can never desync from generated utilities or a stale chunk.
+   Expanded sidebar: 12px gap + 248px panel + 12px gutter = 272px.
+   Collapsed rail: 12px gap + 68px rail + 12px gutter = 92px. */
+@media (min-width: 1024px) {
+  .pf-main {
+    padding-left: 272px;
+  }
+  .pf-main-collapsed {
+    padding-left: 92px;
+  }
+}
+
+/* Sidebar sizing contract: 40px HackerEarth-style rows / 38px strip by
+   default, tightening under short viewports. Decorative subtitles hide —
+   never nav items. */
+.pf-side-row {
+  min-height: 40px;
+}
+.pf-side-groups {
+  gap: 16px;
+}
+.pf-side-strip {
+  min-height: 38px;
+}
+@media (max-height: 700px) {
+  .pf-side-row {
+    min-height: 34px;
+  }
+  .pf-side-groups {
+    gap: 10px;
+  }
+  .pf-side-strip {
+    min-height: 34px;
+  }
+  .pf-side-micro {
+    display: none;
+  }
+}
+
+/* Scrollable nav without a visible scrollbar bar. Keyboard, wheel and touch
+   scrolling keep working — only the visual track/thumb is hidden. */
+.pf-no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.pf-no-scrollbar::-webkit-scrollbar {
+  display: none;
 }
 
 @media (prefers-reduced-motion: reduce) {

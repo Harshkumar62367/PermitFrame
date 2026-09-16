@@ -33,17 +33,34 @@ function serverError(payload: unknown): string | null {
 }
 
 /** GET/POST JSON with centralized error parsing. Aborts propagate as AbortError. */
-export async function api<T>(endpoint: string, options?: { method?: string; body?: unknown; signal?: AbortSignal }): Promise<T> {
+export async function api<T>(
+  endpoint: string,
+  options?: { method?: string; body?: unknown; signal?: AbortSignal; timeoutMs?: number }
+): Promise<T> {
+  // Default 30s guard: a hung server (e.g. DKG CLI timeouts) must surface as
+  // an honest, retryable error — never an infinite spinner.
+  const budgetMs = options?.timeoutMs ?? 30000;
+  const timeout = AbortSignal.timeout(budgetMs);
+  const signal = options?.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
   let response: Response;
   try {
     response = await fetch(endpoint, {
       method: options?.method ?? "GET",
       headers: options?.body !== undefined ? { "content-type": "application/json" } : undefined,
       body: options?.body !== undefined ? JSON.stringify(options.body) : undefined,
-      signal: options?.signal
+      signal
     });
   } catch (cause) {
-    if (cause instanceof DOMException && cause.name === "AbortError") throw cause;
+    if (cause instanceof DOMException && cause.name === "AbortError") {
+      if (timeout.aborted && !options?.signal?.aborted) {
+        throw new ApiError(
+          endpoint,
+          0,
+          `Request timed out after ${Math.round(budgetMs / 1000)}s — the server may still be working (first-time setup talks to the DKG). Your input is safe; retry in a moment.`
+        );
+      }
+      throw cause;
+    }
     throw new ApiError(endpoint, 0, "Network request failed — check your connection and retry.");
   }
   let payload: unknown = null;
@@ -58,9 +75,10 @@ export async function api<T>(endpoint: string, options?: { method?: string; body
   return payload as T;
 }
 
-export const apiGet = <T>(endpoint: string, signal?: AbortSignal): Promise<T> => api<T>(endpoint, { signal });
-export const apiPost = <T>(endpoint: string, body?: unknown, signal?: AbortSignal): Promise<T> =>
-  api<T>(endpoint, { method: "POST", body: body ?? {}, signal });
+export const apiGet = <T>(endpoint: string, signal?: AbortSignal, timeoutMs?: number): Promise<T> =>
+  api<T>(endpoint, { signal, timeoutMs });
+export const apiPost = <T>(endpoint: string, body?: unknown, signal?: AbortSignal, timeoutMs?: number): Promise<T> =>
+  api<T>(endpoint, { method: "POST", body: body ?? {}, signal, timeoutMs });
 
 /** Honest publication wording: never claim "published" for Working-Memory-only records. */
 export function describeRecord(ual: string | null | undefined): { recorded: boolean; headline: string; detail: string } {

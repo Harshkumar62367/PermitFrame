@@ -1,15 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
-import { ensureSeed } from "@/server/seed";
 import { loadDb } from "@/server/store";
+import { reconcileCampaignStatus } from "@/server/campaign-status";
 import { findCampaign } from "@/server/platform";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  await ensureSeed();
   const { id } = await params;
   const campaign = await findCampaign(id);
   if (!campaign) return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
+  // Self-healing read: a stored status that drifted from the live preflight
+  // verdict is corrected here, so badges can never contradict the verdict.
+  await reconcileCampaignStatus(campaign).catch(() => undefined);
   const db = await loadDb();
   return NextResponse.json({
     campaign,

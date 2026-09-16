@@ -1,11 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDkg } from "@/server/dkg";
-import { ensureSeed } from "@/server/seed";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  await ensureSeed();
   const dkg = getDkg();
   const health = await dkg.health();
   const assets = await dkg.listAssets().catch(() => []);

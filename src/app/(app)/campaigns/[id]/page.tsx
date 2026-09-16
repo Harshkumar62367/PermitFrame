@@ -27,6 +27,8 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { ErrorState } from "@/components/ui/error-state";
 import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
 import { apiGet, apiPost } from "@/lib/api";
+import { useInvalidateDkgGraph } from "@/lib/use-dkg-graph";
+import { useInvalidateWorkspaceSnapshot } from "@/lib/use-workspace-snapshot";
 import type { Campaign, PermissionPassport, ProductFacts, SourceMedia } from "@/server/types";
 import { cn } from "@/lib/utils";
 
@@ -60,6 +62,8 @@ export default function CampaignWorkspacePage() {
   const [simError, setSimError] = useState<string | null>(null);
 
   const [lastAction, setLastAction] = useState<{ label: string; path: string; body?: unknown } | null>(null);
+  const invalidateSnapshot = useInvalidateWorkspaceSnapshot();
+  const invalidateDkgGraph = useInvalidateDkgGraph();
 
   function requestCampaign(signal?: AbortSignal) {
     return apiGet<CampaignResponse>(`/api/campaigns/${id}`, signal);
@@ -109,6 +113,11 @@ export default function CampaignWorkspacePage() {
     setError(null);
     try {
       await apiPost(`/api/campaigns/${id}${path}`, body);
+      // Policy simulation is what-if only and never changes the campaign;
+      // every other action changes visible workspace data. Approval also
+      // publishes the campaign record to the DKG.
+      if (path !== "/simulate") invalidateSnapshot();
+      if (path === "/approve") invalidateDkgGraph();
       await reloadCampaign();
     } catch (e) {
       // Campaign state is untouched; the buttons below retry the same action.
@@ -207,12 +216,32 @@ export default function CampaignWorkspacePage() {
         </div>
       )}
 
+      {!decision && (
+        <FadeIn delay={0.05}>
+          <section className="rounded-2xl border border-amber-200 bg-amber-50/70 p-6 dark:border-amber-900 dark:bg-amber-950/30">
+            <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-amber-800 dark:text-amber-300">Policy check required</p>
+            <h2 className="mt-2 text-[16px] font-semibold">Run the DKG preflight before production</h2>
+            <p className="mt-2 max-w-2xl text-[13px] leading-relaxed text-muted-foreground">This workspace loaded from Neon. Running this check now queries creator permissions and verified product facts in the DKG, then stores the decision for this campaign.</p>
+            <Button
+              size="sm"
+              onClick={() => action("repreflight", "/repreflight")}
+              disabled={busy !== null}
+              aria-busy={busy === "repreflight"}
+              className="mt-4 rounded-full bg-emerald-700 font-medium text-emerald-50 hover:bg-emerald-600 dark:bg-emerald-500 dark:text-emerald-950 dark:hover:bg-emerald-400"
+            >
+              <RefreshCw className={cn("h-3.5 w-3.5", busy === "repreflight" && "animate-spin")} aria-hidden /> {busy === "repreflight" ? "Checking policy…" : "Run DKG preflight"}
+            </Button>
+          </section>
+        </FadeIn>
+      )}
+
       {/* Verdict */}
       {decision && (
         <FadeIn delay={0.05}>
           <div
+            id="evidence"
             className={cn(
-              "overflow-hidden rounded-2xl border",
+              "scroll-mt-24 overflow-hidden rounded-2xl border",
               allowed ? "border-emerald-200 bg-gradient-to-b from-emerald-50/80 to-card dark:border-emerald-900 dark:from-emerald-950/40" : "border-rose-200 bg-gradient-to-b from-rose-50/80 to-card dark:border-rose-900 dark:from-rose-950/40"
             )}
           >
@@ -313,7 +342,7 @@ export default function CampaignWorkspacePage() {
               )}
 
               {/* Simulator */}
-              <div className="mt-4 rounded-xl border border-dashed border-border p-4">
+              <div id="simulate" className="mt-4 scroll-mt-24 rounded-xl border border-dashed border-border p-4">
                 <p className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
                   <Gauge className="h-3.5 w-3.5" /> Policy simulator — what-if only, never changes this campaign
                 </p>

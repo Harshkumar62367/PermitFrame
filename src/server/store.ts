@@ -1,9 +1,10 @@
 import crypto from "node:crypto";
 import "server-only";
-import { eq } from "drizzle-orm";
+import { and, eq, gt } from "drizzle-orm";
+import { cookies } from "next/headers";
 import { getDb } from "./db/client";
-import { applicationState, workspaceState } from "./db/schema";
-import { requireCurrentSession } from "./auth";
+import { applicationState, sessions, workspaceState } from "./db/schema";
+import { AuthenticationRequiredError, requireCurrentSession, SESSION_COOKIE } from "./auth";
 import type { Database } from "./types";
 
 const PRIMARY_STATE_ID = "primary";
@@ -21,19 +22,18 @@ export function emptyDb(): Database {
 }
 
 export async function loadDb(): Promise<Database> {
-  const session = await requireCurrentSession();
+  const token = (await cookies()).get(SESSION_COOKIE)?.value;
+  if (!token) throw new AuthenticationRequiredError();
   const db = getDb();
   const [row] = await db
     .select({ data: workspaceState.data })
-    .from(workspaceState)
-    .where(eq(workspaceState.workspaceId, session.workspaceId))
+    .from(sessions)
+    .innerJoin(workspaceState, eq(workspaceState.workspaceId, sessions.workspaceId))
+    .where(and(eq(sessions.tokenHash, crypto.createHash("sha256").update(token).digest("hex")), gt(sessions.expiresAt, new Date())))
     .limit(1);
 
   if (row) return row.data;
-
-  const data = emptyDb();
-  await db.insert(workspaceState).values({ workspaceId: session.workspaceId, data }).onConflictDoNothing();
-  return data;
+  throw new AuthenticationRequiredError();
 }
 
 export async function updateDb(mutator: (db: Database) => void): Promise<Database> {
@@ -50,7 +50,7 @@ export async function updateDb(mutator: (db: Database) => void): Promise<Databas
   return db;
 }
 
-/** The original seeded state remains publicly readable for proof and demo links. */
+/** Public verification reads use the application-level state only when applicable. */
 export async function loadPublicDb(): Promise<Database> {
   const db = getDb();
   const [row] = await db

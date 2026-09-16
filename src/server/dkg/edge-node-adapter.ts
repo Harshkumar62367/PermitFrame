@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { PermissionPassport, ProductFacts, Visibility } from "../types";
-import { type DkgAdapter, type DkgHealth, type KaRecord } from "./adapter";
+import { explorerUrlFor, type DkgAdapter, type DkgHealth, type KaRecord } from "./adapter";
 import type { KaEnvelope } from "./schemas";
 
 const execFileAsync = promisify(execFile);
@@ -63,7 +63,9 @@ export class EdgeNodeAdapter implements DkgAdapter {
 
   async health(): Promise<DkgHealth> {
     try {
-      const status = await this.run(["status"], 20_000);
+      // Health is only a diagnostic. Bound it tightly so a stopped local
+      // daemon never ties up the app's low-priority health request.
+      const status = await this.run(["status"], 3_000);
       const peers = status.match(/Peers:\s+(\d+)/)?.[1] ?? "?";
       return {
         mode: this.mode,
@@ -116,6 +118,46 @@ export class EdgeNodeAdapter implements DkgAdapter {
       publishedAt: new Date().toISOString(),
       mode: this.mode
     };
+  }
+
+  /**
+   * Keep ordinary policy records in WM/SWM, but anchor an explicitly approved
+   * campaign record in Verifiable Memory. The DKG V10 publisher is async, so
+   * we enqueue a named finalized KA then wait for its canonical UAL and tx hash.
+   */
+  async publishVerifiable(ka: KaEnvelope, visibility: Visibility): Promise<KaRecord> {
+    const shared = await this.publish(ka, visibility);
+    const cg = await this.contextGraph();
+    const accepted = await this.run(["publisher", "publish-async", cg, shared.name], 30_000);
+    const jobId = accepted.match(/Job ID:\s*([^\s]+)/)?.[1];
+    if (!jobId) throw new Error(`DKG publisher did not return a job id: ${accepted.slice(0, 300)}`);
+
+    const finalized = await this.waitForVerifiablePublish(jobId);
+    return {
+      ...shared,
+      ual: finalized.ual,
+      txHash: finalized.txHash,
+      explorerUrl: explorerUrlFor(finalized.ual)
+    };
+  }
+
+  private async waitForVerifiablePublish(jobId: string): Promise<{ ual: string; txHash?: string }> {
+    const deadline = Date.now() + 150_000;
+    let lastStatus = "accepted";
+    while (Date.now() < deadline) {
+      const out = await this.run(["publisher", "job", jobId], 30_000);
+      const job = parsePublisherJob(out);
+      lastStatus = String(job.status ?? lastStatus);
+      if (lastStatus === "failed") {
+        throw new Error(`DKG Verifiable Memory publish failed: ${String(job.error ?? job.failureReason ?? "unknown publisher error")}`);
+      }
+      const ual = findNestedString(job, "ual");
+      if (lastStatus === "finalized" && ual) {
+        return { ual, txHash: findNestedString(job, "txHash") };
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5_000));
+    }
+    throw new Error(`DKG Verifiable Memory publish is still ${lastStatus}. Check job ${jobId} with \"dkg publisher job ${jobId}\".`);
   }
 
   async get(ual: string): Promise<KaRecord | null> {
@@ -285,6 +327,34 @@ export function parseCliTable(out: string): Array<Record<string, string>> {
     // keep what parsed; count mismatch indicates wrapped cells — surfaced to caller as partial
   }
   return rows;
+}
+
+function parsePublisherJob(out: string): Record<string, unknown> {
+  const start = out.indexOf("{");
+  if (start < 0) throw new Error(`Could not parse DKG publisher job: ${out.slice(0, 300)}`);
+  try {
+    return JSON.parse(out.slice(start)) as Record<string, unknown>;
+  } catch {
+    throw new Error(`Could not parse DKG publisher job JSON: ${out.slice(0, 300)}`);
+  }
+}
+
+function findNestedString(value: unknown, field: string): string | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findNestedString(item, field);
+      if (found) return found;
+    }
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record[field] === "string" && record[field]) return record[field] as string;
+  for (const nested of Object.values(record)) {
+    const found = findNestedString(nested, field);
+    if (found) return found;
+  }
+  return undefined;
 }
 
 /**

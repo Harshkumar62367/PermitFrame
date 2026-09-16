@@ -137,7 +137,11 @@ export async function runProduction(campaignId: string): Promise<{ finished: boo
   await updateDb((d) => {
     const c = d.campaigns.find((x) => x.id === campaignId);
     if (c) {
-      c.status = anyFailure && succeeded === 0 ? "blocked" : "review";
+      // A failed generation run is a production outcome, never a policy
+      // verdict: "blocked" is reserved for preflight denials (it gates spend
+      // and drives the dashboard). Failed runs land in "review" so a human
+      // inspects the job errors instead of seeing a phantom policy block.
+      c.status = "review";
       c.updatedAt = nowIso();
     }
     d.events.push({
@@ -211,7 +215,9 @@ export async function publishCampaignRecord(campaignId: string): Promise<string 
   const campaign = db.campaigns.find((c) => c.id === campaignId);
   if (!campaign) return undefined;
   try {
-    const record = await getDkg().publish(campaignKa(campaign), "shared");
+    // Campaign approval is the explicit moment we anchor minimized evidence
+    // on-chain. Earlier facts/consents stay in WM/SWM unless separately chosen.
+    const record = await getDkg().publishVerifiable(campaignKa(campaign), "shared");
     await updateDb((d) => {
       const c = d.campaigns.find((x) => x.id === campaignId);
       if (c) c.campaignUAL = record.ual;
