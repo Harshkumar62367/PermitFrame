@@ -26,7 +26,21 @@ interface Caption {
   disclosure: string;
 }
 
-export function CampaignExtras({ campaign }: { campaign: Campaign }) {
+/** Plain-language event kinds for the audit timeline — never raw internals. */
+function plainEventKind(kind: string): string {
+  if (kind === "comment") return "note";
+  if (kind.startsWith("preflight.")) return "permission check";
+  if (kind.startsWith("dkg.")) return "proof record";
+  if (kind.startsWith("production.")) return "production";
+  if (kind === "campaign.approved") return "approval";
+  if (kind.startsWith("passport.")) return "creator permission";
+  if (kind === "facts.updated") return "brand rules";
+  if (kind === "media.registered") return "media";
+  if (kind.startsWith("share.")) return "client review";
+  return kind;
+}
+
+export function CampaignExtras({ campaign, hideVariants = false }: { campaign: Campaign; hideVariants?: boolean }) {
   const [captions, setCaptions] = useState<Caption[]>(campaign.captions ?? []);
   const [captionMsg, setCaptionMsg] = useState<string | null>(null);
   const [shareUrl, setShareUrl] = useState<string | null>(campaign.shareToken ? `/share/${campaign.shareToken}` : null);
@@ -133,7 +147,7 @@ export function CampaignExtras({ campaign }: { campaign: Campaign }) {
       if (j.campaigns.length > 0) invalidateSnapshot();
       setVariantMsg(
         j.campaigns.length > 0
-          ? `${j.campaigns.length} variant(s) created — each independently preflighted.`
+          ? `${j.campaigns.length} variant(s) created — each independently permission-checked.`
           : "No variants created — that platform matches this campaign."
       );
     } catch (e) {
@@ -231,11 +245,12 @@ export function CampaignExtras({ campaign }: { campaign: Campaign }) {
         </section>
       </FadeIn>
 
-      {/* Variants */}
+      {/* Variants — hidden when the Creative Studio owns the asset-pack workflow. */}
+      {!hideVariants && (
       <FadeIn>
         <section className="rounded-2xl border border-dashed border-border bg-card p-6">
           <p className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
-            <Zap className="h-3.5 w-3.5" /> Platform variants — clone this brief, preflight each independently
+            <Zap className="h-3.5 w-3.5" /> Platform variants — clone this brief, permission-check each independently
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
             {otherPlatforms.map((p) => (
@@ -258,6 +273,7 @@ export function CampaignExtras({ campaign }: { campaign: Campaign }) {
           )}
         </section>
       </FadeIn>
+      )}
 
       {/* Comments + timeline */}
       <FadeIn>
@@ -307,9 +323,9 @@ export function CampaignExtras({ campaign }: { campaign: Campaign }) {
                 <span className={cn("relative z-10 mt-1 h-2.5 w-2.5 shrink-0 rounded-full", entry.kind === "comment" ? "bg-violet-500" : entry.kind.includes("block") || entry.kind.includes("revoked") ? "bg-rose-500" : "bg-emerald-500")} />
                 <div className="min-w-0">
                   <p className="text-[12.5px] leading-snug">{entry.summary}</p>
-                  <p className="mt-0.5 font-mono text-[9.5px] uppercase tracking-[0.1em] text-muted-foreground">
-                    {entry.kind} · {new Date(entry.at).toLocaleString()}
-                  </p>
+                    <p className="mt-0.5 font-mono text-[9.5px] uppercase tracking-[0.1em] text-muted-foreground">
+                      {plainEventKind(entry.kind)} · {new Date(entry.at).toLocaleString()}
+                    </p>
                 </div>
               </div>
             ))}

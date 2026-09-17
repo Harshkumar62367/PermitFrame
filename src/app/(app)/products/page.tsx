@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { FadeIn, Stagger, StaggerItem } from "@/components/motion-primitives";
 import { PageHeader } from "@/components/ui/page-header";
+import { RightsTabs } from "@/components/rights-tabs";
 import { SectionCard } from "@/components/ui/section-card";
 import { CopyableIdentifier } from "@/components/ui/identifier";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -38,7 +39,7 @@ export default function ProductsPage() {
   const snapshot = useWorkspaceSnapshot();
   const factsList = snapshot.data?.productFacts ?? null;
   const loadError = !snapshot.data && snapshot.isError
-    ? (snapshot.error instanceof Error ? snapshot.error.message : "Product facts failed to load.")
+    ? (snapshot.error instanceof Error ? snapshot.error.message : "Brand rules failed to load.")
     : null;
   const [editing, setEditing] = useState<ProductFacts | null>(null);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -103,7 +104,7 @@ export default function ProductsPage() {
         ok: true,
         text: editing
           ? `${record.headline} — ${j.facts.brand} ${j.facts.productName} updated. ${record.detail}`
-          : `${record.headline} — ${j.facts.brand} ${j.facts.productName} is now enforced by preflight. ${record.detail}`,
+          : `${record.headline} — ${j.facts.brand} ${j.facts.productName} is now enforced by the permission check. ${record.detail}`,
         ual: j.facts.ual
       });
       cancelEdit();
@@ -126,20 +127,23 @@ export default function ProductsPage() {
     <div className="pf-page space-y-6">
       <FadeIn>
         <PageHeader
-          eyebrow="Brand governance"
-          title="Products & verified facts"
-          description="Approved and prohibited advertising claims live here as Knowledge Assets. The preflight engine refuses campaigns that state anything unverified."
+          eyebrow="Brand rules"
+          title="Brand rules"
+          description="Set the product claims, required disclosures, and restrictions that every campaign must follow. These rules are checked during campaign preflight before any Livepeer generation begins."
         />
+      </FadeIn>
+      <FadeIn delay={0.02}>
+        <RightsTabs />
       </FadeIn>
 
       <FadeIn delay={0.05}>
         <SectionCard
-          title={editing ? `Editing ${editing.brand} ${editing.productName}` : "Publish new product facts"}
-          description="Every field starts empty — grey placeholder text is only an example, never a value. Use suggested values to accelerate data entry."
+          title={editing ? `Editing ${editing.brand} ${editing.productName}` : "Add brand rules"}
+          description="Guided scenario — every field starts empty; grey placeholder text is only an example, never a value. Use suggested values to accelerate data entry."
           actions={
             !editing && (
               <Button variant="outline" size="sm" onClick={fillExample} className="h-7 rounded-full px-2.5 text-[11.5px]">
-                <Wand2 className="h-3 w-3" aria-hidden /> Fill example values
+                <Wand2 className="h-3 w-3" aria-hidden /> Fill guided example
               </Button>
             )
           }
@@ -231,7 +235,7 @@ export default function ProductsPage() {
               title={!canSubmit ? "Enter a brand and product name to enable publishing" : undefined}
               className="rounded-full bg-emerald-700 font-medium text-emerald-50 hover:bg-emerald-600 dark:bg-emerald-500 dark:text-emerald-950 dark:hover:bg-emerald-400"
             >
-              <ShieldCheck className="h-4 w-4" aria-hidden /> {busy ? "Publishing…" : editing ? "Save changes" : "Publish to DKG"}
+              <ShieldCheck className="h-4 w-4" aria-hidden /> {busy ? "Saving…" : editing ? "Save changes" : "Save brand rules"}
             </Button>
             {editing && (
               <Button variant="ghost" onClick={cancelEdit} disabled={busy} className="rounded-full">
@@ -241,10 +245,10 @@ export default function ProductsPage() {
           </div>
           <p id={submitHint} className="mt-2 text-[11.5px] text-muted-foreground">
             {!canSubmit
-              ? "Publish is disabled until brand and product name are filled — placeholders don't count."
+              ? "Save is disabled until brand and product name are filled — placeholders don't count."
               : busy
-                ? "Publishing — duplicate clicks are ignored and your input is preserved on failure."
-                : "Saves to the workspace and records a Knowledge Asset; preflight enforces it immediately."}
+                ? "Saving — duplicate clicks are ignored and your input is preserved on failure."
+                : "Saves to the workspace and its proof record; the permission check enforces it immediately."}
           </p>
           {result && (
             <div
@@ -257,7 +261,6 @@ export default function ProductsPage() {
               )}
             >
               <p>{result.text}</p>
-              {result.ual && <CopyableIdentifier value={result.ual} className="mt-1.5 max-w-full text-[11px]" />}
             </div>
           )}
         </SectionCard>
@@ -282,14 +285,16 @@ export default function ProductsPage() {
                 <p><span className="text-emerald-700 dark:text-emerald-300">approved:</span> {f.approvedClaims.join(", ") || "—"}</p>
                 <p><span className="text-rose-600 dark:text-rose-300">prohibited:</span> {f.prohibitedClaims.join(", ") || "—"}</p>
                 {f.guidelines.length > 0 && <p className="text-muted-foreground">guidelines: {f.guidelines.join(" · ")}</p>}
-                {f.ual && <CopyableIdentifier value={f.ual} className="max-w-full text-[10px]" />}
               </div>
             </div>
           </StaggerItem>
         ))}
       </Stagger>
       {factsList && factsList.length === 0 && !loadError && (
-        <EmptyState title="No product facts yet" body="Publish the first set above — preflight refuses any claim without verified facts." />
+        <EmptyState
+          title="No brand rules yet"
+          body="Add the first brand above — campaigns can't claim anything until its rules exist. Next: add creator rights and creative, then brief a campaign."
+        />
       )}
     </div>
   );

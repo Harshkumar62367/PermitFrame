@@ -4,13 +4,13 @@ import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 import { CampaignThumbnail } from "./campaign-thumbnail";
 import { PolicyResultLine } from "./policy-decision-summary";
-import { StatusBadge } from "@/components/ui/status-badge";
+import { campaignOutcome, OutcomeBadge } from "@/components/campaign-outcome";
 import type { SnapshotCampaign } from "@/lib/use-workspace-snapshot";
 import { cn } from "@/lib/utils";
 
 const STAGE_LABEL: Record<SnapshotCampaign["stage"], string> = {
   briefed: "Briefed",
-  "policy-check": "Policy check",
+  "policy-check": "Permission check",
   ready: "Ready",
   generating: "Generating",
   delivered: "Delivered"
@@ -21,17 +21,24 @@ function nextActionFor(campaign: SnapshotCampaign): string {
   if (campaign.activeJobs > 0) return "Track production";
   if (campaign.stage === "ready") return "Generate pack";
   if (campaign.receiptsCount > 0) return "Open pack";
-  if (campaign.preflight.decision === "pending") return "Run policy check";
-  return "Open workspace";
+  if (campaign.preflight.decision === "pending") return "Run permission check";
+  return "Open campaign";
 }
 
 /**
  * Reusable campaign card: visual thumbnail, corrected status + stage badges,
- * one-line policy result, next action. Blocked, ready and generated campaigns
- * read differently without changing the layout.
+ * one-line rights-check result, next action. Blocked, ready and generated
+ * campaigns read differently without changing the layout.
  */
 export function CampaignCard({ campaign }: { campaign: SnapshotCampaign }) {
   const blocked = campaign.effectiveStatus === "blocked";
+  const outcome = campaignOutcome({
+    status: campaign.effectiveStatus,
+    decision: campaign.preflight.decision,
+    hasOutputs: campaign.receiptsCount > 0,
+    publicationStatus: campaign.recordPublicationStatus,
+    campaignUAL: campaign.campaignUAL
+  });
   return (
     <Link
       href={`/campaigns/${campaign.id}`}
@@ -45,7 +52,7 @@ export function CampaignCard({ campaign }: { campaign: SnapshotCampaign }) {
       <CampaignThumbnail src={campaign.thumbnailUrl} title={campaign.title} brand={campaign.brand} />
       <span className="flex flex-1 flex-col p-5">
         <span className="flex flex-wrap items-center gap-2">
-          <StatusBadge status={blocked ? "blocked" : campaign.effectiveStatus} />
+          <OutcomeBadge outcome={outcome} />
           <span className="rounded-full bg-secondary px-2.5 py-0.5 text-[11px] font-medium text-secondary-foreground">
             {STAGE_LABEL[campaign.stage]}
           </span>

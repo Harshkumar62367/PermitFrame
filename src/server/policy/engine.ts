@@ -8,6 +8,7 @@ import type {
 } from "../types";
 import { getDkg } from "../dkg";
 import { findApplicablePassportsSparql, findProductFactsSparql } from "../dkg/sparql";
+import { resolvePlanCapabilities } from "../livepeer/catalogue";
 
 /**
  * The preflight engine compiles creator permissions + verified product facts
@@ -15,11 +16,6 @@ import { findApplicablePassportsSparql, findProductFactsSparql } from "../dkg/sp
  * capabilities may be used, and which constraints the prompts must carry.
  * This is where DKG knowledge changes agent behavior.
  */
-
-const CAPABILITIES = {
-  image: { fast: "flux-schnell", premium: "flux-dev" },
-  video: { fast: "seedance-mini-i2v", premium: "pixverse-t2v" }
-} as const;
 
 export async function preflight(campaign: Campaign): Promise<PreflightDecision> {
   const dkg = getDkg();
@@ -99,7 +95,7 @@ export async function preflight(campaign: Campaign): Promise<PreflightDecision> 
   const promptConstraints = compileConstraints(facts, allowedClaims, passport);
 
   // 5. Plan the Livepeer production pipeline (only reachable when allowed).
-  const plan = buildPlan(campaign);
+  const plan = await buildPlan(campaign);
 
   return {
     decision: blockers.length === 0 ? "allow" : "block",
@@ -200,9 +196,17 @@ function compileConstraints(
   return constraints;
 }
 
-function buildPlan(campaign: Campaign): PreflightDecision["plan"] {
-  const imageCap = process.env.LIVEPEER_IMAGE_CAPABILITY ?? CAPABILITIES.image.fast;
-  const videoCap = process.env.LIVEPEER_VIDEO_CAPABILITY ?? CAPABILITIES.video.fast;
+/**
+ * Production plan from live Livepeer discovery. Precedence for each
+ * capability: explicit env config (operator intent) → catalogue pick from
+ * capabilities the MCP server reports as available → verified default.
+ * Discovery failure never blocks preflight — the plan falls back silently
+ * and each job persists the exact capability it actually ran.
+ */
+async function buildPlan(campaign: Campaign): Promise<PreflightDecision["plan"]> {
+  const resolved = await resolvePlanCapabilities();
+  const imageCap = process.env.LIVEPEER_IMAGE_CAPABILITY ?? resolved.image;
+  const videoCap = process.env.LIVEPEER_VIDEO_CAPABILITY ?? resolved.video;
   const stages: PreflightDecision["plan"] = [
     {
       id: "keyframe",

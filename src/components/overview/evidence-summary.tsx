@@ -3,8 +3,8 @@
 import { Database } from "lucide-react";
 
 /**
- * Provenance line: which Knowledge Assets the verdict was checked against.
- * OriginTrail's responsibility made visible — rights + facts references, not labels.
+ * Provenance line: which proof records the verdict was checked against.
+ * Rights + facts references made visible — not labels.
  */
 export function EvidenceSummary({
   knowledgeAssetsConsulted,
@@ -26,9 +26,9 @@ export function EvidenceSummary({
         <Database className="h-3.5 w-3.5" aria-hidden />
         <span>
           {knowledgeAssetsConsulted > 0 ? (
-            <>checked against {knowledgeAssetsConsulted} Knowledge Asset{knowledgeAssetsConsulted === 1 ? "" : "s"}</>
+            <>checked against {knowledgeAssetsConsulted} proof record{knowledgeAssetsConsulted === 1 ? "" : "s"}</>
           ) : (
-            <>no Knowledge Assets consulted yet</>
+            <>no proof records consulted yet</>
           )}
         </span>
       </span>

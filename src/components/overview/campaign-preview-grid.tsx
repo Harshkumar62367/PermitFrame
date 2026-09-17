@@ -17,7 +17,7 @@ export function CampaignPreviewGrid({ campaigns }: { campaigns: SnapshotCampaign
           </Link>
         </div>
         {campaigns.length === 0 ? (
-          <EmptyState title="No campaigns yet" body="Create the first request — preflight will check rights and claims before anything generates." />
+          <EmptyState title="No campaigns yet" body="Brief the first campaign — the permission check verifies rights and claims before anything generates." />
         ) : (
           <div className="grid gap-4 md:grid-cols-2">
             {campaigns.map((c) => (

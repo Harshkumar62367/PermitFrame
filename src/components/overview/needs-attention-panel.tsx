@@ -5,7 +5,7 @@ import { ArrowRight, PencilLine } from "lucide-react";
 import { CampaignThumbnail } from "./campaign-thumbnail";
 import { PolicyDecisionSummary } from "./policy-decision-summary";
 import { EvidenceSummary } from "./evidence-summary";
-import { StatusBadge } from "@/components/ui/status-badge";
+import { campaignOutcome, OutcomeBadge } from "@/components/campaign-outcome";
 import type { SnapshotCampaign } from "@/lib/use-workspace-snapshot";
 
 function formatUsd(value: number): string {
@@ -31,7 +31,7 @@ export function NeedsAttentionPanel({
     >
       <div className="border-b border-rose-200/70 bg-rose-50/70 px-5 py-3 dark:border-rose-900 dark:bg-rose-950/30">
         <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-rose-700 dark:text-rose-300">
-          Blocked before generation{overflowCount > 0 && ` · +${overflowCount} more`}
+          Changes needed before creation{overflowCount > 0 && ` · +${overflowCount} more`}
         </p>
       </div>
 
@@ -39,7 +39,15 @@ export function NeedsAttentionPanel({
 
       <div className="flex flex-1 flex-col p-5">
         <div className="flex flex-wrap items-center gap-2">
-          <StatusBadge status="blocked" />
+          <OutcomeBadge
+            outcome={campaignOutcome({
+              status: campaign.effectiveStatus,
+              decision: campaign.preflight.decision,
+              hasOutputs: campaign.receiptsCount > 0,
+              publicationStatus: campaign.recordPublicationStatus,
+              campaignUAL: campaign.campaignUAL
+            })}
+          />
           <span className="truncate font-mono text-[10.5px] uppercase tracking-[0.12em] text-muted-foreground">
             {campaign.platform} · {campaign.country}
           </span>
@@ -61,7 +69,7 @@ export function NeedsAttentionPanel({
             queriedRights={campaign.preflight.queriedRights}
             queriedFacts={campaign.preflight.queriedFacts}
             checkedAt={campaign.preflight.checkedAt}
-            spentLabel={`$0 inference spent · ${formatUsd(campaign.estimatedUsd)} prevented`}
+            spentLabel={`$0 production spend · ${formatUsd(campaign.estimatedUsd)} prevented`}
           />
         </div>
 

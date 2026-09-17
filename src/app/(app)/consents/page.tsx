@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { FadeIn, Stagger, StaggerItem } from "@/components/motion-primitives";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { PageHeader } from "@/components/ui/page-header";
+import { RightsTabs } from "@/components/rights-tabs";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { CopyableIdentifier } from "@/components/ui/identifier";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -62,8 +63,62 @@ export default function ConsentsPage() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [revokeTarget, setRevokeTarget] = useState<Passport | null>(null);
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [inviteBusy, setInviteBusy] = useState(false);
+  const [inviteError, setInviteError] = useState<string | null>(null);
+  const [inviteLink, setInviteLink] = useState<string | null>(null);
+  const [inviteCopied, setInviteCopied] = useState(false);
+  const [inviteForm, setInviteForm] = useState({ name: "", handle: "", platforms: ["instagram"] as string[], countries: "", validUntil: "" });
   const invalidateSnapshot = useInvalidateWorkspaceSnapshot();
   const invalidateDkgGraph = useInvalidateDkgGraph();
+
+  function setInvite<K extends keyof typeof inviteForm>(key: K, value: (typeof inviteForm)[K]) {
+    setInviteForm((f) => ({ ...f, [key]: value }));
+    setInviteError(null);
+  }
+
+  function toggleInvitePlatform(p: string) {
+    setInviteForm((f) => ({
+      ...f,
+      platforms: f.platforms.includes(p) ? f.platforms.filter((x) => x !== p) : [...f.platforms, p]
+    }));
+    setInviteError(null);
+  }
+
+  async function createInvite() {
+    if (inviteBusy) return;
+    setInviteBusy(true);
+    setInviteError(null);
+    setInviteLink(null);
+    setInviteCopied(false);
+    try {
+      const j = await apiPost<{ token: string; url: string }>("/api/consents", {
+        creatorName: inviteForm.name.trim(),
+        handle: inviteForm.handle.trim() || undefined,
+        platforms: inviteForm.platforms,
+        countries: inviteForm.countries,
+        validUntil: inviteForm.validUntil
+      });
+      setInviteLink(j.url);
+      setInviteForm({ name: "", handle: "", platforms: ["instagram"], countries: "", validUntil: "" });
+      await invalidateSnapshot();
+    } catch (e) {
+      setInviteError(e instanceof Error ? e.message : "Invite creation failed. Your input is preserved.");
+    } finally {
+      setInviteBusy(false);
+    }
+  }
+
+  async function copyInviteLink() {
+    if (!inviteLink) return;
+    try {
+      await navigator.clipboard.writeText(window.location.origin + inviteLink);
+      setInviteCopied(true);
+      setTimeout(() => setInviteCopied(false), 1600);
+    } catch {
+      setInviteCopied(false);
+    }
+  }
 
   async function confirmRevoke() {
     if (!revokeTarget || busyId) return;
@@ -78,9 +133,9 @@ export default function ConsentsPage() {
         ok: true,
         text: j.revoked
           ? j.blockedCampaigns.length > 0
-            ? `Passport ${id} revoked — an Amendment Knowledge Asset was published and ${j.blockedCampaigns.length} dependent campaign(s) are now blocked by preflight.`
-            : `Passport ${id} revoked — an Amendment Knowledge Asset was published (no active campaigns affected).`
-          : `Passport ${id} was already revoked — nothing changed.`
+            ? `Rights for ${id} revoked — the permission record was updated and ${j.blockedCampaigns.length} dependent campaign(s) are now blocked by the permission check.`
+            : `Rights for ${id} revoked — the permission record was updated (no active campaigns affected).`
+          : `Rights for ${id} were already revoked — nothing changed.`
       });
       setRevokeTarget(null);
       // Revocation publishes an Amendment Knowledge Asset: refresh the shared
@@ -110,7 +165,7 @@ export default function ConsentsPage() {
     setBusyId(id);
     try {
       await apiPost(`/api/passports/${id}/renew`, { validUntil: renewDate });
-      setNotice({ ok: true, text: `Passport ${id} renewed until ${renewDate} — status is active again.` });
+      setNotice({ ok: true, text: `Rights for ${id} renewed until ${renewDate} — status is active again.` });
       setRenewFor(null);
       setRenewDate("");
       // Renewal republishes the passport Knowledge Asset: same treatment.
@@ -131,11 +186,116 @@ export default function ConsentsPage() {
     <div className="pf-page space-y-6">
       <FadeIn>
         <PageHeader
-          eyebrow="Trust & proof"
-          title="Creator consents"
-          description="Revoking a passport publishes an Amendment Knowledge Asset and immediately re-blocks dependent campaigns at preflight."
+          eyebrow="Creator permissions"
+          title="Creator permissions"
+          description="Consent, territories, expiry, and permitted usage — who can appear, where, and for how long. Campaigns re-check automatically."
+          actions={
+            <Button onClick={() => setInviteOpen((v) => !v)} aria-expanded={inviteOpen} className="rounded-full bg-emerald-700 font-medium text-emerald-50 hover:bg-emerald-600 dark:bg-emerald-500 dark:text-emerald-950 dark:hover:bg-emerald-400">
+              {inviteOpen ? "Close form" : "New creator invite"}
+            </Button>
+          }
         />
       </FadeIn>
+      <FadeIn delay={0.02}>
+        <RightsTabs />
+      </FadeIn>
+
+      {inviteOpen && (
+        <FadeIn>
+          <div className="rounded-2xl border border-border bg-card p-6">
+            <h3 className="text-[15px] font-semibold tracking-tight">New creator invite</h3>
+            <p className="mt-1 text-[12.5px] text-muted-foreground">
+              Send the link to the creator — they confirm or narrow platforms, territories and expiry, then attest. Only the attestation creates the permission.
+            </p>
+            <div className="mt-5 grid gap-4 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label htmlFor={`${uid}-invite-name`} className="text-[12px] text-muted-foreground">Creator name</Label>
+                <Input
+                  id={`${uid}-invite-name`}
+                  value={inviteForm.name}
+                  onChange={(e) => setInvite("name", e.target.value)}
+                  placeholder="Maya Rao"
+                  className="rounded-xl"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor={`${uid}-invite-handle`} className="text-[12px] text-muted-foreground">Handle (optional)</Label>
+                <Input
+                  id={`${uid}-invite-handle`}
+                  value={inviteForm.handle}
+                  onChange={(e) => setInvite("handle", e.target.value)}
+                  placeholder="@maya.creates"
+                  className="rounded-xl"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <span id={`${uid}-invite-platforms`} className="text-[12px] text-muted-foreground">Platforms</span>
+                <div className="flex flex-wrap gap-1.5" role="group" aria-labelledby={`${uid}-invite-platforms`}>
+                  {["instagram", "tiktok", "youtube", "linkedin"].map((p) => {
+                    const selected = inviteForm.platforms.includes(p);
+                    return (
+                      <button
+                        key={p}
+                        type="button"
+                        onClick={() => toggleInvitePlatform(p)}
+                        aria-pressed={selected}
+                        className={cn(
+                          "rounded-full px-3 py-1.5 text-[12px] font-medium capitalize ring-1 transition",
+                          selected
+                            ? "bg-foreground text-background ring-foreground dark:bg-white dark:text-black dark:ring-white"
+                            : "bg-card text-muted-foreground ring-border hover:text-foreground"
+                        )}
+                      >
+                        {p}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor={`${uid}-invite-countries`} className="text-[12px] text-muted-foreground">Territories (comma-separated, 2-letter)</Label>
+                <Input
+                  id={`${uid}-invite-countries`}
+                  value={inviteForm.countries}
+                  onChange={(e) => setInvite("countries", e.target.value.toUpperCase())}
+                  placeholder="US, GR"
+                  className="rounded-xl"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor={`${uid}-invite-expiry`} className="text-[12px] text-muted-foreground">Permission expiry</Label>
+                <Input
+                  id={`${uid}-invite-expiry`}
+                  type="date"
+                  value={inviteForm.validUntil}
+                  min={new Date().toISOString().slice(0, 10)}
+                  onChange={(e) => setInvite("validUntil", e.target.value)}
+                  className="h-9 rounded-xl"
+                />
+              </div>
+            </div>
+            {inviteError && <p role="alert" className="mt-3 break-words text-[12px] text-rose-600 dark:text-rose-300">{inviteError}</p>}
+            {inviteLink && (
+              <div role="status" className="mt-3 flex flex-wrap items-center gap-2 rounded-xl bg-emerald-50 px-4 py-3 ring-1 ring-emerald-200 dark:bg-emerald-950/40 dark:ring-emerald-900">
+                <Link href={inviteLink} className="min-w-0 flex-1 truncate font-mono text-[12px] text-emerald-700 hover:underline dark:text-emerald-300">
+                  {inviteLink}
+                </Link>
+                <Button variant="outline" size="sm" onClick={() => void copyInviteLink()} className="h-7 rounded-full px-2.5 text-[11.5px]">
+                  {inviteCopied ? "Copied" : "Copy link"}
+                </Button>
+              </div>
+            )}
+            <Button
+              onClick={() => void createInvite()}
+              disabled={inviteBusy}
+              aria-busy={inviteBusy}
+              className="mt-4 rounded-full bg-emerald-700 font-medium text-emerald-50 hover:bg-emerald-600 dark:bg-emerald-500 dark:text-emerald-950 dark:hover:bg-emerald-400"
+            >
+              {inviteBusy ? "Creating…" : "Create invite link"}
+            </Button>
+          </div>
+        </FadeIn>
+      )}
 
       {notice && (
         <FadeIn>
@@ -155,8 +315,21 @@ export default function ConsentsPage() {
       {loadError && <ErrorState message={loadError} onRetry={() => { void snapshot.refetch(); }} />}
       {invites !== null && passports !== null && invites.length === 0 && passports.length === 0 && !loadError && (
         <EmptyState
-          title="No creator consents yet"
-          body="Permission passports and consent links will appear here once creators attest through a consent link."
+          title="No creator permissions yet"
+          body="Add approved material to unlock campaigns: invite a creator below, or start with brand rules and media. Then brief a campaign — the permission check runs automatically."
+          actions={
+            <>
+              <Button onClick={() => setInviteOpen(true)} className="rounded-full bg-emerald-700 font-medium text-emerald-50 hover:bg-emerald-600 dark:bg-emerald-500 dark:text-emerald-950 dark:hover:bg-emerald-400">
+                Invite a creator
+              </Button>
+              <Button asChild variant="outline" className="rounded-full">
+                <Link href="/products">Add brand rules <ArrowRight className="h-3.5 w-3.5" /></Link>
+              </Button>
+              <Button asChild variant="outline" className="rounded-full">
+                <Link href="/media">Add media <ArrowRight className="h-3.5 w-3.5" /></Link>
+              </Button>
+            </>
+          }
         />
       )}
 
@@ -189,12 +362,12 @@ export default function ConsentsPage() {
         </FadeIn>
       )}
 
-      {/* Passports */}
-      <section aria-label="Permission passports">
-        <h2 className="mb-1 text-[15px] font-semibold tracking-tight">Permission passports</h2>
+      {/* Creator permissions */}
+      <section aria-label="Creator permissions">
+        <h2 className="mb-1 text-[15px] font-semibold tracking-tight">Creator permissions</h2>
         <p id={`${uid}-revoke-hint`} className="mb-3 text-[12px] text-muted-foreground">
-          Revoking is immediate and permanent in effect: an Amendment Knowledge Asset is published and
-          dependent campaigns re-block at preflight. You will confirm before anything happens.
+          Revoking takes effect immediately: the permission record is updated and
+          dependent campaigns are blocked at the next permission check. You will confirm before anything happens.
         </p>
         {!passports && !loadError && <LoadingSkeleton rows={2} />}
         <Stagger className="space-y-3">
@@ -209,7 +382,7 @@ export default function ConsentsPage() {
                     <p className="mt-1.5 flex flex-wrap items-center gap-1.5 font-mono text-[10.5px] uppercase tracking-[0.1em] text-muted-foreground">
                       <CalendarClock className="h-3.5 w-3.5 shrink-0" aria-hidden /> valid to {p.validUntil}
                     </p>
-                    <CopyableIdentifier value={p.ual ? `${p.id} · ${p.ual}` : p.id} className="mt-1 max-w-full" />
+                    <CopyableIdentifier value={p.id} className="mt-1 max-w-full" />
                   </div>
                   <div className="flex gap-2">
                     {p.status === "active" && (
@@ -298,11 +471,11 @@ export default function ConsentsPage() {
       </section>
       <ConfirmDialog
         open={revokeTarget !== null}
-        title={`Revoke ${revokeTarget?.creatorName ?? "this"}’s passport?`}
+        title={`Revoke ${revokeTarget?.creatorName ?? "this"}’s rights?`}
         consequence={
           revokeWarning !== null && revokeWarning > 0
-            ? `This publishes a revocation Amendment Knowledge Asset for passport ${revokeTarget?.id}. ${revokeWarning} dependent campaign(s) will immediately re-block at preflight. The passport record itself is kept for audit — nothing is deleted.`
-            : `This publishes a revocation Amendment Knowledge Asset for passport ${revokeTarget?.id}. Dependent campaigns of this creator will be re-checked at preflight. The passport record itself is kept for audit — nothing is deleted.`
+            ? `This updates the permission record for ${revokeTarget?.id}. ${revokeWarning} dependent campaign(s) will immediately block at the permission check. The rights record itself is kept for audit — nothing is deleted.`
+            : `This updates the permission record for ${revokeTarget?.id}. Dependent campaigns of this creator will be re-checked. The rights record itself is kept for audit — nothing is deleted.`
         }
         confirmLabel="Yes, revoke it"
         pending={busyId !== null}

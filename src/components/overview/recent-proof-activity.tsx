@@ -26,11 +26,11 @@ interface ActivityPresentation {
 
 function presentationFor(kind: string): ActivityPresentation {
   if (kind === "preflight.block")
-    return { icon: Ban, label: "Campaign blocked", href: (i) => (i.campaignId ? `/campaigns/${i.campaignId}` : null) };
+    return { icon: Ban, label: "Changes needed before creation", href: (i) => (i.campaignId ? `/campaigns/${i.campaignId}` : null) };
   if (kind === "preflight.allow")
-    return { icon: ShieldCheck, label: "Preflight approved", href: (i) => (i.campaignId ? `/campaigns/${i.campaignId}` : null) };
+    return { icon: ShieldCheck, label: "Approved to create", href: (i) => (i.campaignId ? `/campaigns/${i.campaignId}` : null) };
   if (kind === "production.start" || kind === "production.run")
-    return { icon: Play, label: kind === "production.start" ? "Production started" : "Livepeer output completed", href: (i) => (i.campaignId ? `/campaigns/${i.campaignId}` : null) };
+    return { icon: Play, label: kind === "production.start" ? "Production started" : "Production output completed", href: (i) => (i.campaignId ? `/campaigns/${i.campaignId}` : null) };
   if (kind === "dkg.publish")
     return { icon: Fingerprint, label: "Derivative receipt published", href: (i) => (i.campaignId ? `/campaigns/${i.campaignId}` : null) };
   if (kind === "campaign.approved")
@@ -73,7 +73,7 @@ export function RecentProofActivity({ activity }: { activity: SnapshotActivityIt
           <div className="mt-3">
             <EmptyState
               title="No workspace activity yet"
-              body="Create a campaign — its preflight decision is recorded here with the evidence behind it."
+              body="Brief a campaign — its permission-check decision is recorded here with the evidence behind it."
             />
           </div>
         ) : (

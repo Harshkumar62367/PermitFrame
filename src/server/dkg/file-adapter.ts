@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { PermissionPassport, ProductFacts, Visibility } from "../types";
-import { type DkgAdapter, type DkgHealth, type KaRecord } from "./adapter";
+import { type DkgAdapter, type DkgHealth, type KaRecord, basePublicationStatus } from "./adapter";
 import type { KaEnvelope } from "./schemas";
 
 const DKG_DIR = process.env.PERMITFRAME_DATA_DIR
@@ -35,6 +35,7 @@ export class FileDkgAdapter implements DkgAdapter {
     return {
       ual,
       explorerUrl: "",
+      publicationStatus: basePublicationStatus(this.mode, false),
       name: ka.name,
       content: ka.content,
       publishedAt: new Date().toISOString(),
@@ -55,6 +56,7 @@ export class FileDkgAdapter implements DkgAdapter {
     return {
       ual,
       explorerUrl: "",
+      publicationStatus: basePublicationStatus(this.mode, false),
       name,
       content: JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, unknown>,
       publishedAt: fs.statSync(file).mtime.toISOString(),
@@ -124,6 +126,7 @@ export class FileDkgAdapter implements DkgAdapter {
         return {
           ual: `did:dkg:local/${name}`,
           explorerUrl: "",
+          publicationStatus: basePublicationStatus(this.mode, false),
           name,
           content: JSON.parse(fs.readFileSync(path.join(DKG_DIR, f), "utf8")) as Record<string, unknown>,
           publishedAt: fs.statSync(path.join(DKG_DIR, f)).mtime.toISOString(),

@@ -28,7 +28,7 @@ export function OperationalMetricsStrip({ metrics }: { metrics: OperationalMetri
     {
       label: "Ready to produce",
       value: String(metrics.readyToProduce),
-      hint: metrics.readyToProduce === 0 ? "nothing cleared yet" : "cleared for Livepeer",
+      hint: metrics.readyToProduce === 0 ? "nothing cleared yet" : "cleared for production",
       href: "/campaigns?filter=ready",
       icon: CircleCheck,
       tone: metrics.readyToProduce > 0 ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground/60"
@@ -44,7 +44,7 @@ export function OperationalMetricsStrip({ metrics }: { metrics: OperationalMetri
     {
       label: "Spend protected",
       value: formatUsd(metrics.spendProtected),
-      hint: metrics.spendProtected === 0 ? "no prevented inference" : "inference never spent",
+      hint: metrics.spendProtected === 0 ? "no prevented spend" : "production spend prevented",
       href: "/campaigns?filter=attention",
       icon: ShieldCheck,
       tone: metrics.spendProtected > 0 ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground/60"

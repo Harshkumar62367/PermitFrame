@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -29,9 +30,9 @@ function CampaignsContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   // Campaign summaries come from the shared ["workspace-snapshot"] cache, so
-  // switching between Overview and Campaigns renders instantly from cache and
-  // refreshes quietly in the background. Skeletons only show when no cached
-  // data exists at all.
+  // switching between Campaigns and other pages renders instantly from cache
+  // and refreshes quietly in the background. Skeletons only show when no
+  // cached data exists at all.
   const { status, data, error, retry } = useWorkspaceOverview();
   const [formOpen, setFormOpen] = useState(false);
   const campaigns = data?.campaigns ?? null;
@@ -53,9 +54,9 @@ function CampaignsContent() {
     <div className="pf-page space-y-6">
       <FadeIn>
         <PageHeader
-          eyebrow="Workspace"
+          eyebrow="Campaigns"
           title="Campaigns"
-          description="Each request is compiled against rights and facts before generation is allowed."
+          description="Each brief is checked against approved rights and brand rules before anything is produced."
           actions={
             <Button onClick={() => setFormOpen((v) => !v)} aria-expanded={formOpen} className="rounded-full bg-emerald-700 font-medium text-emerald-50 hover:bg-emerald-600 dark:bg-emerald-500 dark:text-emerald-950 dark:hover:bg-emerald-400">
               {formOpen ? "Close form" : "New campaign"}
@@ -111,8 +112,21 @@ function CampaignsContent() {
             <EmptyState
               title={active === "all" ? "No campaigns yet" : "Nothing in this stage"}
               body={active === "all"
-                ? "Create the first request — preflight checks rights and claims before anything generates."
+                ? "Get started in four steps: add approved material, brief a campaign, run the permission check, then produce the assets."
                 : "No campaigns currently match this stage. Clear the filter to see everything."}
+              actions={active === "all" ? (
+                <>
+                  <Button asChild variant="outline" className="rounded-full">
+                    <Link href="/consents">1 · Creator permissions</Link>
+                  </Button>
+                  <Button asChild variant="outline" className="rounded-full">
+                    <Link href="/media">2 · Media library</Link>
+                  </Button>
+                  <Button onClick={() => setFormOpen(true)} className="rounded-full bg-emerald-700 font-medium text-emerald-50 hover:bg-emerald-600 dark:bg-emerald-500 dark:text-emerald-950 dark:hover:bg-emerald-400">
+                    3 · New campaign
+                  </Button>
+                </>
+              ) : undefined}
             />
           ) : (
             <div className="grid items-stretch gap-4 md:grid-cols-2">

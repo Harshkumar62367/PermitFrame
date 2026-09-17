@@ -1,5 +1,5 @@
 import { jsonb, pgTable, text, timestamp } from "drizzle-orm/pg-core";
-import type { Database } from "../types";
+import type { Database, PublicVerificationSnapshot } from "../types";
 
 /**
  * Transitional application-state table.
@@ -45,4 +45,17 @@ export const sessions = pgTable("sessions", {
   workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
+});
+
+/**
+ * Immutable-by-contract public verification snapshots. Written once per
+ * campaign approval from sanitized fields only — anonymous reads query this
+ * table directly, never session workspace state.
+ */
+export const verificationSnapshots = pgTable("verification_snapshots", {
+  ref: text("ref").primaryKey(),
+  campaignId: text("campaign_id").notNull(),
+  payload: jsonb("payload").$type<PublicVerificationSnapshot>().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
 });

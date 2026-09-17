@@ -10,9 +10,9 @@ import { cn } from "@/lib/utils";
 function lastGenerationLabel(activity: { kind: string; at: string }[] | undefined): string | null {
   if (!activity) return null;
   const last = activity.find((a) => a.kind === "production.run" || a.kind === "dkg.publish");
-  if (!last) return "No generations recorded yet";
+  if (!last) return "No productions recorded yet";
   const date = new Date(last.at);
-  return Number.isNaN(date.getTime()) ? null : `Last successful generation ${date.toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
+  return Number.isNaN(date.getTime()) ? null : `Last completed production ${date.toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
 }
 
 function lastEvidenceLabel(activity: { kind: string; at: string }[] | undefined): string | null {
@@ -20,7 +20,7 @@ function lastEvidenceLabel(activity: { kind: string; at: string }[] | undefined)
   const last = activity.find((a) =>
     ["dkg.publish", "facts.updated", "media.registered", "passport.revoked", "passport.renewed", "campaign.approved"].includes(a.kind)
   );
-  if (!last) return "No publications recorded yet";
+  if (!last) return "No proof records yet";
   const date = new Date(last.at);
   return Number.isNaN(date.getTime()) ? null : `Last evidence activity ${date.toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
 }
@@ -49,7 +49,7 @@ export function IntegrationStatusPopover({
 
   const dkg = health?.dkg ?? null;
   const livepeer = health?.livepeer ?? null;
-  const dkgName = !dkg ? "Evidence network" : dkg.mode === "edge-node" ? "OriginTrail DKG V10 (edge node)" : "Local evidence mode";
+  const dkgName = !dkg ? "Proof ledger" : dkg.mode === "edge-node" ? "Proof ledger (shared)" : "Proof ledger (this workspace)";
   const dkgState = !dkg ? "Checking…" : dkg.healthy ? "Healthy" : "Degraded";
   const livepeerState = !livepeer ? "Checking…" : livepeer.reachable ? "Healthy" : "Degraded";
 
@@ -57,13 +57,13 @@ export function IntegrationStatusPopover({
     <SidebarPopover
       open={open}
       onClose={onClose}
-      label="Integration status"
+      label="Service status"
       triggerRef={triggerRef}
       className={rail ? "left-[88px] top-16" : "left-[264px] top-32"}
     >
       <div className="space-y-1 p-2">
         <div className="px-2.5 pb-1 pt-2">
-          <p className="text-[13.5px] font-semibold tracking-tight text-foreground dark:text-white">Integrations</p>
+          <p className="text-[13.5px] font-semibold tracking-tight text-foreground dark:text-white">Services</p>
           <p className="mt-0.5 text-[12px] text-muted-foreground dark:text-white/55">
             Who produces the media, and who holds the proof.
           </p>
@@ -71,7 +71,7 @@ export function IntegrationStatusPopover({
 
         <div className="rounded-xl bg-muted/50 px-3 py-2.5 ring-1 ring-border dark:ring-white/10">
           <p className="flex items-center justify-between gap-2 text-[12.5px] font-semibold text-foreground dark:text-white">
-            Evidence network
+            Proof ledger
             <span
               className={cn(
                 "rounded-full px-2 py-0.5 font-mono text-[9.5px] uppercase tracking-[0.12em]",
@@ -85,11 +85,14 @@ export function IntegrationStatusPopover({
           </p>
           <p className="mt-0.5 font-mono text-[10.5px] text-muted-foreground dark:text-white/50">{dkgName}</p>
           <p className="mt-1.5 text-[12px] leading-relaxed text-muted-foreground dark:text-white/65">
-            {dkg?.detail ?? "Checking integration health — preflight evidence will cite the exact Knowledge Assets it used."}
+            {!dkg
+              ? "Checking service health — permission-check evidence will cite the exact proof records it used."
+              : dkg.mode === "edge-node" && dkg.healthy
+                ? "Shared proof ledger connected — approvals can publish public verification."
+                : dkg.mode === "edge-node"
+                  ? "Shared proof ledger unreachable — campaigns keep working with workspace records."
+                  : "Workspace proof records — public verification needs the shared ledger (Settings › Advanced)."}
           </p>
-          {dkg?.blockchain && (
-            <p className="mt-1 font-mono text-[10.5px] text-muted-foreground dark:text-white/50">{dkg.blockchain}</p>
-          )}
           {dkg?.endpoint && (
             <p className="mt-0.5 truncate font-mono text-[10.5px] text-muted-foreground dark:text-white/50" title={dkg.endpoint}>
               {dkg.endpoint}
@@ -102,7 +105,7 @@ export function IntegrationStatusPopover({
 
         <div className="rounded-xl bg-muted/50 px-3 py-2.5 ring-1 ring-border dark:ring-white/10">
           <p className="flex items-center justify-between gap-2 text-[12.5px] font-semibold text-foreground dark:text-white">
-            Generation network
+            Asset production
             <span
               className={cn(
                 "rounded-full px-2 py-0.5 font-mono text-[9.5px] uppercase tracking-[0.12em]",
@@ -114,9 +117,9 @@ export function IntegrationStatusPopover({
               {livepeerState}
             </span>
           </p>
-          <p className="mt-0.5 font-mono text-[10.5px] text-muted-foreground dark:text-white/50">Livepeer Agent</p>
+          <p className="mt-0.5 font-mono text-[10.5px] text-muted-foreground dark:text-white/50">Production service</p>
           <p className="mt-1.5 text-[12px] leading-relaxed text-muted-foreground dark:text-white/65">
-            {livepeer?.detail ?? "Checking integration health — only preflight-approved campaigns may start production jobs."}
+            {livepeer?.detail ?? "Checking service health — only approved campaigns may start production jobs."}
           </p>
           {livepeer?.endpoint && (
             <p className="mt-1 truncate font-mono text-[10.5px] text-muted-foreground dark:text-white/50" title={livepeer.endpoint}>

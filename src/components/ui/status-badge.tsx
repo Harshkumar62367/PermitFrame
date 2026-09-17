@@ -4,7 +4,8 @@ import { cn } from "@/lib/utils";
 
 export type StatusTone = "blocked" | "draft" | "ready" | "generating" | "review" | "approved" | "active" | "revoked" | "pending" | "attested" | "neutral";
 
-const TONES: Record<StatusTone, string> = {
+/** Shared tone styles so outcome badges match status badges exactly. */
+export const STATUS_TONE_STYLES: Record<StatusTone, string> = {
   blocked: "bg-rose-50 text-rose-700 ring-rose-600/20 dark:bg-rose-950/40 dark:text-rose-300 dark:ring-rose-800",
   revoked: "bg-rose-50 text-rose-700 ring-rose-600/20 dark:bg-rose-950/40 dark:text-rose-300 dark:ring-rose-800",
   draft: "bg-sky-50 text-sky-700 ring-sky-600/20 dark:bg-sky-950/40 dark:text-sky-300 dark:ring-sky-800",
@@ -21,7 +22,7 @@ const TONES: Record<StatusTone, string> = {
 /** Map raw domain statuses to a visual tone. Visual only — no domain logic. */
 export function statusToneFor(status: string): StatusTone {
   const s = status.toLowerCase();
-  if (s in TONES) return s as StatusTone;
+  if (s in STATUS_TONE_STYLES) return s as StatusTone;
   if (s === "completed") return "attested";
   if (s === "failed" || s === "expired") return "blocked";
   return "neutral";
@@ -34,7 +35,7 @@ export function statusToneFor(status: string): StatusTone {
 export function StatusBadge({ status, className }: { status: string; className?: string }) {
   const tone = statusToneFor(status);
   return (
-    <Badge variant="outline" className={cn("rounded-full font-medium capitalize", TONES[tone], className)}>
+    <Badge variant="outline" className={cn("rounded-full font-medium capitalize", STATUS_TONE_STYLES[tone], className)}>
       {tone === "blocked" && <Ban className="h-3 w-3" aria-hidden />}
       {(tone === "approved" || tone === "attested") && <CheckCircle2 className="h-3 w-3" aria-hidden />}
       {status}

@@ -17,21 +17,21 @@ type WorkspaceCtaProps = {
  * One clear landing-page action: enter the workspace. Authentication is an
  * implementation detail, not a competing top-level CTA.
  */
-export function WorkspaceCta({ size = "sm", className, label = "Open workspace" }: WorkspaceCtaProps) {
+export function WorkspaceCta({ size = "sm", className, label = "Open campaigns" }: WorkspaceCtaProps) {
   const { ready, authenticated, login } = usePrivy();
   const { status } = usePermitFrameSession();
   const router = useRouter();
   const [requested, setRequested] = useState(false);
 
   useEffect(() => {
-    if (requested && status === "ready") router.push("/workspace");
+    if (requested && status === "ready") router.push("/campaigns");
   }, [requested, router, status]);
 
   async function enterWorkspace() {
     setRequested(true);
     if (!ready || status === "loading") return;
     if (status === "ready") {
-      router.push("/workspace");
+      router.push("/campaigns");
       return;
     }
     if (!authenticated) await login();
@@ -41,7 +41,7 @@ export function WorkspaceCta({ size = "sm", className, label = "Open workspace" 
   return (
     <Button onClick={() => void enterWorkspace()} disabled={!ready || loading} size={size} className={className}>
       {loading ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <ArrowRight className="h-3.5 w-3.5" />}
-      {loading ? "Opening workspace…" : label}
+      {loading ? "Opening campaigns…" : label}
     </Button>
   );
 }

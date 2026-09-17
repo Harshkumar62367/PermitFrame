@@ -6,6 +6,15 @@ export type CountryCode = string; // ISO 3166-1 alpha-2, e.g. "GR"
 export type Transformation = "edit" | "animate" | "upscale" | "crop";
 export type Visibility = "private" | "shared" | "public";
 
+/**
+ * Explicit persisted publication state. Set ONLY from real adapter results:
+ * "local" (workspace store), "shared" (DKG Shared Working Memory),
+ * "anchored" (on-chain Verifiable Memory finalize succeeded),
+ * "failed" (a publish was attempted and failed — retryable).
+ * Never inferred from ID/URI shape. Missing (legacy rows) means non-public.
+ */
+export type PublicationStatus = "local" | "shared" | "anchored" | "failed";
+
 export interface Creator {
   id: string;
   name: string;
@@ -65,6 +74,13 @@ export interface CampaignRequest {
   requestedClaims: string[];
   transformation: "image" | "video";
   creativeBrief: string;
+  // Studio editorial fields (optional so older records keep working):
+  // objective, primary message and visual direction refine the brief.
+  // They never change the rights evaluation — platform, country, claims
+  // and transformation do, and edits to those re-run preflight.
+  objective?: string;
+  primaryMessage?: string;
+  visualDirection?: string;
 }
 
 export type CampaignStatus = "draft" | "blocked" | "generating" | "review" | "approved";
@@ -109,6 +125,12 @@ export interface ProductionJob {
   kind: ProductionStagePlan["kind"];
   capability: string;
   prompt: string;
+  /** Storage-safe request metadata: what was asked for, never secrets. */
+  requestMeta?: {
+    aspectRatio?: string;
+    durationSeconds?: number;
+    sourceKind?: "source-media" | "prior-output";
+  };
   status: "queued" | "running" | "succeeded" | "failed";
   error?: string;
   outputUrl?: string;
@@ -142,6 +164,61 @@ export interface DerivativeReceipt {
   visibility: Visibility;
   ual?: string;
   ualExplorer?: string;
+  /** Explicit state from the real publish result. Missing on legacy rows (non-public). */
+  publicationStatus?: PublicationStatus;
+}
+
+/**
+ * Immutable-by-contract public verification snapshot. Built once per approval
+ * from already-approved workspace data and containing ONLY intentional public
+ * fields — no workspace/session ids, no user identifiers, no wallet material,
+ * no private source media, no consent documents, no internal notes, no
+ * private claims, no DKG payloads, no credentials. UAL/explorer are set only
+ * when the record genuinely anchored.
+ */
+export interface PublicVerificationOutput {
+  id: string;
+  label: string;
+  mediaType: "image" | "video";
+  format: string;
+  outputUrl: string;
+  outputHash: string;
+  capability: string;
+  promptHash: string;
+  claimsUsed: string[];
+  generatedAt: string;
+}
+
+export interface PublicVerificationSnapshot {
+  ref: string;
+  campaignId: string;
+  title: string;
+  brand: string;
+  productName: string;
+  platform: string;
+  country: string;
+  status: "approved";
+  approvedAt: string;
+  creatorName: string;
+  rightsSummary: {
+    platforms: string[];
+    countries: string[];
+    validUntil: string;
+    status: string;
+  };
+  verifiedClaims: string[];
+  brandRules: {
+    brand: string;
+    productName: string;
+    approvedClaims: string[];
+  };
+  captions: { platform: string; text: string; claimsUsed: string[]; disclosure: string }[];
+  outputs: PublicVerificationOutput[];
+  publicationStatus: PublicationStatus | null;
+  /** Set ONLY when genuinely anchored. */
+  ual: string | null;
+  /** Set ONLY when genuinely anchored. */
+  explorerUrl: string | null;
 }
 
 export interface CampaignComment {
@@ -166,6 +243,10 @@ export interface Campaign {
   request: CampaignRequest;
   status: CampaignStatus;
   campaignUAL?: string; // set once the campaign record is published to DKG
+  /** Explicit state from the real VM publish result. Missing on legacy rows (non-public). */
+  publicationStatus?: PublicationStatus;
+  /** High-entropy public verification reference. Set at approval; anonymous reads use it. */
+  verificationRef?: string;
   preflight?: PreflightDecision;
   jobs: ProductionJob[];
   receipts: DerivativeReceipt[];

@@ -80,7 +80,7 @@ export function preflightEvent(
       id: newId("evt"),
       at: nowIso(),
       kind: "preflight.block",
-      summary: `Preflight blocked "${campaign.title}" before generation — ${decision.blockers.length} policy conflict${decision.blockers.length === 1 ? "" : "s"}, $0 inference spent.`,
+      summary: `Changes needed before creation: "${campaign.title}" — ${decision.blockers.length} reason${decision.blockers.length === 1 ? "" : "s"}, no production spend.`,
       refs: [campaign.id]
     };
   }
@@ -88,7 +88,7 @@ export function preflightEvent(
     id: newId("evt"),
     at: nowIso(),
     kind: "preflight.allow",
-    summary: `Preflight approved "${campaign.title}" — rights and claims verified, cleared for Livepeer production.`,
+    summary: `Approved to create: "${campaign.title}" — creator permissions and brand rules allow this campaign.`,
     refs: [campaign.id]
   };
 }

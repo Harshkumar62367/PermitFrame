@@ -13,7 +13,8 @@ export default async function SharePage({ params }: { params: Promise<{ token: s
   if (!campaign) notFound();
 
   const claims = campaign.preflight?.allowedClaims ?? [];
-  const receipts = campaign.receipts.map((r) => ({ ...r, verifyUrl: `/verify/${r.id}` }));
+  const verifyBase = campaign.verificationRef ? `/verify/${campaign.verificationRef}` : null;
+  const receipts = campaign.receipts.map((r) => ({ ...r, verifyUrl: verifyBase ? `${verifyBase}#output-${r.id}` : null }));
 
   return (
     <div className="min-h-screen bg-background">
@@ -69,9 +70,15 @@ export default async function SharePage({ params }: { params: Promise<{ token: s
                   <p className="text-[13px] font-medium">{r.label}</p>
                   <p className="font-mono text-[10px] uppercase tracking-[0.1em] text-muted-foreground">{r.format}</p>
                 </div>
-                <Link href={r.verifyUrl} className="text-[12px] font-medium text-sky-700 hover:underline dark:text-sky-400">
-                  Verify →
-                </Link>
+                {r.verifyUrl ? (
+                  <Link href={r.verifyUrl} className="text-[12px] font-medium text-sky-700 hover:underline dark:text-sky-400">
+                    Verify →
+                  </Link>
+                ) : (
+                  <span className="text-[11px] text-muted-foreground" title="Approve the pack to publish its verification link">
+                    Verify after approval
+                  </span>
+                )}
               </div>
             </div>
           ))}
@@ -85,7 +92,7 @@ export default async function SharePage({ params }: { params: Promise<{ token: s
         </div>
 
         <p className="mt-6 text-center text-[11px] text-muted-foreground">
-          Generated through the Livepeer Agent · provenance recorded on the OriginTrail DKG ·
+          Produced by PermitFrame · proof trail attached ·
           attestations prove declarations and integrity, not legal ownership.
         </p>
       </div>

@@ -6,7 +6,8 @@ import type {
   Platform,
   PreflightDecision,
   ProductFacts,
-  SourceMedia
+  SourceMedia,
+  Transformation
 } from "./types";
 import { CAPABILITY_PRICE_MAP } from "./types";
 import { loadDb, newId, nowIso, sha256, updateDb } from "./store";
@@ -71,7 +72,7 @@ export async function upsertProductFacts(input: {
       id: newId("evt"),
       at: nowIso(),
       kind: "facts.updated",
-      summary: `Product facts published for ${facts.brand} ${facts.productName}${ual ? ` (${ual})` : ""}.`,
+      summary: `Product facts published for ${facts.brand} ${facts.productName}.`,
       refs: [facts.id]
     });
   });
@@ -106,11 +107,65 @@ export async function registerSourceMedia(input: {
       id: newId("evt"),
       at: nowIso(),
       kind: "media.registered",
-      summary: `Source media "${media.title}" registered${ual ? ` (${ual})` : ""}.`,
+      summary: `Source media "${media.title}" registered.`,
       refs: [media.id]
     });
   });
   return { ...media, ual };
+}
+
+/* ------------------------- consent invites ------------------------ */
+
+const INVITE_PLATFORMS: Platform[] = ["instagram", "tiktok", "youtube", "linkedin"];
+const DEFAULT_TRANSFORMATIONS: Transformation[] = ["edit", "animate", "upscale", "crop"];
+
+/**
+ * Create a creator consent invite. The creator opens the link, confirms or
+ * narrows the draft, and attests — only the attestation creates the passport.
+ * No DKG write happens here, so this works fully offline.
+ */
+export async function createConsentInvite(input: {
+  creatorName: string;
+  handle?: string;
+  platforms: Platform[];
+  countries: string[];
+  validUntil: string;
+}): Promise<{ token: string; creatorId: string }> {
+  const name = input.creatorName.trim();
+  if (!name) throw new Error("Creator name is required.");
+  const platforms = input.platforms.filter((p): p is Platform => INVITE_PLATFORMS.includes(p));
+  if (platforms.length === 0) throw new Error("Select at least one platform.");
+  const countries = [...new Set(input.countries.map((c) => c.trim().toUpperCase()).filter((c) => c.length === 2))];
+  if (countries.length === 0) throw new Error("Add at least one 2-letter country code.");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.validUntil) || input.validUntil <= new Date().toISOString().slice(0, 10)) {
+    throw new Error("Expiry must be a future date.");
+  }
+  const creatorId = newId("creator");
+  const token = newId("invite");
+  await updateDb((d) => {
+    d.creators.push({ id: creatorId, name, handle: input.handle?.trim() || name.toLowerCase().replace(/[^a-z0-9]+/g, "") });
+    d.consentInvites.push({
+      token,
+      creatorId,
+      draft: {
+        creatorId,
+        platforms,
+        countries,
+        allowedTransformations: [...DEFAULT_TRANSFORMATIONS],
+        validUntil: input.validUntil,
+        sourceMediaIds: []
+      },
+      status: "pending"
+    });
+    d.events.push({
+      id: newId("evt"),
+      at: nowIso(),
+      kind: "consent.invited",
+      summary: `Consent invite created for ${name} (${platforms.join(", ")} · ${countries.join(", ")}).`,
+      refs: [creatorId]
+    });
+  });
+  return { token, creatorId };
 }
 
 /* ------------------------- passport revoke / amend ------------------------ */
@@ -122,9 +177,8 @@ export async function revokePassport(passportId: string, note: string): Promise<
   if (passport.status === "revoked") return { revoked: false, blockedCampaigns: [] };
 
   const change = { kind: "revoked" as const, note: note.trim() || "Permission revoked by the creator/agency.", at: nowIso() };
-  let ual: string | undefined;
   try {
-    ual = (await getDkg().publish(amendmentKa(passport, change), "public")).ual;
+    await getDkg().publish(amendmentKa(passport, change), "public");
   } catch {
     // amendment stored locally; still enforceable in the app layer
   }
@@ -139,7 +193,7 @@ export async function revokePassport(passportId: string, note: string): Promise<
       id: newId("evt"),
       at: nowIso(),
       kind: "passport.revoked",
-      summary: `Permission passport ${passportId} revoked${ual ? ` — amendment ${ual}` : ""}: ${change.note}`,
+      summary: `Permission ${passportId} revoked: ${change.note}`,
       refs: [passportId]
     });
   });

@@ -1,76 +1,41 @@
-import { loadDb } from "./store";
-import { explorerUrlFor } from "./dkg/adapter";
+import { eq } from "drizzle-orm";
+import { getDb } from "./db/client";
+import { verificationSnapshots } from "./db/schema";
+import type { PublicVerificationSnapshot } from "./types";
 
-/** Resolve any PermitFrame reference (receipt id, UAL, campaign id) to public verification data. */
-export async function lookupVerification(ref: string) {
-  const db = await loadDb();
+// Pure snapshot construction lives in ./verification-snapshot (no I/O, no
+// session) so it stays unit-testable. Re-exported here for callers.
+export { buildPublicSnapshot, newVerificationRef } from "./verification-snapshot";
 
-  const receipt = db.campaigns.flatMap((c) => c.receipts).find((r) => r.id === ref || r.ual === ref);
-  if (receipt) {
-    const campaign = db.campaigns.find((c) => c.id === receipt.campaignId);
-    const passport = db.passports.find((p) => p.id === receipt.derivedFrom.passportId);
-    const facts = db.productFacts.find((f) => f.id === receipt.derivedFrom.productFactsId);
-    return {
-      found: true as const,
-      kind: "DerivativeReceipt",
-      ref: receipt.id,
-      ual: receipt.ual ?? null,
-      explorerUrl: receipt.ual ? explorerUrlFor(receipt.ual) : null,
-      published: Boolean(receipt.ual),
-      label: receipt.label,
-      media: { type: receipt.mediaType, url: receipt.outputUrl, hash: receipt.outputHash, format: receipt.format },
-      generation: { capability: receipt.capability, promptHash: receipt.promptHash, generatedAt: receipt.generatedAt },
-      claimsUsed: receipt.claimsUsed,
-      lineage: {
-        campaign: campaign ? { id: campaign.id, title: campaign.title, ual: campaign.campaignUAL ?? null } : null,
-        permissionPassport: passport
-          ? {
-              id: passport.id,
-              creator: passport.creatorName,
-              ual: passport.ual ?? null,
-              validUntil: passport.validUntil,
-              status: passport.status,
-              platforms: passport.platforms,
-              countries: passport.countries
-            }
-          : null,
-        productFacts: facts
-          ? {
-              id: facts.id,
-              brand: facts.brand,
-              productName: facts.productName,
-              ual: facts.ual ?? null,
-              approvedClaims: facts.approvedClaims,
-              prohibitedClaims: facts.prohibitedClaims
-            }
-          : null
-      }
-    };
-  }
+export type VerificationLookup =
+  | { found: true; snapshot: PublicVerificationSnapshot }
+  | { found: false; ref: string };
 
-  const campaign = db.campaigns.find((c) => c.id === ref || c.campaignUAL === ref);
-  if (campaign) {
-    return {
-      found: true as const,
-      kind: "Campaign",
-      ref: campaign.id,
-      ual: campaign.campaignUAL ?? null,
-      explorerUrl: campaign.campaignUAL ? explorerUrlFor(campaign.campaignUAL) : null,
-      published: Boolean(campaign.campaignUAL),
-      label: campaign.title,
-      media: null,
-      generation: null,
-      claimsUsed: campaign.preflight?.allowedClaims ?? [],
-      lineage: {
-        campaign: { id: campaign.id, title: campaign.title, ual: campaign.campaignUAL ?? null },
-        permissionPassport: null,
-        productFacts: null,
-        receipts: campaign.receipts.map((r) => ({ id: r.id, label: r.label, ual: r.ual ?? null }))
-      }
-    };
-  }
-
-  return { found: false as const, ref };
+/**
+ * Anonymous verification read: queries ONLY the public snapshots table in
+ * Neon. Never touches session workspace state, cookies, or auth — safe to
+ * call from the public route without a Privy session.
+ */
+export async function lookupVerification(ref: string): Promise<VerificationLookup> {
+  const rows = await getDb()
+    .select({ payload: verificationSnapshots.payload })
+    .from(verificationSnapshots)
+    .where(eq(verificationSnapshots.ref, ref))
+    .limit(1);
+  const payload = rows[0]?.payload ?? null;
+  if (!payload) return { found: false, ref };
+  return { found: true, snapshot: payload };
 }
 
-export type VerificationResult = Awaited<ReturnType<typeof lookupVerification>>;
+/** Persist (upsert) the snapshot. Called at approval; content reflects latest approval. */
+export async function saveVerificationSnapshot(snapshot: PublicVerificationSnapshot): Promise<void> {
+  await getDb()
+    .insert(verificationSnapshots)
+    .values({ ref: snapshot.ref, campaignId: snapshot.campaignId, payload: snapshot, updatedAt: new Date() })
+    .onConflictDoUpdate({
+      target: verificationSnapshots.ref,
+      set: { campaignId: snapshot.campaignId, payload: snapshot, updatedAt: new Date() }
+    });
+}
+
+export type VerificationResult = VerificationLookup;

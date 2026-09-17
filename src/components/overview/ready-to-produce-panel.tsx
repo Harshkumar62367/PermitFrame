@@ -5,7 +5,7 @@ import { useState } from "react";
 import { ArrowRight, Check, FileSearch, Loader2, Sparkles } from "lucide-react";
 import { CampaignThumbnail } from "./campaign-thumbnail";
 import { EvidenceSummary } from "./evidence-summary";
-import { StatusBadge } from "@/components/ui/status-badge";
+import { campaignOutcome, OutcomeBadge } from "@/components/campaign-outcome";
 import { apiPost } from "@/lib/api";
 import { useInvalidateWorkspaceSnapshot, type SnapshotCampaign } from "@/lib/use-workspace-snapshot";
 
@@ -69,7 +69,7 @@ export function ReadyToProducePanel({ campaign }: { campaign: SnapshotCampaign }
     >
       <div className="border-b border-emerald-200/70 bg-emerald-50/70 px-5 py-3 dark:border-emerald-900 dark:bg-emerald-950/30">
         <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-emerald-700 dark:text-emerald-300">
-          {hasOutputs ? "Generated and receipted" : producing ? "Producing on Livepeer" : "Verified and ready"}
+          {hasOutputs ? "Generated and receipted" : producing ? "Producing" : "Verified and ready"}
         </p>
       </div>
 
@@ -81,7 +81,15 @@ export function ReadyToProducePanel({ campaign }: { campaign: SnapshotCampaign }
 
       <div className="flex flex-1 flex-col p-5">
         <div className="flex flex-wrap items-center gap-2">
-          <StatusBadge status={producing ? "generating" : campaign.effectiveStatus === "approved" ? "approved" : "ready"} />
+          <OutcomeBadge
+            outcome={campaignOutcome({
+              status: campaign.effectiveStatus,
+              decision: campaign.preflight.decision,
+              hasOutputs: campaign.receiptsCount > 0,
+              publicationStatus: campaign.recordPublicationStatus,
+              campaignUAL: campaign.campaignUAL
+            })}
+          />
           <span className="truncate font-mono text-[10.5px] uppercase tracking-[0.12em] text-muted-foreground">
             {campaign.platform} · {campaign.country}
           </span>
@@ -111,7 +119,7 @@ export function ReadyToProducePanel({ campaign }: { campaign: SnapshotCampaign }
             queriedRights={campaign.preflight.queriedRights}
             queriedFacts={campaign.preflight.queriedFacts}
             checkedAt={campaign.preflight.checkedAt}
-            spentLabel={campaign.spentUsd > 0 ? `$${campaign.spentUsd.toFixed(4)} inference spent` : "$0 spent so far"}
+            spentLabel={campaign.spentUsd > 0 ? `$${campaign.spentUsd.toFixed(4)} production spend` : "$0 spent so far"}
           />
         </div>
 
@@ -143,7 +151,7 @@ export function ReadyToProducePanel({ campaign }: { campaign: SnapshotCampaign }
                 </>
               ) : (
                 <>
-                  <Sparkles className="h-3.5 w-3.5" aria-hidden /> Generate with Livepeer
+                  <Sparkles className="h-3.5 w-3.5" aria-hidden /> Generate pack
                 </>
               )}
             </button>

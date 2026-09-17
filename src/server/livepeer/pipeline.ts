@@ -1,4 +1,4 @@
-import type { Campaign, DerivativeReceipt, ProductionJob } from "../types";
+import type { Campaign, DerivativeReceipt, ProductionJob, PublicationStatus } from "../types";
 import { loadDb, newId, nowIso, sha256, updateDb } from "../store";
 import { getDkg } from "../dkg";
 import { receiptKa, campaignKa } from "../dkg/schemas";
@@ -20,21 +20,33 @@ export interface StageOutcome {
   humanSummary?: string;
 }
 
-export function createJobRecords(campaign: Campaign): ProductionJob[] {
+export function createJobRecords(campaign: Campaign, stageIds?: string[]): ProductionJob[] {
   const plan = campaign.preflight?.plan ?? [];
-  return plan.map((stage) => ({
-    id: newId("job"),
-    campaignId: campaign.id,
-    stageId: stage.id,
-    kind: stage.kind,
-    capability: stage.capability,
-    prompt: composeStagePrompt(campaign, stage.id),
-    status: "queued",
-    startedAt: nowIso()
-  }));
+  const wanted = stageIds && stageIds.length > 0 ? new Set(stageIds) : null;
+  return plan
+    .filter((stage) => !wanted || wanted.has(stage.id))
+    .map((stage) => ({
+      id: newId("job"),
+      campaignId: campaign.id,
+      stageId: stage.id,
+      kind: stage.kind,
+      capability: stage.capability,
+      prompt: composeStagePrompt(campaign, stage.id),
+      requestMeta: requestMetaFor(stage),
+      status: "queued",
+      startedAt: nowIso()
+    }));
 }
 
-export async function runProduction(campaignId: string): Promise<{ finished: boolean; error?: string }> {
+/** Storage-safe description of what a stage asks the provider for. */
+export function requestMetaFor(stage: { kind: string; format: string }): NonNullable<ProductionJob["requestMeta"]> {
+  return {
+    aspectRatio: stage.format,
+    ...(stage.kind === "image-to-video" ? { durationSeconds: 5 } : {})
+  };
+}
+
+export async function runProduction(campaignId: string, onlyStageIds?: string[]): Promise<{ finished: boolean; error?: string }> {
   const db = await loadDb();
   const campaign = db.campaigns.find((c) => c.id === campaignId);
   if (!campaign) return { finished: true, error: "Campaign not found" };
@@ -52,6 +64,9 @@ export async function runProduction(campaignId: string): Promise<{ finished: boo
       previousOutputUrl = job.outputUrl ?? previousOutputUrl;
       continue;
     }
+    // Stage-subset runs (studio deliverable selection, single-stage refine)
+    // leave unselected jobs untouched — they are neither executed nor marked.
+    if (onlyStageIds && !onlyStageIds.includes(job.stageId)) continue;
     if (anyFailure) break; // a failed stage halts dependent stages
 
     await updateDb((d) => {
@@ -61,6 +76,10 @@ export async function runProduction(campaignId: string): Promise<{ finished: boo
       if (j) {
         j.status = "running";
         j.startedAt = nowIso();
+        // Record what actually fed this run: the registered source, or a
+        // prior stage output chained by the orchestrator.
+        const fromPrior = previousOutputUrl !== undefined && previousOutputUrl !== sourceMedia?.url;
+        j.requestMeta = { ...j.requestMeta, sourceKind: fromPrior ? "prior-output" : "source-media" };
       }
     });
 
@@ -193,8 +212,11 @@ async function publishReceipt(
     const record = await dkg.publish(receiptKa(receipt), receipt.visibility);
     receipt.ual = record.ual;
     receipt.ualExplorer = record.explorerUrl;
+    receipt.publicationStatus = record.publicationStatus;
   } catch {
-    // keep the receipt locally even if publication fails; the UI will show it unpublished
+    // keep the receipt locally even if publication fails; the persisted
+    // "failed" state makes the retry path honest.
+    receipt.publicationStatus = "failed";
   }
 
   await updateDb((d) => {
@@ -204,26 +226,35 @@ async function publishReceipt(
       id: newId("evt"),
       at: nowIso(),
       kind: "dkg.publish",
-      summary: `Derivative receipt ${receipt.ual ?? receipt.id} published for stage "${receipt.label}".`,
+      summary: `Derivative receipt ${receipt.id} published for stage "${receipt.label}".`,
       refs: [campaignId, receipt.id]
     });
   });
 }
 
-export async function publishCampaignRecord(campaignId: string): Promise<string | undefined> {
+export async function publishCampaignRecord(
+  campaignId: string
+): Promise<{ ual?: string; publicationStatus: PublicationStatus }> {
   const db = await loadDb();
   const campaign = db.campaigns.find((c) => c.id === campaignId);
-  if (!campaign) return undefined;
+  if (!campaign) return { publicationStatus: "failed" };
   try {
     // Campaign approval is the explicit moment we anchor minimized evidence
     // on-chain. Earlier facts/consents stay in WM/SWM unless separately chosen.
     const record = await getDkg().publishVerifiable(campaignKa(campaign), "shared");
     await updateDb((d) => {
       const c = d.campaigns.find((x) => x.id === campaignId);
-      if (c) c.campaignUAL = record.ual;
+      if (c) {
+        c.campaignUAL = record.ual;
+        c.publicationStatus = record.publicationStatus;
+      }
     });
-    return record.ual;
+    return { ual: record.ual, publicationStatus: record.publicationStatus };
   } catch {
-    return undefined;
+    await updateDb((d) => {
+      const c = d.campaigns.find((x) => x.id === campaignId);
+      if (c) c.publicationStatus = "failed";
+    }).catch(() => undefined);
+    return { publicationStatus: "failed" };
   }
 }

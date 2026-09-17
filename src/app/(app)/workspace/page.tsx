@@ -70,7 +70,7 @@ export default function WorkspaceOverviewPage() {
                   </span>
                   <span>
                     {w.creatorName} · passport valid to {w.validUntil}. Renew it on the{" "}
-                    <Link href="/consents" className="underline underline-offset-2">consents page</Link> — expired rights block new preflights.
+                    <Link href="/consents" className="underline underline-offset-2">Creator permissions page</Link> — expired rights block new permission checks.
                   </span>
                 </div>
               ))}
@@ -106,7 +106,7 @@ export default function WorkspaceOverviewPage() {
                 <div className="min-w-0">
                   <p className="text-[14px] font-semibold tracking-tight">Brief your first campaign</p>
                   <p className="mt-0.5 text-[12.5px] text-muted-foreground">
-                    Every request is checked against creator rights and verified product facts before Livepeer spends a cent.
+                    Every request is checked against creator rights and verified brand rules before production spend.
                   </p>
                 </div>
                 <Button
@@ -137,9 +137,9 @@ function AllClearPanel({ onNewCampaign }: { onNewCampaign: () => void }) {
       <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-emerald-700 dark:text-emerald-300">
         All clear
       </p>
-      <p className="mt-2 text-[17px] font-semibold tracking-tight">Nothing is blocked by policy.</p>
+      <p className="mt-2 text-[17px] font-semibold tracking-tight">No campaign needs changes right now.</p>
       <p className="mt-1 max-w-md text-[13px] leading-relaxed text-muted-foreground">
-        Blocked requests will appear here with the exact failed rules and the inference spend that was prevented.
+        Campaigns that need changes will appear here with the exact failed rules and the production spend that was prevented.
       </p>
       <div className="mt-4">
         <Button

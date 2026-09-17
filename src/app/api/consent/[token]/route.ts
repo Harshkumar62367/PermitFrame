@@ -71,7 +71,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       id: newId("evt"),
       at: nowIso(),
       kind: "consent.attested",
-      summary: `Creator ${passport.creatorName} attested a Permission Passport${ual ? ` (${ual})` : ""}.`,
+      summary: `Creator ${passport.creatorName} attested a Permission Passport.`,
       refs: [passport.id]
     });
   });

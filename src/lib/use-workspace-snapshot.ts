@@ -2,7 +2,7 @@
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import type { ConsentDraft, ProductFacts, SourceMedia } from "@/server/types";
+import type { ConsentDraft, ProductFacts, PublicationStatus, SourceMedia } from "@/server/types";
 
 export type SnapshotDecision = "allow" | "block" | "pending";
 export type SnapshotStage = "briefed" | "policy-check" | "ready" | "generating" | "delivered";
@@ -58,6 +58,12 @@ export interface SnapshotCampaign {
   thumbnailUrl: string | null;
   generatedUrl: string | null;
   receiptsCount: number;
+  /** Campaign evidence record, when approval published one. Null until then. */
+  campaignUAL: string | null;
+  /** Explicit state from the real publish result. Missing on legacy rows (non-public). */
+  recordPublicationStatus: PublicationStatus | null;
+  /** Stable public verification reference, set at approval. Null until then. */
+  verificationRef: string | null;
   activeJobs: number;
   spentUsd: number;
   estimatedUsd: number;

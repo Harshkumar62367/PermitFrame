@@ -38,7 +38,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     // Prefetch the workspace snapshot once while the persistent app shell
-    // hydrates. Overview and Campaigns read this same cached query on
+    // hydrates. Campaigns and other pages read this same cached query on
     // navigation, so the second route renders instantly from cache.
     void queryClient.prefetchQuery({ queryKey: WORKSPACE_SNAPSHOT_KEY, queryFn: ({ signal }) => fetchWorkspaceSnapshot(signal), staleTime: 60_000 }).catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps

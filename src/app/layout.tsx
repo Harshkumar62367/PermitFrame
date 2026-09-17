@@ -21,7 +21,7 @@ const plexMono = IBM_Plex_Mono({
 export const metadata: Metadata = {
   title: "PermitFrame — verified AI campaign production",
   description:
-    "From creator consent to verified campaign pack — PermitFrame compiles creator permissions and verified product facts from the OriginTrail DKG into enforceable production policy, and builds campaign packs through the Livepeer Agent."
+    "PermitFrame helps creative teams turn approved creator rights and brand rules into platform-ready AI campaign assets — with a reviewable proof trail."
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

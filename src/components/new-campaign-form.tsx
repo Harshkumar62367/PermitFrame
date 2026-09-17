@@ -45,8 +45,8 @@ export function NewCampaignForm({ onCreated }: { onCreated?: (id: string) => voi
   function validate(): FieldErrors {
     const errors: FieldErrors = {};
     if (form.country.trim().length !== 2) errors.country = "Use a 2-letter country code (e.g. GR for Greece, DE for Germany).";
-    if (!form.creativeBrief.trim()) errors.brief = "Describe the shot — the agent generates from this brief.";
-    else if (form.creativeBrief.trim().length < 12) errors.brief = "Give the agent a little more to work with (12+ characters).";
+    if (!form.creativeBrief.trim()) errors.brief = "Describe the shot — the studio generates from this brief.";
+    else if (form.creativeBrief.trim().length < 12) errors.brief = "Give the brief a little more to work with (12+ characters).";
     return errors;
   }
 
@@ -92,7 +92,7 @@ export function NewCampaignForm({ onCreated }: { onCreated?: (id: string) => voi
     <div className="rounded-2xl border border-border bg-card p-6">
       <h3 className="text-[15px] font-semibold tracking-tight">New campaign request</h3>
       <p className="mt-1 text-[12.5px] text-muted-foreground">
-        It runs through DKG preflight the moment you create it — allowed or blocked, with reasons.
+        Every campaign is checked against approved rights and brand rules the moment you create it — cleared or blocked, with reasons.
       </p>
       <div className="mt-5 grid gap-4 sm:grid-cols-2">
         <div className="space-y-1.5">
@@ -193,10 +193,10 @@ export function NewCampaignForm({ onCreated }: { onCreated?: (id: string) => voi
         aria-describedby={`${uid}-submit-hint`}
         className="mt-5 rounded-full bg-emerald-700 font-medium text-emerald-50 hover:bg-emerald-600 dark:bg-emerald-500 dark:text-emerald-950 dark:hover:bg-emerald-400"
       >
-        {busy ? "Running preflight…" : "Create & run policy check"}
+        {busy ? "Running permission check…" : "Create & run permission check"}
       </Button>
       <p id={`${uid}-submit-hint`} className="mt-2 text-[11.5px] text-muted-foreground">
-        {busy ? "Policy check running — duplicate clicks are ignored." : "Country and creative brief are required."}
+        {busy ? "Permission check running — duplicate clicks are ignored." : "Country and creative brief are required."}
       </p>
     </div>
   );

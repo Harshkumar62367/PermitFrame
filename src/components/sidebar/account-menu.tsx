@@ -83,7 +83,7 @@ export function AccountMenu({ collapsed = false }: { collapsed?: boolean }) {
             className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[12.5px] text-foreground transition hover:bg-accent dark:text-white/80 dark:hover:text-white"
           >
             {copied ? <Check className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" aria-hidden /> : <Copy className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />}
-            {copied ? "Wallet copied" : "Copy wallet address"}
+            {copied ? "Account ID copied" : "Copy account ID"}
           </button>
         )}
         <Link

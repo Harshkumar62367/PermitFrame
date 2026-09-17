@@ -7,18 +7,18 @@ const STEPS = [
     icon: BadgeCheck,
     kicker: "01 — Consent",
     title: "The creator attests a Permission Passport",
-    body: "Platforms, territories, transformations and expiry — chosen by the creator on a consent link, published as a minimized Knowledge Asset."
+    body: "Platforms, territories, transformations and expiry — chosen by the creator on a consent link and stored as a queryable rights record."
   },
   {
     icon: ShieldCheck,
-    kicker: "02 — Preflight",
-    title: "The DKG decides before a dollar is spent",
-    body: "Real SPARQL queries over rights and verified product facts compile every request into allow or block — with the exact reasons and the evidence."
+    kicker: "02 — Permission check",
+    title: "Rights decide before a dollar is spent",
+    body: "Every request is checked against approved rights and verified brand rules — cleared or blocked, with the exact reasons and the evidence."
   },
   {
     icon: Sparkles,
     kicker: "03 — Produce",
-    title: "Livepeer Agent builds the campaign pack",
+    title: "The studio builds the campaign pack",
     body: "Keyframe, feed variation, wide header, and a five-second vertical cut — generated inside the constraints, with live cost per output."
   },
   {
@@ -32,7 +32,7 @@ const STEPS = [
 const FEATURES = [
   { icon: BadgeCheck, title: "Creator Permission Passports", body: "Creator-attested usage rights as queryable knowledge — not a spreadsheet." },
   { icon: ShieldCheck, title: "Verified product facts", body: "Approved and prohibited advertising claims, with the evidence notes behind them." },
-  { icon: Ban, title: "Policy preflight", body: "Invalid campaigns are refused before inference spend — with precise, evidence-linked reasons." },
+  { icon: Ban, title: "Permission check", body: "Invalid campaigns are refused before production spend — with precise, evidence-linked reasons." },
   { icon: Layers, title: "Complete campaign packs", body: "9:16, 1:1, 16:9 and a short vertical video — every format the platform needs." },
   { icon: FileCheck2, title: "Derivative receipts", body: "Output hash, capability, prompt hash and claims used — published per output." },
   { icon: BadgeCheck, title: "Public verification", body: "A client-facing page that proves what was recorded — and honestly states its limits." }
@@ -81,7 +81,7 @@ export function PolicyScenarios() {
                 <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-rose-700/70 dark:text-rose-300/70">TikTok · Germany · “waterproof”</span>
               </div>
               <p className="mt-5 text-[15px] font-medium leading-snug text-rose-950 dark:text-rose-100">
-                Three precise reasons. Zero inference spent.
+                Three precise reasons. Zero production spend.
               </p>
               <ul className="mt-4 space-y-2.5 text-[13px] leading-relaxed text-rose-900/80 dark:text-rose-200/80">
                 <li className="flex gap-2.5"><Ban className="mt-0.5 h-4 w-4 shrink-0 text-rose-600 dark:text-rose-400" aria-hidden />TikTok is not in the creator&rsquo;s permission passports</li>

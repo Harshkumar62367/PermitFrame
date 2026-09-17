@@ -26,7 +26,7 @@ export default function LandingPage() {
           </nav>
           <div className="flex shrink-0 items-center gap-2">
             <ThemeToggle />
-            <WorkspaceCta label="Open workspace" className="rounded-full bg-emerald-400 font-medium text-emerald-950 hover:bg-emerald-300" />
+            <WorkspaceCta label="Open campaigns" className="rounded-full bg-emerald-400 font-medium text-emerald-950 hover:bg-emerald-300" />
           </div>
         </div>
       </header>
@@ -44,7 +44,7 @@ export default function LandingPage() {
         <div className="relative mx-auto w-full max-w-4xl px-4 text-center sm:px-6">
           <FadeIn>
             <span className="inline-flex max-w-full items-center gap-2 rounded-full border border-emerald-600/20 bg-emerald-600/[0.06] px-3.5 py-1.5 font-mono text-[11px] uppercase tracking-[0.18em] text-emerald-700 dark:border-emerald-400/20 dark:bg-emerald-400/[0.06] dark:text-emerald-300">
-              Livepeer Agent × OriginTrail DKG
+              Approved rights → platform-ready assets
             </span>
           </FadeIn>
           <FadeIn delay={0.08}>
@@ -55,9 +55,8 @@ export default function LandingPage() {
           </FadeIn>
           <FadeIn delay={0.16}>
             <p className="mx-auto mt-6 max-w-2xl text-pretty text-base leading-relaxed text-muted-foreground sm:text-lg dark:text-white/60">
-              PermitFrame turns creator permissions and verified brand facts into enforceable
-              production policy — then builds the entire campaign pack through the Livepeer
-              Agent. Every output ships with verifiable provenance.
+              PermitFrame helps creative teams turn approved creator rights and brand rules into
+              platform-ready AI campaign assets — with a reviewable proof trail.
             </p>
           </FadeIn>
         </div>
@@ -65,10 +64,10 @@ export default function LandingPage() {
           <Marquee
             items={[
               "Permission Passports",
-              "Verified Product Facts",
-              "SPARQL preflight",
-              "Livepeer Agent MCP",
-              "OriginTrail DKG",
+              "Verified Brand Rules",
+              "Permission check",
+              "AI production",
+              "Proof trail",
               "Derivative receipts",
               "9:16 · 1:1 · 16:9",
               "Public verification",
@@ -109,7 +108,7 @@ export default function LandingPage() {
         <div className="mx-auto flex w-full max-w-6xl flex-col items-center justify-between gap-4 px-4 text-[12px] text-muted-foreground sm:flex-row sm:px-6">
           <div className="flex items-center gap-2">
             <PermitFrameMark className="h-4 w-4 shrink-0 text-emerald-700 dark:text-emerald-300" />
-            <span>PermitFrame Core — Livepeer Agent × OriginTrail DKG</span>
+            <span>PermitFrame — rights-aware creative production</span>
           </div>
           <p className="max-w-md text-center sm:text-right">
             Attestations prove declarations and integrity — not legal ownership. Built for the

@@ -1,7 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import { useId, useState } from "react";
-import { Check, Copy, RefreshCw } from "lucide-react";
+import { ArrowLeft, Check, Copy, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { PageHeader } from "@/components/ui/page-header";
@@ -47,7 +48,7 @@ export default function GraphPage() {
   const health: DkgHealth | null = graph.data?.health ?? null;
   const assets: DkgAsset[] = graph.data?.assets ?? [];
   const loadError = !graph.data && graph.isError
-    ? (graph.error instanceof Error ? graph.error.message : "Knowledge graph failed to load.")
+    ? (graph.error instanceof Error ? graph.error.message : "Proof records failed to load.")
     : null;
 
   const [query, setQuery] = useState(EXAMPLE_QUERY);
@@ -89,10 +90,13 @@ export default function GraphPage() {
 
   return (
     <div className="pf-page space-y-8">
+      <Link href="/verifier" className="inline-flex items-center gap-1.5 text-[13px] font-medium text-emerald-700 hover:underline dark:text-emerald-300">
+        <ArrowLeft className="h-4 w-4" aria-hidden /> Back to Verification
+      </Link>
       <PageHeader
-        eyebrow="Trust & proof"
-        title="Knowledge graph"
-        description="Permission passports, verified product facts and derivative receipts are published to the OriginTrail DKG as Knowledge Assets. Every preflight decision and every generated frame traces back to these records."
+        eyebrow="Verification · Advanced"
+        title="Proof inspector"
+        description="A technical view of the underlying proof records behind campaigns, permissions, and brand rules. Most producers never need this — Verification covers day-to-day review."
       />
 
       {loadError && <ErrorState message={loadError} onRetry={() => { void graph.refetch(); }} />}
@@ -128,9 +132,9 @@ export default function GraphPage() {
         </SectionCard>
       )}
 
-      <section aria-label="Knowledge Assets">
+      <section aria-label="Proof records">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-lg font-semibold tracking-tight">Knowledge Assets</h2>
+          <h2 className="text-lg font-semibold tracking-tight">Proof records</h2>
           <div className="flex shrink-0 items-center gap-2">
             <span className="text-xs text-muted-foreground">{assets.length} published</span>
             <Button
@@ -139,18 +143,18 @@ export default function GraphPage() {
               onClick={() => { void graph.refetch(); }}
               disabled={graph.isFetching}
               aria-busy={graph.isFetching}
-              title="Force a live DKG read, ignoring the cache"
+              title="Force a live proof-ledger read, ignoring the cache"
               className="h-7 rounded-full px-2.5 text-[11.5px]"
             >
               <RefreshCw className={graph.isFetching ? "h-3 w-3 animate-spin" : "h-3 w-3"} aria-hidden />
-              {graph.isFetching ? "Refreshing…" : "Refresh graph"}
+              {graph.isFetching ? "Refreshing…" : "Refresh records"}
             </Button>
           </div>
         </div>
         {graph.data && (
           <p className="mb-3 text-[11.5px] text-muted-foreground">
-            Cached view · last synced {new Date(graph.dataUpdatedAt).toLocaleTimeString()} · Refresh graph for a live read.
-            Cached assets are never policy truth — preflight, publishing, renewal, revocation, and approval always query live.
+            Cached view · last synced {new Date(graph.dataUpdatedAt).toLocaleTimeString()} · Refresh for a live read.
+            Cached records are never decision truth — permission checks, publishing, renewal, revocation, and approval always query live.
           </p>
         )}
         <div className="grid gap-4 md:grid-cols-2">
@@ -192,7 +196,7 @@ export default function GraphPage() {
             );
           })}
           {health && assets.length === 0 && !loadError && (
-            <EmptyState title="No Knowledge Assets readable" body="Either nothing has been recorded through this adapter yet, or the adapter store differs from the workspace database. Identifiers on other screens are stored references — this list only shows live reads." />
+            <EmptyState title="No proof records readable" body="Either nothing has been recorded yet, or the proof store differs from the workspace database. Identifiers on other screens are stored references — this list only shows live reads." />
           )}
         </div>
       </section>
@@ -276,7 +280,7 @@ export default function GraphPage() {
           </div>
         )}
         {queryState.status === "idle" && (
-          <p className="mt-5 text-sm text-muted-foreground">Run a query to inspect the graph.</p>
+          <p className="mt-5 text-sm text-muted-foreground">Run a query to inspect the proof records.</p>
         )}
       </SectionCard>
     </div>

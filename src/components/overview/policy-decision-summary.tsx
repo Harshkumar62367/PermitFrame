@@ -4,12 +4,12 @@ import { Check, X } from "lucide-react";
 import type { SnapshotPreflight } from "@/lib/use-workspace-snapshot";
 
 /**
- * One-line policy verdict for cards: the live preflight result in plain
+ * One-line rights-check verdict for cards: the live check result in plain
  * language. Driven entirely by API data — no hardcoded reasons.
  */
 export function PolicyResultLine({ preflight, className }: { preflight: SnapshotPreflight; className?: string }) {
   if (preflight.decision === "pending") {
-    return <p className={className}>Policy check has not run yet.</p>;
+    return <p className={className}>Permission check has not run yet.</p>;
   }
   if (preflight.decision === "block") {
     const [first, ...rest] = preflight.blockers;
@@ -36,7 +36,7 @@ export function PolicyResultLine({ preflight, className }: { preflight: Snapshot
  */
 export function PolicyDecisionSummary({ preflight }: { preflight: SnapshotPreflight }) {
   if (preflight.decision === "pending") {
-    return <p className="text-[13px] text-muted-foreground">Run the policy check to see the decision.</p>;
+    return <p className="text-[13px] text-muted-foreground">Run the permission check to see the decision.</p>;
   }
   if (preflight.decision === "block") {
     return (
@@ -52,7 +52,7 @@ export function PolicyDecisionSummary({ preflight }: { preflight: SnapshotPrefli
             <span className="min-w-0">
               <span className="block text-[13px] font-medium leading-snug text-rose-950 dark:text-rose-100">{b.message}</span>
               <span className="mt-0.5 block truncate font-mono text-[10px] uppercase tracking-[0.1em] text-rose-700 dark:text-rose-300/70" title={b.evidenceRefs.join(", ")}>
-                {b.code} · evidence: {b.evidenceRefs.join(", ") || "graph query returned nothing"}
+                {b.code} · evidence: {b.evidenceRefs.join(", ") || "no approved rights or brand rules matched"}
               </span>
             </span>
           </li>
@@ -71,7 +71,7 @@ export function PolicyDecisionSummary({ preflight }: { preflight: SnapshotPrefli
       {preflight.allowedClaims.length === 0 && (
         <li className="flex items-start gap-2 text-[13px] leading-snug text-emerald-950/85 dark:text-emerald-100/90">
           <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" aria-hidden />
-          <span>No claims requested — rights check passed</span>
+          <span>No claims requested — permission check passed</span>
         </li>
       )}
     </ul>

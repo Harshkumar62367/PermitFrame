@@ -140,14 +140,14 @@ function WorkspaceDetailsPopover({
         </p>
       </div>
       <div className="flex items-center justify-between gap-2 px-3.5 py-2">
-        <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground dark:text-white/55" title={wallet ?? "No wallet linked"}>
-          {wallet ?? "No wallet linked"}
+        <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground dark:text-white/55" title={wallet ?? "No account ID linked"}>
+          {wallet ?? "No account ID linked"}
         </span>
         {wallet && (
           <button
             type="button"
             onClick={onCopyWallet}
-            aria-label={`Copy wallet address ${wallet}`}
+            aria-label={`Copy account ID ${wallet}`}
             className="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-muted-foreground transition hover:bg-accent hover:text-foreground dark:hover:text-white"
           >
             {copied ? <Check className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" aria-hidden /> : <Copy className="h-3.5 w-3.5" aria-hidden />}

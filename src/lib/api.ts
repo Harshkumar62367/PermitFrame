@@ -19,7 +19,7 @@ function friendlyMessage(status: number, serverMessage: string | null, endpoint:
   if (serverMessage) return serverMessage;
   if (status === 401) return "Your session expired. Sign in again to continue.";
   if (status === 404) return "The requested record was not found. It may have been removed or the link is wrong.";
-  if (status === 502) return "An upstream network (Livepeer / DKG) did not answer. Retry in a moment.";
+  if (status === 502) return "A connected service did not answer. Retry in a moment.";
   if (status >= 500) return "The server hit an unexpected error. Retry — your input is preserved.";
   return `Request to ${endpoint} failed (status ${status}).`;
 }
@@ -79,26 +79,28 @@ export const apiGet = <T>(endpoint: string, signal?: AbortSignal, timeoutMs?: nu
   api<T>(endpoint, { signal, timeoutMs });
 export const apiPost = <T>(endpoint: string, body?: unknown, signal?: AbortSignal, timeoutMs?: number): Promise<T> =>
   api<T>(endpoint, { method: "POST", body: body ?? {}, signal, timeoutMs });
+export const apiPatch = <T>(endpoint: string, body?: unknown, signal?: AbortSignal, timeoutMs?: number): Promise<T> =>
+  api<T>(endpoint, { method: "PATCH", body: body ?? {}, signal, timeoutMs });
 
-/** Honest publication wording: never claim "published" for Working-Memory-only records. */
+/** Honest publication wording: never claim a shared record for workspace-only saves. */
 export function describeRecord(ual: string | null | undefined): { recorded: boolean; headline: string; detail: string } {
   if (!ual) {
     return {
       recorded: false,
-      headline: "Saved to the local evidence store",
-      detail: "No DKG record exists yet — the data lives only in this workspace."
+      headline: "Saved to this workspace",
+      detail: "No shared proof record exists yet — the data lives only in this workspace."
     };
   }
   if (ual.startsWith("did:dkg:local/")) {
     return {
       recorded: true,
-      headline: "Saved to the local evidence store",
-      detail: `Reference ${ual}. Configure DKG edge mode for shared DKG records.`
+      headline: "Saved to this workspace",
+      detail: "A proof reference was created. Shared proof records need the ledger connection in Settings › Advanced."
     };
   }
   return {
     recorded: true,
-    headline: "Recorded on the DKG",
-    detail: "Held in DKG Working Memory — not yet anchored on-chain. Anchor it for a public explorer proof."
+    headline: "Recorded in the proof ledger",
+    detail: "Held in the ledger's working memory — not yet publicly verifiable. Public verification is available in Settings › Advanced."
   };
 }

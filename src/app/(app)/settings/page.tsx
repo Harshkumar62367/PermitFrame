@@ -1,6 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
+import { ArrowRight } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/page-header";
@@ -12,13 +14,16 @@ interface CapabilitiesResponse {
   ok: boolean;
   capabilities?: Record<string, unknown>;
   pricing?: Record<string, unknown>;
+  roles?: { image: string | null; motion: string | null };
+  authMode?: "bearer-key" | "keyless-hosted";
+  checkedAt?: string;
   error?: string;
 }
 
 type CapsState =
   | { status: "idle" }
   | { status: "loading" }
-  | { status: "ready"; at: string; capabilities: Record<string, unknown>; pricing: Record<string, unknown> }
+  | { status: "ready"; at: string; capabilities: Record<string, unknown>; pricing: Record<string, unknown>; roles: { image: string | null; motion: string | null } | null; authMode: string | null; checkedAt: string | null }
   | { status: "failed"; at: string; error: string };
 
 export default function SettingsPage() {
@@ -39,12 +44,15 @@ export default function SettingsPage() {
     const startedAt = new Date();
     try {
       const res = await apiGet<CapabilitiesResponse>("/api/livepeer");
-      if (!res.ok) throw new Error(res.error ?? "Livepeer agent did not answer.");
+      if (!res.ok) throw new Error(res.error ?? "Production service did not answer.");
       setCaps({
         status: "ready",
         at: startedAt.toLocaleString(),
         capabilities: (res.capabilities ?? {}) as Record<string, unknown>,
-        pricing: (res.pricing ?? {}) as Record<string, unknown>
+        pricing: (res.pricing ?? {}) as Record<string, unknown>,
+        roles: res.roles ?? null,
+        authMode: res.authMode ?? null,
+        checkedAt: res.checkedAt ?? null
       });
     } catch (e) {
       setCaps({
@@ -64,26 +72,31 @@ export default function SettingsPage() {
         <PageHeader
           eyebrow="System"
           title="Settings"
-          description="Integration health for the two networks PermitFrame runs on."
+          description="Connections for the services PermitFrame runs on, plus advanced evidence tools."
           width="narrow"
         />
       </div>
 
       <div>
         <div className="grid max-w-3xl gap-4 md:grid-cols-2">
-          <SectionCard title="OriginTrail DKG">
+          <SectionCard title="Proof ledger">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="font-mono text-[11px] text-muted-foreground">mode</span>
               <Badge variant="outline" className={health?.dkg.mode === "edge-node" ? "rounded-full bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-950/40 dark:text-emerald-300 dark:ring-emerald-800" : "rounded-full bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-800"}>
-                {health?.dkg.mode ?? "checking"}
+                {health ? (health.dkg.mode === "edge-node" ? "shared ledger" : "workspace only") : "checking"}
               </Badge>
             </div>
-            <p className="mt-2.5 break-words text-[12.5px] leading-relaxed text-muted-foreground">{health?.dkg.detail ?? "Checking DKG diagnostics in the background. Workspace data does not depend on this check."}</p>
-            <p className="mt-3 break-words font-mono text-[10.5px] text-muted-foreground">
-              blockchain: {health?.dkg.blockchain ?? "—"} · use DKG_MODE=edge for the OriginTrail DKG V10 Edge Node
+            <p className="mt-2.5 break-words text-[12.5px] leading-relaxed text-muted-foreground">
+              {!health
+                ? "Checking proof-ledger diagnostics in the background. Workspace data does not depend on this check."
+                : health.dkg.mode === "edge-node" && health.dkg.healthy
+                  ? "Shared proof ledger connected — approvals can publish public verification."
+                  : health.dkg.mode === "edge-node"
+                    ? "Shared proof ledger unreachable — campaigns keep working with workspace records."
+                    : "Workspace proof records. Connect the shared ledger in Advanced evidence below for public verification."}
             </p>
           </SectionCard>
-          <SectionCard title="Livepeer Agent">
+          <SectionCard title="Asset production">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="font-mono text-[11px] text-muted-foreground">auth</span>
               <Badge variant="outline" className="rounded-full bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-950/40 dark:text-emerald-300 dark:ring-emerald-800">
@@ -94,6 +107,23 @@ export default function SettingsPage() {
             {health?.livepeer.detail && (
               <p className="mt-2 break-words text-[12.5px] leading-relaxed text-muted-foreground">{health.livepeer.detail}</p>
             )}
+            <div className="mt-2.5 rounded-xl bg-muted/50 p-3 ring-1 ring-border">
+              <p className="font-mono text-[9.5px] uppercase tracking-[0.14em] text-muted-foreground">Campaign roles · live discovery</p>
+              {caps.status === "ready" && caps.roles ? (
+                <div className="mt-1.5 space-y-1 font-mono text-[11px]">
+                  <p>keyframe + variations → <span className="text-foreground">{caps.roles.image ?? "no verified pick"}</span></p>
+                  <p>motion asset → <span className="text-foreground">{caps.roles.motion ?? "no verified pick"}</span></p>
+                  <p className="text-muted-foreground">
+                    {caps.authMode === "bearer-key" ? "API key" : "hosted access"}
+                    {caps.checkedAt ? ` · checked ${new Date(caps.checkedAt).toLocaleString()}` : ""}
+                  </p>
+                </div>
+              ) : (
+                <p className="mt-1.5 text-[11.5px] text-muted-foreground">
+                  Run the capability check below — roles are mapped only from capabilities the Livepeer server reports as available.
+                </p>
+              )}
+            </div>
             <Button
               variant="outline"
               size="sm"
@@ -106,7 +136,7 @@ export default function SettingsPage() {
             </Button>
             {caps.status === "loading" && (
               <p role="status" className="mt-2 font-mono text-[10.5px] text-muted-foreground">
-                Contacting the Livepeer agent (list_capabilities + get_pricing)…
+                Contacting the production service…
               </p>
             )}
             {caps.status === "ready" && (
@@ -132,6 +162,23 @@ export default function SettingsPage() {
             )}
           </SectionCard>
         </div>
+      </div>
+
+      <div>
+        <SectionCard
+          title="Advanced evidence"
+          description="Optional technical tooling. Verification covers day-to-day client review."
+          actions={
+            <Button asChild variant="outline" size="sm" className="h-7 rounded-full px-2.5 text-[11.5px]">
+              <Link href="/graph">Open proof inspector <ArrowRight className="h-3 w-3" /></Link>
+            </Button>
+          }
+        >
+          <p className="text-[12.5px] leading-relaxed text-muted-foreground">
+            The proof inspector shows the underlying proof records and a query console for diagnosing
+            evidence issues. Most producers never need it.
+          </p>
+        </SectionCard>
       </div>
     </div>
   );

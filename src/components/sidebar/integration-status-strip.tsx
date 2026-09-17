@@ -19,10 +19,10 @@ function dotClass(state: DotState): string {
 }
 
 /**
- * Slim integration strip in agency language: Evidence network (OriginTrail)
- * and Generation network (Livepeer). Opens an explanatory popover — a red
- * dot is never left unexplained, and Livepeer is never shown healthy without
- * a real reachability signal.
+ * Slim services strip in producer language: Proof ledger and Asset
+ * production. Opens an explanatory popover — a red dot is never left
+ * unexplained, and production is never shown healthy without a real
+ * reachability signal.
  */
 export function IntegrationStatusStrip({
   health,
@@ -36,7 +36,7 @@ export function IntegrationStatusStrip({
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
 
-  // Livepeer health is unknown until the first real probe answers: render a
+  // Production health is unknown until the first real probe answers: render a
   // neutral checking state rather than an assumed green.
   const dkg: DotState = !health ? "loading" : health.dkg.healthy ? "healthy" : "down";
   const livepeer: DotState =
@@ -45,7 +45,7 @@ export function IntegrationStatusStrip({
 
   const dkgShort = !health ? "checking" : health.dkg.healthy ? "healthy" : "degraded — open for why";
   const livepeerShort = !health || health.livepeer.reachable === undefined ? "checking" : health.livepeer.reachable ? "healthy" : "degraded — open for why";
-  const label = `Integrations: evidence network ${dkgShort}; generation network ${livepeerShort}. Open integration status.`;
+  const label = `Services: proof ledger ${dkgShort}; asset production ${livepeerShort}. Open service status.`;
 
   const popover = (
     <IntegrationStatusPopover
@@ -92,13 +92,13 @@ export function IntegrationStatusStrip({
         <span className="inline-flex min-w-0 items-center gap-1.5">
           <span className={cn("h-2 w-2 shrink-0 rounded-full", dotClass(dkg))} aria-hidden />
           <span className="truncate font-medium text-foreground/80 dark:text-white/70">
-            Evidence network{degraded && dkg === "down" ? " · degraded" : ""}
+            Proof ledger{degraded && dkg === "down" ? " · degraded" : ""}
           </span>
         </span>
         <span className="inline-flex min-w-0 items-center gap-1.5">
           <span className={cn("h-2 w-2 shrink-0 rounded-full", dotClass(livepeer))} aria-hidden />
           <span className="truncate font-medium text-foreground/80 dark:text-white/70">
-            Generation network{degraded && livepeer === "down" ? " · degraded" : ""}
+            Asset production{degraded && livepeer === "down" ? " · degraded" : ""}
           </span>
         </span>
       </button>

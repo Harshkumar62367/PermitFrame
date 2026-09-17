@@ -7,5 +7,11 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
   const { id } = await params;
   const result = await approveCampaign(id);
   if (!result.approved) return NextResponse.json({ error: result.error }, { status: 400 });
-  return NextResponse.json({ approved: true, campaignUAL: result.ual });
+  return NextResponse.json({
+    approved: true,
+    campaignUAL: result.ual,
+    publicationStatus: result.publicationStatus ?? null,
+    verificationRef: result.verificationRef ?? null,
+    verificationWarning: result.verificationWarning ?? null
+  });
 }

@@ -23,11 +23,16 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
         if (r) {
           r.ual = record.ual;
           r.ualExplorer = record.explorerUrl;
+          r.publicationStatus = record.publicationStatus;
         }
       });
       republished.push(receipt.id);
     } catch {
-      // leave unpublished; UI shows "receipt stored locally"
+      // leave unpublished but record the failed attempt so the UI can offer retry
+      await updateDb((d) => {
+        const r = d.campaigns.find((x) => x.id === id)?.receipts.find((x) => x.id === receipt.id);
+        if (r) r.publicationStatus = "failed";
+      }).catch(() => undefined);
     }
   }
   await updateDb((d) => {
@@ -35,7 +40,7 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
       id: newId("evt"),
       at: nowIso(),
       kind: "dkg.republish",
-      summary: `Re-published ${republished.length} receipt(s) to the DKG.`,
+      summary: `Re-published ${republished.length} receipt(s) to the proof ledger.`,
       refs: [id]
     });
   });

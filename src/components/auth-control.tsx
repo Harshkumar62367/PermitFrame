@@ -16,7 +16,7 @@ export function AuthControl({ compact = false }: { compact?: boolean }) {
   // A completed Privy sign-in should feel like entering the product, not a
   // separate identity step followed by another button click.
   useEffect(() => {
-    if (authenticated && status === "ready" && pathname === "/") router.replace("/workspace");
+    if (authenticated && status === "ready" && pathname === "/") router.replace("/campaigns");
   }, [authenticated, pathname, router, status]);
 
   if (!ready) {
@@ -35,7 +35,7 @@ export function AuthControl({ compact = false }: { compact?: boolean }) {
   return (
     <div className="flex items-center gap-2">
       {!compact && <span className="max-w-28 truncate font-mono text-[10px] text-muted-foreground dark:text-white/55" title={identity}>{identity}</span>}
-      {user?.wallet && <Wallet className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" aria-label="Wallet linked" />}
+      {user?.wallet && <Wallet className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" aria-label="Account linked" />}
       <Button onClick={() => void signOut()} disabled={status === "loading"} variant="ghost" size="icon" className="h-8 w-8 rounded-full text-muted-foreground hover:bg-accent hover:text-foreground dark:text-white/55 dark:hover:bg-white/10 dark:hover:text-white" aria-label="Sign out">
         <LogOut className="h-3.5 w-3.5" />
       </Button>

@@ -2,7 +2,7 @@ import { getCurrentSession } from "./auth";
 import { effectiveCampaignStatus, productionStage, reconcileCampaignStatus, type ProductionStage } from "./campaign-status";
 import { loadDb } from "./store";
 import { campaignCostRollup, estimateCost, expiryWarnings, type ExpiryWarning } from "./platform";
-import type { CampaignStatus, Database } from "./types";
+import type { CampaignStatus, Database, PublicationStatus } from "./types";
 
 export interface OverviewBlocker {
   code: string;
@@ -60,6 +60,12 @@ export interface OverviewCampaign {
   /** Latest generated output (Livepeer), when production has produced one. */
   generatedUrl: string | null;
   receiptsCount: number;
+  /** Campaign evidence record, when approval published one. Null until then. */
+  campaignUAL: string | null;
+  /** Explicit state from the real publish result. Missing on legacy rows (non-public). */
+  recordPublicationStatus: PublicationStatus | null;
+  /** Stable public verification reference, set at approval. Null until then. */
+  verificationRef: string | null;
   activeJobs: number;
   spentUsd: number;
   /** Planned inference cost of the approved plan. For blocked campaigns this is spend that was prevented. */
@@ -112,7 +118,7 @@ export interface WorkspaceOverview {
 
 const STAGE_LABELS: Record<ProductionStage, string> = {
   briefed: "Briefed",
-  "policy-check": "Policy check",
+  "policy-check": "Permission check",
   ready: "Ready",
   generating: "Generating",
   delivered: "Delivered"
@@ -173,6 +179,9 @@ export function buildWorkspaceOverview(db: Database, workspaceName: string | nul
       thumbnailUrl,
       generatedUrl: latestReceipt?.outputUrl ?? null,
       receiptsCount: c.receipts.length,
+      campaignUAL: c.campaignUAL ?? null,
+      recordPublicationStatus: c.publicationStatus ?? null,
+      verificationRef: c.verificationRef ?? null,
       activeJobs: c.jobs.filter((j) => j.status === "queued" || j.status === "running").length,
       spentUsd: rollup.spent,
       estimatedUsd: preflight ? estimateCost(preflight) : 0,

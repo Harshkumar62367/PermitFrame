@@ -1,26 +1,22 @@
-import Link from "next/link";
-import { ArrowLeft, Check } from "lucide-react";
+import { Check } from "lucide-react";
+import { notFound } from "next/navigation";
 import { lookupVerification } from "@/server/verify";
-import { PermitFrameMark } from "@/components/logo";
 
 export const dynamic = "force-dynamic";
 
+/**
+ * Public verification page. Reads ONLY the immutable public snapshot —
+ * no session, no workspace data. Unknown refs hit Next's 404, never a 500.
+ * Raw record identifiers appear solely inside Technical details, and only
+ * when the snapshot genuinely carries an anchored record.
+ */
 export default async function VerifyPage({ params }: { params: Promise<{ ref: string }> }) {
   const { ref } = await params;
   const v = await lookupVerification(ref);
 
-  if (!v.found) {
-    return (
-      <div className="mx-auto w-full max-w-xl px-4 py-24 text-center sm:px-6">
-        <PermitFrameMark className="mx-auto h-10 w-10 text-emerald-700 dark:text-emerald-300" />
-        <h1 className="font-display mt-5 text-2xl font-semibold tracking-tight">Reference not found</h1>
-        <p className="mt-2 break-all font-mono text-sm text-muted-foreground">{ref}</p>
-        <Link href="/verifier" className="mt-6 inline-flex items-center gap-1.5 text-[13px] font-medium text-emerald-700 hover:underline dark:text-emerald-300">
-          <ArrowLeft className="h-4 w-4" /> Back to verifier
-        </Link>
-      </div>
-    );
-  }
+  if (!v.found) notFound();
+  const s = v.snapshot;
+  const anchored = s.publicationStatus === "anchored" && !!s.ual;
 
   return (
     <div className="pf-page min-h-screen bg-background">
@@ -33,134 +29,104 @@ export default async function VerifyPage({ params }: { params: Promise<{ ref: st
           />
           <div className="relative">
             <MotionCheck />
-            <h1 className="font-display mt-4 text-3xl font-semibold tracking-tight">Verified PermitFrame output</h1>
+            <h1 className="font-display mt-4 text-3xl font-semibold tracking-tight">{s.title}</h1>
             <p className="mx-auto mt-2 max-w-lg text-[13.5px] leading-relaxed text-white/55">
-              {v.kind === "DerivativeReceipt"
-                ? "This derivative was generated inside verified rights and claims. Its receipt is linked to its full lineage."
-                : "This campaign production record exists in the PermitFrame evidence layer."}
+              Approved campaign pack — {s.brand} {s.productName} · {s.platform} · {s.country}.
+              Every claim below was verified before production.
             </p>
             <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
-              <span className="rounded-full bg-white/[0.07] px-3.5 py-1.5 text-[12px] text-white/85 ring-1 ring-white/10">{v.label}</span>
-              <span
-                className={`rounded-full px-3.5 py-1.5 font-mono text-[10.5px] uppercase tracking-[0.12em] ring-1 ${
-                  v.published
-                    ? "bg-emerald-400/10 text-emerald-300 ring-emerald-400/30"
-                    : "bg-amber-400/10 text-amber-300 ring-amber-400/30"
-                }`}
-              >
-                {v.published ? "recorded on the DKG" : "local evidence store"}
+              <span className="rounded-full bg-white/[0.07] px-3.5 py-1.5 text-[12px] text-white/85 ring-1 ring-white/10">
+                {anchored ? "Public verification ready" : "Campaign record saved"}
+              </span>
+              <span className="rounded-full bg-white/[0.07] px-3.5 py-1.5 font-mono text-[10.5px] uppercase tracking-[0.12em] text-white/60 ring-1 ring-white/10">
+                approved {new Date(s.approvedAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
               </span>
             </div>
-            {v.ual && (
-              <p className="mt-4 break-all font-mono text-[11.5px] text-emerald-300/90" title={v.ual}>
-                UAL:{" "}
-                {v.explorerUrl ? (
-                  <a href={v.explorerUrl} target="_blank" rel="noreferrer" className="underline underline-offset-2">{v.ual}</a>
-                ) : (
-                  v.ual
-                )}
-              </p>
-            )}
-            {v.ual && !v.explorerUrl && (
-              <p className="mx-auto mt-1.5 max-w-md text-[11px] text-white/45">
-                Working Memory record — not yet anchored on-chain, so no public explorer proof exists yet.
-              </p>
-            )}
           </div>
         </div>
 
-        {/* Media */}
-        {v.media && (
-          <div className="mt-6 overflow-hidden rounded-3xl border border-border bg-card">
-            {v.media.type === "image" ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={v.media.url} alt={v.label ?? "generated asset"} className="max-h-[460px] w-full object-contain" />
-            ) : (
-              <video src={v.media.url} controls className="max-h-[460px] w-full bg-black" />
-            )}
-            <div className="grid gap-2 border-t border-border p-4 font-mono text-[11px] text-muted-foreground sm:grid-cols-2">
-              <p>format: <span className="text-foreground">{v.media.format}</span></p>
-              <p className="truncate">hash: <span className="text-foreground">{v.media.hash}</span></p>
+        {/* Outputs */}
+        <div className="mt-6 grid gap-4 sm:grid-cols-2">
+          {s.outputs.map((o) => (
+            <div key={o.id} id={`output-${o.id}`} className="scroll-mt-24 overflow-hidden rounded-3xl border border-border bg-card">
+              {o.mediaType === "image" ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={o.outputUrl} alt={o.label} className="max-h-[380px] w-full object-contain" />
+              ) : (
+                <video src={o.outputUrl} controls className="max-h-[380px] w-full bg-black" preload="metadata" />
+              )}
+              <div className="space-y-1 border-t border-border p-4">
+                <p className="text-[13px] font-medium leading-snug">{o.label}</p>
+                <p className="font-mono text-[10px] uppercase tracking-[0.1em] text-muted-foreground">{o.format} · {o.capability}</p>
+                {o.claimsUsed.length > 0 && (
+                  <p className="text-[12px] text-emerald-700 dark:text-emerald-300">{o.claimsUsed.join("; ")}</p>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Verified claims */}
+        {s.verifiedClaims.length > 0 && (
+          <div className="mt-6 rounded-3xl border border-emerald-200 bg-emerald-50/60 p-7 dark:border-emerald-900 dark:bg-emerald-950/30">
+            <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-emerald-700 dark:text-emerald-300">Verified claims in this pack</p>
+            <p className="mt-2 text-[13.5px] text-emerald-900 dark:text-emerald-200">{s.verifiedClaims.join(" · ")}</p>
+            <p className="mt-1 text-[11.5px] text-muted-foreground">
+              Every claim was checked against the brand&rsquo;s approved rules before generation. Nothing unverified made it in.
+            </p>
+          </div>
+        )}
+
+        {/* Rights summary */}
+        <div className="mt-6 rounded-3xl border border-border bg-card p-7">
+          <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-emerald-700 dark:text-emerald-300">Creator permission behind this pack</p>
+          <p className="mt-2 text-[13.5px]">
+            {s.creatorName} · {s.rightsSummary.platforms.join(", ")} · {s.rightsSummary.countries.join(", ")}
+            {s.rightsSummary.validUntil ? ` · valid to ${s.rightsSummary.validUntil}` : ""}
+          </p>
+          <p className="mt-1 text-[12.5px] text-muted-foreground">
+            {s.brandRules.brand} {s.brandRules.productName}
+            {s.brandRules.approvedClaims.length > 0 && ` — approved language: ${s.brandRules.approvedClaims.join("; ")}`}
+          </p>
+        </div>
+
+        {/* Captions */}
+        {s.captions.length > 0 && (
+          <div className="mt-6 rounded-3xl border border-border bg-card p-7">
+            <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Approved captions</p>
+            <div className="mt-3 space-y-3">
+              {s.captions.map((c, i) => (
+                <div key={i} className="rounded-xl bg-muted/60 p-3.5 ring-1 ring-border">
+                  <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">{c.platform} · disclosure {c.disclosure}</p>
+                  <p className="mt-1.5 text-[13px] leading-relaxed">{c.text}</p>
+                </div>
+              ))}
             </div>
           </div>
         )}
 
-        {/* Generation evidence */}
-        {v.generation && (
-          <div className="mt-6 rounded-3xl border border-border bg-card p-7">
-            <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-emerald-700 dark:text-emerald-300">Generation evidence</p>
-            <dl className="mt-4 grid gap-4 text-[13.5px] sm:grid-cols-2">
-              <div>
-                <dt className="text-[11.5px] text-muted-foreground">Livepeer capability</dt>
-                <dd className="mt-0.5 font-mono text-[12.5px]">{v.generation.capability}</dd>
-              </div>
-              <div>
-                <dt className="text-[11.5px] text-muted-foreground">Generated at</dt>
-                <dd className="mt-0.5">{v.generation.generatedAt}</dd>
-              </div>
-              <div className="sm:col-span-2">
-                <dt className="text-[11.5px] text-muted-foreground">Prompt hash (prompt stays private)</dt>
-                <dd className="mt-0.5 break-all font-mono text-[11.5px]">{v.generation.promptHash}</dd>
-              </div>
-              <div className="sm:col-span-2">
-                <dt className="text-[11.5px] text-muted-foreground">Verified claims used</dt>
-                <dd className="mt-0.5 text-emerald-700 dark:text-emerald-300">{v.claimsUsed.join("; ") || "none"}</dd>
-              </div>
-            </dl>
-          </div>
-        )}
-
-        {/* Lineage */}
-        {v.lineage && (
-          <div className="mt-6 rounded-3xl border border-border bg-card p-7">
-            <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-emerald-700 dark:text-emerald-300">Lineage</p>
-            <div className="mt-4 space-y-3 text-[13.5px]">
-              {v.lineage.permissionPassport && (
-                <div className="rounded-2xl bg-muted/60 p-4 ring-1 ring-border">
-                  <p className="font-semibold">Creator Permission Passport</p>
-                  <p className="mt-1 text-[12.5px] text-muted-foreground">
-                    {v.lineage.permissionPassport.creator} · {v.lineage.permissionPassport.platforms.join(", ")} ·{" "}
-                    {v.lineage.permissionPassport.countries.join(", ")} · valid to {v.lineage.permissionPassport.validUntil} ·{" "}
-                    <span className="capitalize">{v.lineage.permissionPassport.status}</span>
-                  </p>
-                  {v.lineage.permissionPassport.ual && (
-                    <p className="mt-1 break-all font-mono text-[10.5px] text-emerald-700 dark:text-emerald-300" title={v.lineage.permissionPassport.ual}>{v.lineage.permissionPassport.ual}</p>
-                  )}
-                </div>
-              )}
-              {v.lineage.productFacts && (
-                <div className="rounded-2xl bg-muted/60 p-4 ring-1 ring-border">
-                  <p className="font-semibold">Verified Product Facts — {v.lineage.productFacts.brand} {v.lineage.productFacts.productName}</p>
-                  <p className="mt-1 text-[12.5px] text-muted-foreground">approved: {v.lineage.productFacts.approvedClaims.join(", ")}</p>
-                  <p className="text-[12.5px] text-muted-foreground">prohibited: {v.lineage.productFacts.prohibitedClaims.join(", ")}</p>
-                  {v.lineage.productFacts.ual && (
-                    <p className="mt-1 break-all font-mono text-[10.5px] text-emerald-700 dark:text-emerald-300" title={v.lineage.productFacts.ual}>{v.lineage.productFacts.ual}</p>
-                  )}
-                </div>
-              )}
-              {v.lineage.campaign && (
-                <div className="rounded-2xl bg-muted/60 p-4 ring-1 ring-border">
-                  <p className="font-semibold">Campaign</p>
-                  <p className="mt-1 text-[12.5px] text-muted-foreground">{v.lineage.campaign.title}</p>
-                  {"receipts" in v.lineage && v.lineage.receipts && (
-                    <ul className="mt-2 space-y-1 text-[12.5px]">
-                      {v.lineage.receipts.map((r) => (
-                        <li key={r.id}>
-                          <Link href={`/verify/${r.id}`} className="text-sky-700 hover:underline dark:text-sky-300">
-                            {r.label} receipt {r.ual ? `· ${r.ual}` : "(local)"}
-                          </Link>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              )}
+        {/* Technical record identifiers — only when genuinely anchored. */}
+        {anchored && (
+          <details className="mt-6 rounded-3xl border border-border bg-card p-7">
+            <summary className="cursor-pointer text-[13px] font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline">
+              Technical details for verification
+            </summary>
+            <div className="mt-3 space-y-2">
+              <p className="break-all font-mono text-[11px] text-muted-foreground" title={s.ual ?? undefined}>
+                Record ·{" "}
+                {s.explorerUrl ? (
+                  <a href={s.explorerUrl} target="_blank" rel="noreferrer" className="text-sky-700 hover:underline dark:text-sky-300">{s.ual}</a>
+                ) : (
+                  s.ual
+                )}
+              </p>
+              <p className="text-[11.5px] text-muted-foreground">Verification reference {s.ref}</p>
             </div>
-          </div>
+          </details>
         )}
 
         <p className="mt-8 text-center text-[11px] leading-relaxed text-muted-foreground">
-          This page proves what PermitFrame recorded: who attested, what was permitted, which
+          This page proves what PermitFrame recorded: what was approved, what was permitted, which
           evidence supported the claims, and how the media was produced. It does not constitute
           a legal ownership certificate.
         </p>

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { PermissionPassport, ProductFacts, Visibility } from "../types";
-import { explorerUrlFor, type DkgAdapter, type DkgHealth, type KaRecord } from "./adapter";
+import { explorerUrlFor, basePublicationStatus, type DkgAdapter, type DkgHealth, type KaRecord } from "./adapter";
 import type { KaEnvelope } from "./schemas";
 
 const execFileAsync = promisify(execFile);
@@ -112,6 +112,7 @@ export class EdgeNodeAdapter implements DkgAdapter {
       ual: "",
       evidenceUri: assertionUri,
       merkleRoot: merkle,
+      publicationStatus: basePublicationStatus(this.mode, false),
       name,
       explorerUrl: "",
       content: { ...ka.content, "pf:contextGraph": cg },
@@ -137,7 +138,9 @@ export class EdgeNodeAdapter implements DkgAdapter {
       ...shared,
       ual: finalized.ual,
       txHash: finalized.txHash,
-      explorerUrl: explorerUrlFor(finalized.ual)
+      explorerUrl: explorerUrlFor(finalized.ual),
+      // Set ONLY here, after the async publish job genuinely finalized.
+      publicationStatus: basePublicationStatus(this.mode, true)
     };
   }
 
@@ -299,6 +302,7 @@ SELECT ?asset ?type ?name WHERE { ?asset a ?type ; schema:name ?name .
       ual: "",
       evidenceUri: String(row.asset ?? ""),
       explorerUrl: "",
+      publicationStatus: basePublicationStatus(this.mode, false),
       name: String(row.name ?? ""),
       content: { "@type": String(row.type ?? "") },
       publishedAt: "",

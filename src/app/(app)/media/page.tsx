@@ -1,7 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import { useId, useState } from "react";
-import { Link2, Wand2 } from "lucide-react";
+import { ArrowRight, Link2, Wand2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -15,7 +16,7 @@ import { ErrorState } from "@/components/ui/error-state";
 import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
 import { apiPost, describeRecord } from "@/lib/api";
 import { useInvalidateDkgGraph } from "@/lib/use-dkg-graph";
-import { useInvalidateWorkspaceSnapshot, useWorkspaceSnapshot } from "@/lib/use-workspace-snapshot";
+import { useInvalidateWorkspaceSnapshot, useWorkspaceSnapshot, type SnapshotCampaign } from "@/lib/use-workspace-snapshot";
 import { cn } from "@/lib/utils";
 import type { SourceMedia } from "@/server/types";
 
@@ -86,19 +87,19 @@ export default function MediaLibraryPage() {
     <div className="pf-page space-y-6">
       <FadeIn>
         <PageHeader
-          eyebrow="Creator assets"
+          eyebrow="Media library"
           title="Media library"
-          description="Consented source assets registered as Knowledge Assets (reference URL + content hash — the bytes stay with the creator)."
+          description="Source images and video, plus generated campaign assets. Only the reference and a checksum are stored — the files stay with the creator."
         />
       </FadeIn>
 
       <FadeIn delay={0.05}>
         <SectionCard
           title="Register a source asset"
-          description="Every field starts empty — grey placeholder text is only an example, never a value."
+          description="Guided scenario — every field starts empty; grey placeholder text is only an example, never a value."
           actions={
             <Button variant="outline" size="sm" onClick={fillExample} className="h-7 rounded-full px-2.5 text-[11.5px]">
-              <Wand2 className="h-3 w-3" aria-hidden /> Fill example values
+              <Wand2 className="h-3 w-3" aria-hidden /> Fill guided example
             </Button>
           }
         >
@@ -168,7 +169,6 @@ export default function MediaLibraryPage() {
               )}
             >
               <p>{result.text}</p>
-              {result.ual && <CopyableIdentifier value={result.ual} className="mt-1.5 max-w-full text-[11px]" />}
             </div>
           )}
         </SectionCard>
@@ -176,6 +176,11 @@ export default function MediaLibraryPage() {
 
       {loadError && <ErrorState message={loadError} onRetry={() => { void snapshot.refetch(); }} />}
       {!media && !loadError && <LoadingSkeleton rows={3} />}
+      <section aria-label="Approved source media">
+        <h2 className="mb-1 text-[15px] font-semibold tracking-tight">Approved source media</h2>
+        <p className="mb-3 text-[12px] text-muted-foreground">
+          Registered inputs for generation — only the reference and a checksum are stored.
+        </p>
       <Stagger className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {(media ?? []).map((m) => (
           <StaggerItem key={m.id}>
@@ -189,17 +194,20 @@ export default function MediaLibraryPage() {
               <div className="min-w-0 p-4">
                 <p className="text-[13.5px] font-medium leading-snug">{m.title}</p>
                 <CopyableIdentifier value={m.id} className="mt-1 max-w-full text-[10.5px]" />
-                <p className="mt-0.5 break-all font-mono text-[10px] text-muted-foreground" title={`sha256 ${m.hash}`}>
-                  hash {m.hash.slice(0, 24)}…
+                <p className="mt-0.5 break-all font-mono text-[10px] text-muted-foreground" title={`checksum ${m.hash}`}>
+                  checksum {m.hash.slice(0, 24)}…
                 </p>
-                {m.ual && <CopyableIdentifier value={m.ual} className="mt-0.5 max-w-full text-[10px]" />}
               </div>
             </div>
           </StaggerItem>
         ))}
       </Stagger>
+      </section>
       {media && media.length === 0 && !loadError && (
-        <EmptyState title="No source assets yet" body="Register the first consented asset above — only its URL and hash enter the evidence layer." />
+        <EmptyState
+          title="No media yet"
+          body="Register the first approved asset above, then brief a campaign — the permission check runs automatically before anything is produced."
+        />
       )}
       {media && media.length > 0 && (
         <p className="text-[11.5px] leading-relaxed text-muted-foreground">
@@ -207,6 +215,61 @@ export default function MediaLibraryPage() {
           separate records. PermitFrame never deletes or merges them — newest first is just display order.
         </p>
       )}
+      <GeneratedOutputs campaigns={snapshot.data?.campaigns ?? null} />
     </div>
+  );
+}
+
+/**
+ * Generated campaign outputs, kept visually separate from approved source
+ * media. Finished assets live with their campaigns — this section links
+ * each pack back to its studio. Read from the shared snapshot, so no
+ * per-campaign reads and nothing fabricated.
+ */
+function GeneratedOutputs({ campaigns }: { campaigns: SnapshotCampaign[] | null }) {
+  if (campaigns === null) return null;
+  const produced = campaigns.filter((c) => c.receiptsCount > 0);
+  return (
+    <section aria-label="Generated campaign outputs" className="mt-2">
+      <h2 className="mb-1 text-[15px] font-semibold tracking-tight">Generated campaign outputs</h2>
+      <p className="mb-3 text-[12px] text-muted-foreground">
+        Finished assets belong to their campaigns — open a pack to review, approve, and verify each output.
+      </p>
+      {produced.length === 0 ? (
+        <p className="rounded-xl border border-dashed border-border px-4 py-5 text-center text-[12.5px] text-muted-foreground">
+          No generated outputs yet. Brief a campaign, pass the permission check, and generate the pack.
+        </p>
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {produced.map((c) => (
+            <Link
+              key={c.id}
+              href={`/campaigns/${c.id}`}
+              className="group min-w-0 overflow-hidden rounded-2xl border border-border bg-card transition hover:border-emerald-600/30 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600"
+            >
+              {c.generatedUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={c.generatedUrl} alt={c.title} loading="lazy" className="aspect-video w-full object-cover" />
+              ) : (
+                <span className="grid aspect-video w-full place-items-center bg-muted font-mono text-[11px] text-muted-foreground">
+                  video pack
+                </span>
+              )}
+              <span className="flex items-center gap-2 p-4">
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[13.5px] font-medium leading-snug">{c.title}</span>
+                  <span className="mt-0.5 block text-[11.5px] text-muted-foreground">
+                    {c.receiptsCount} output{c.receiptsCount === 1 ? "" : "s"}
+                  </span>
+                </span>
+                <span className="inline-flex shrink-0 items-center gap-1 text-[12px] font-medium text-emerald-700 dark:text-emerald-300">
+                  Open pack <ArrowRight className="h-3.5 w-3.5" aria-hidden />
+                </span>
+              </span>
+            </Link>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }

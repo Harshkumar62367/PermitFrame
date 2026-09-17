@@ -15,6 +15,13 @@
       "when": 1789411200001,
       "tag": "0001_privy_workspaces",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1789669914434,
+      "tag": "0002_ambiguous_yellow_claw",
+      "breakpoints": true
     }
   ]
 }

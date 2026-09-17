@@ -1,99 +1,66 @@
 # PermitFrame
 
-**From creator consent to verified campaign pack — without generating outside the rights you purchased.**
+**PermitFrame helps creative teams turn approved creator rights and brand rules into platform-ready AI campaign assets — with a reviewable proof trail.**
 
-PermitFrame is a verified, agentic campaign-production platform for UGC agencies, brands and creator managers. It compiles creator permissions and verified product facts from the **OriginTrail DKG** into enforceable production policy, then builds the complete campaign pack through the **Livepeer Agent**. Every derivative carries a receipt linking back to the source media, the permission passport and the claim evidence.
+## User problem and target customer
 
-Built for **Track 2 (Livepeer Agent + OriginTrail DKG)** of the Atumera Livepeer Agent Hackathon.
+An agency creative producer or brand marketing manager needs AI campaign assets fast, but every asset carries rights risk: *may this creator appear here? Is this claim approved? Is this territory covered?* Today those checks live in spreadsheets, inboxes, and memory — a blocked-by-rights surprise arrives after money is spent, or worse, after publishing. PermitFrame moves the rights decision **before** generation spend and attaches reviewable proof to every output.
 
----
+## Product workflow
 
-## The demo in 60 seconds
+1. **Creator permissions** — invite a creator; they attest platforms, territories, expiry, and usage on a consent link. Only attestation creates the permission.
+2. **Brand rules** — set approved claims, required disclosures, and prohibited language per product.
+3. **Campaigns** — brief a campaign. The permission check runs automatically:
+   - **Changes needed before creation** — precise reasons plus where to fix them; nothing can generate.
+   - **Approved to create** — the campaign opens in Campaign Studio.
+4. **Campaign Studio** — refine the brief, select deliverables (vertical 9:16, feed 1:1, landscape 16:9), generate with the production service, review outputs, approve the pack.
+5. **Verification** — every output links to a proof page: the asset, verified claims, creator permission, and brand rules behind it.
 
-1. **Blocked.** Open the *TikTok / Germany* campaign. The DKG query returns no applicable permission passport (tiktok not permitted, DE not covered) and "waterproof" is on the prohibited-claims list. PermitFrame refuses to spend inference money and shows the three precise reasons with evidence references.
-2. **Allowed.** Open the *Instagram / Greece* campaign. Rights and claims verify. The agent compiles a constrained production brief (brand guidelines + verified-claims-only rules) and generates **keyframe → square variation → 5s vertical video** through the Livepeer Agent, with live cost per output.
-3. **Review & approve.** Request one reviewer revision, then approve the pack — a Campaign Production Record is published and every output already has a Derivative Receipt Knowledge Asset.
-4. **Verify.** Each output has a public verification page: media hash, generation capability, prompt hash (prompt stays private), claims used, and the full lineage — source media, permission passport, product facts.
+## Why Livepeer Agent is essential
 
-## What the DKG actually controls (not blockchain-flavoured storage)
+Generation is not a mock: the studio dispatches exact capabilities (`flux-schnell` text-to-image, `seedance-mini-i2v` image-to-video, chosen from **live MCP discovery**, never a hardcoded claim) through the Livepeer Agent raw surface. The orchestrator runs only producer-selected stages, chains stage outputs, records the real capability served (including network-recommended auto-recovery), per-stage cost in USD, job ids, and output URLs. A failed provider call surfaces honestly with retry — outputs, receipts, and verification links only ever reference real results.
 
-Before Livepeer is ever called, the policy engine runs **real SPARQL queries** against the knowledge graph:
+## How OriginTrail DKG materially changes behaviour
 
-- *Which passports cover this creator + platform + country + date?* → decides **whether** generation may run at all
-- *Which claims are verified for this product?* → decides which advertising claims the prompts may state, and which are prohibited
-- *Which transformations are permitted?* → decides **which** capabilities may be used (animate vs image-only)
+**Before generation:** the policy engine runs real SPARQL against the DKG — which permissions cover creator + platform + country + date, which claims facts support, which transformations are allowed. The compiled decision gates spend: blocked campaigns cannot start jobs, at the API layer, not just in the UI.
 
-Every decision is displayed with its query ("Show the SPARQL queries the agent ran"), blockers carry evidence references, and allowed requests show a "Why this was allowed" panel.
+**After generation:** each output gets a Derivative Receipt; approval publishes a minimized campaign record. Routine records live in Shared Working Memory; only a finalized Verifiable Memory publish earns **Public verification ready** — the UI keys this off an explicit persisted publication state, never ID-shape guessing.
 
-### Knowledge Assets
+## What stays private, what is shared, what is publicly verifiable
 
-| # | Asset | Purpose |
-|---|-------|---------|
-| 1 | Creator Permission Passport | platforms, territories, transformations, validity, creator attestation |
-| 2 | Verified Product Facts | approved claims, prohibited claims, brand guidelines, evidence notes |
-| 3 | Source Media Record | reference URL + content hash (never the bytes) |
-| 4 | Campaign Production Record | the campaign and its policy decision |
-| 5 | Derivative Receipt (per output) | output URL/hash, capability, prompt hash, claims used, full lineage |
-| 6 | Permission Amendment / Revocation | rights changes over time |
+- **Private:** contracts, contact details, full prompts (stored as SHA-256 hashes), source media bytes (only reference URL + content hash recorded).
+- **Shared:** minimized permission/claim references and receipts in Shared Working Memory for preflight and review.
+- **Publicly verifiable:** only records whose publisher job genuinely finalized — shown with explorer links inside Technical details. Attestations prove the declaration and its integrity, not legal ownership.
 
-## Architecture
-
-```
-Next.js (App Router, TypeScript)
-├── src/app            UI: dashboard, campaign workspace, public verify page, creator consent portal
-├── src/app/api        Route handlers (thin controllers)
-└── src/server         Framework-agnostic backend core (liftable into a dedicated service)
-    ├── policy/        Preflight engine: DKG queries → allow/block + compiled prompt constraints
-    ├── livepeer/      MCP client (raw surface, exact-dispatch run_capability) + production pipeline
-    ├── dkg/           OriginTrail DKG V10 Edge Node adapter + local-evidence adapter, KA schemas, SPARQL
-    └── store.ts       Operational state (campaigns, jobs) — rights/facts truth lives in the DKG layer
-```
-
-The Livepeer integration is **orchestrator-grade**: the policy engine plans the pipeline, the raw MCP surface dispatches exact capabilities (`flux-schnell` text-to-image / image-to-image, `seedance-mini-i2v` image-to-video), and the client auto-recovers when a capability is disabled by using the replacement the network itself recommends. Every job records livepeer job id, capability actually served, and **cost in USD** from the network's billing fields.
-
-## Running it
+## Setup and run
 
 ```bash
 npm install
 npm run dev          # http://localhost:3000
 ```
 
-First load auto-seeds the demo workspace (fictional sustainable shoe brand **Verdi Steps**, creator **Maya Chen**, both demo campaigns) and publishes the Knowledge Assets through the configured DKG adapter.
+`.env.local` requires: `DATABASE_URL`, `NEXT_PUBLIC_PRIVY_APP_ID`, `PRIVY_APP_SECRET` for login; `DKG_MODE=edge`, `DKG_CLI_BIN=dkg`, `DKG_API_PORT=9200`, `DKG_CONTEXT_GRAPH_ID=<agent-address>/permitframe` for the real DKG path (`local` mode keeps identical schemas offline); `LIVEPEER_MCP_URL` defaults to the hosted agent, optional `LIVEPEER_MCP_BEARER` for the API-key path. DKG capabilities can be pinned via `LIVEPEER_IMAGE_CAPABILITY` / `LIVEPEER_VIDEO_CAPABILITY`.
 
-### Environment (`.env.local`)
+Edge Node: `npm i -g @origintrail-official/dkg`, `dkg init --role edge --network testnet`, then keep `dkg start` running. Check with `dkg status`, `dkg wallet`, `dkg publisher job <id>`; app health at `/api/health` (signed in) and discovery at `/api/livepeer`.
 
-```bash
-# Livepeer Agent (raw MCP surface, exact-dispatch)
-LIVEPEER_MCP_URL=https://agent.livepeer.org/api/mcp/raw
-LIVEPEER_MCP_BEARER=            # optional: sk_... key from app.daydream.live
-                                # empty = keyless demo credit (~$10 / address)
+## Demo flow
 
-# OriginTrail DKG V10 Edge Node
-DKG_MODE=edge
-DKG_CLI_BIN=dkg
-DKG_CONTEXT_GRAPH=permitframe
-DKG_CONTEXT_GRAPH_ID=<primary-operational-wallet-address>/permitframe
+1. Sign in → Campaigns → New campaign with a deliberately off-rights brief → **Changes needed before creation** with reasons and fix links.
+2. Fix via Creator permissions (invite + attest) or Brand rules → re-check → **Approved to create** → Campaign Studio.
+3. Edit brief controls → select the vertical deliverable → Generate → confirm estimate → watch the queue → review the real output.
+4. Approve & publish → **Campaign record saved**, then **Public verification ready** once the publisher finalizes → open the Verify link.
 
-# Custom capabilities (optional overrides)
-LIVEPEER_IMAGE_CAPABILITY=flux-schnell
-LIVEPEER_VIDEO_CAPABILITY=seedance-mini-i2v
-```
+In-product example fillers are labeled **Guided scenario**. Health: `node --env-file=.env.local scripts/check-neon.mjs`. Quality gates: `npx tsc --noEmit`, `npx eslint src/`, `npm run build`, `npm test`.
 
-**DKG modes.** Without DKG configuration the app runs in *local evidence mode*: identical Knowledge Asset schemas and SPARQL semantics persisted under `.data/dkg/`, clearly labelled in the UI. `DKG_MODE=edge` uses an OriginTrail **DKG V10 Edge Node** (Base Sepolia testnet): `npm i -g @origintrail-official/dkg`, `dkg init --role edge --network testnet`, then `dkg start`. Passport/facts/media/campaign/receipt publishes first create Shared Working Memory evidence: an assertion URI and Merkle root, with every preflight decision using live SPARQL against the node. A real, explorer-resolvable UAL exists only after the separate Verifiable Memory on-chain publish succeeds.
+## Known limitations
 
-**Livepeer auth.** The raw surface honours keyless demo credit; for reliable demos create a key at app.daydream.live and set `LIVEPEER_MCP_BEARER`.
+- The DKG Edge Node daemon must be running; when it is down, preflight, publishing, and verification fail explicitly with retries — nothing is faked.
+- Anonymous (logged-out) `/verify/*` and `/share/*` requests currently fail because verification reads are session-scoped; public client review links require the viewer to be signed in.
+- Keyless Livepeer access depends on hosted quota; set `LIVEPEER_MCP_BEARER` for the key path.
+- On-chain finalization needs a funded node wallet and takes minutes; statuses stay at “Campaign record saved” until it genuinely finalizes.
 
-## Privacy & responsible-data model
-
-- Contracts, contact details and raw prompts **never** enter the DKG — only minimized rules, hashes and references.
-- Prompts are published solely as SHA-256 hashes; media as reference URLs + content hashes.
-- Every asset carries a visibility label (`private` / `shared` / `public`).
-- Attestations prove **the declaration and its integrity** — not that the creator legally owns every right they grant. The verification page states this explicitly.
+Built for **Track 2 (Livepeer Agent + OriginTrail DKG)** of the Atumera Livepeer Agent Hackathon.
 
 ## Tech stack
 
 Next.js 16 (App Router) · TypeScript · React 19 · Tailwind CSS 4 · OriginTrail DKG V10 Edge Node · Livepeer Agent MCP (streamable HTTP JSON-RPC)
-
-## Roadmap after the hackathon
-
-Open-core: PermitFrame Core (schemas, policy engine, agent orchestration, receipt verifier) stays open; the hosted SaaS adds workspaces, approvals, billing and integrations. Next: rights-expiration calendar, platform presets, batch variants, campaign proof-bundle export, policy simulator ("what changes if the region/claim changes?").
