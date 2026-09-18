@@ -282,7 +282,7 @@ export async function expiryWarnings(withinDays = 30, db?: Database): Promise<Ex
         validUntil: p.validUntil,
         daysLeft,
         level,
-        affectedCampaigns: data.campaigns.filter((c) => c.passportId === p.id).map((c) => c.id)
+        affectedCampaigns: data.campaigns.filter((c) => c.passportId === p.id && c.status !== "archived").map((c) => c.id)
       };
     })
     .filter((w) => w.level !== "ok");
@@ -299,6 +299,8 @@ const DISCLOSURE = "#ad";
 export async function generateCaptions(campaignId: string): Promise<CampaignCaption[]> {
   const campaign = await findCampaign(campaignId);
   if (!campaign) throw new Error("Campaign not found");
+  const { throwIfArchived } = await import("./campaigns");
+  throwIfArchived(campaign, "captioned");
   const decision = campaign.preflight;
   if (decision?.decision !== "allow") throw new Error("Captions are only generated for policy-approved campaigns");
   const claims = decision.allowedClaims;
@@ -367,6 +369,10 @@ export function campaignCostRollup(campaign: Campaign): { spent: number; estimat
 /* ------------------------- share links + comments ------------------------- */
 
 export async function createShareLink(campaignId: string): Promise<string> {
+  const campaign = await findCampaign(campaignId);
+  if (!campaign) throw new Error("Campaign not found");
+  const { throwIfArchived } = await import("./campaigns");
+  throwIfArchived(campaign, "shared");
   const token = newId("share");
   await updateDb((d) => {
     const c = d.campaigns.find((x) => x.id === campaignId);
@@ -386,6 +392,8 @@ export async function clientReview(
 ): Promise<Campaign> {
   const campaign = await resolveShare(token);
   if (!campaign) throw new Error("Share link not found");
+  const { throwIfArchived } = await import("./campaigns");
+  throwIfArchived(campaign, "client-reviewed");
   await updateDb((d) => {
     const c = d.campaigns.find((x) => x.id === campaign.id);
     if (!c) return;
@@ -410,6 +418,10 @@ export async function clientReview(
 }
 
 export async function addComment(campaignId: string, author: string, text: string): Promise<Campaign> {
+  const campaign = await findCampaign(campaignId);
+  if (!campaign) throw new Error("Campaign not found");
+  const { throwIfArchived } = await import("./campaigns");
+  throwIfArchived(campaign, "commented on");
   await updateDb((d) => {
     const c = d.campaigns.find((x) => x.id === campaignId);
     if (!c) throw new Error("Campaign not found");
@@ -430,10 +442,11 @@ export async function campaignTimeline(campaign: Campaign) {
 export async function cloneForPlatforms(campaignId: string, platforms: Platform[]): Promise<Campaign[]> {
   const base = await findCampaign(campaignId);
   if (!base) throw new Error("Campaign not found");
+  const { createCampaign, throwIfArchived } = await import("./campaigns");
+  throwIfArchived(base, "cloned into platform variants");
   const created: Campaign[] = [];
   for (const platform of platforms) {
     if (platform === base.request.platform) continue;
-    const { createCampaign } = await import("./campaigns");
     const variant = await createCampaign({
       title: `${base.title.replace(/ \(.*\)$/, "")} - ${platform} variant`,
       brand: base.brand,

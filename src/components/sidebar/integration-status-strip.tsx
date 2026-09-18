@@ -4,9 +4,11 @@ import { useRef, useState } from "react";
 import { IntegrationStatusPopover } from "./integration-status-popover";
 import { cn } from "@/lib/utils";
 
+export type ServiceState = "checking" | "healthy" | "degraded" | "unavailable";
+
 export interface StripHealth {
-  dkg: { mode: string; healthy: boolean; blockchain?: string; detail?: string; endpoint?: string };
-  livepeer: { keyless: boolean; endpoint?: string; reachable?: boolean; detail?: string };
+  dkg: { mode: string; healthy: boolean; blockchain?: string; detail?: string; endpoint?: string; state?: ServiceState };
+  livepeer: { keyless: boolean; endpoint?: string; reachable?: boolean; detail?: string; state?: ServiceState };
 }
 
 type DotState = "loading" | "healthy" | "degraded" | "down";
@@ -36,15 +38,24 @@ export function IntegrationStatusStrip({
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
 
-  // Production health is unknown until the first real probe answers: render a
-  // neutral checking state rather than an assumed green.
-  const dkg: DotState = !health ? "loading" : health.dkg.healthy ? "healthy" : "down";
+  // A service is unknown until the first real probe settles: "checking" (or a
+  // missing state on legacy payloads) renders neutral, never an assumed red.
+  // Only a settled degraded/unavailable state earns the down dot.
+  function dotFor(state: ServiceState | undefined, ok: boolean): DotState {
+    if (state) return state === "healthy" ? "healthy" : state === "checking" ? "loading" : "down";
+    return ok ? "healthy" : "loading";
+  }
+  const dkg: DotState = !health ? "loading" : dotFor(health.dkg.state, health.dkg.healthy);
   const livepeer: DotState =
-    !health || health.livepeer.reachable === undefined ? "loading" : health.livepeer.reachable ? "healthy" : "down";
+    !health ? "loading" : dotFor(health.livepeer.state, health.livepeer.reachable === true);
   const degraded = dkg === "down" || livepeer === "down";
 
-  const dkgShort = !health ? "checking" : health.dkg.healthy ? "healthy" : "degraded — open for why";
-  const livepeerShort = !health || health.livepeer.reachable === undefined ? "checking" : health.livepeer.reachable ? "healthy" : "degraded — open for why";
+  function shortFor(state: ServiceState | undefined, ok: boolean): string {
+    if (!state) return ok ? "healthy" : "checking";
+    return state === "healthy" ? "healthy" : state === "checking" ? "checking" : "degraded — open for why";
+  }
+  const dkgShort = !health ? "checking" : shortFor(health.dkg.state, health.dkg.healthy);
+  const livepeerShort = !health ? "checking" : shortFor(health.livepeer.state, health.livepeer.reachable === true);
   const label = `Services: proof ledger ${dkgShort}; asset production ${livepeerShort}. Open service status.`;
 
   const popover = (

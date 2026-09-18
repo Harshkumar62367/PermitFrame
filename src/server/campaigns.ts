@@ -1,15 +1,62 @@
 import type { Campaign, CampaignRequest, Platform, ProductionJob, PublicationStatus } from "./types";
 import { loadDb, newId, nowIso, updateDb } from "./store";
+import { eq } from "drizzle-orm";
+import { getDb } from "./db/client";
+import { workspaces } from "./db/schema";
+import { requireCurrentSession } from "./auth";
 import { preflight, composeStagePrompt } from "./policy/engine";
 import { effectiveCampaignStatus, preflightEvent } from "./campaign-status";
 import { buildPublicSnapshot, newVerificationRef, saveVerificationSnapshot } from "./verify";
+import {
+  applyArchiveToDb,
+  applyDeleteToDb,
+  CampaignDeletedError,
+  CampaignNotFoundError,
+  CampaignProtectedError,
+  deletedTitle,
+  deletionEligibility,
+  isDeleted,
+  WorkspaceOwnerRequiredError
+} from "./deletion";
+import {
+  completeIdempotencySlot,
+  failIdempotencySlot,
+  fingerprintCreationIntent,
+  IdempotencyMismatchError,
+  reserveIdempotencySlot,
+  withIdempotencyLock
+} from "./idempotency";
 import { createJobRecords, publishCampaignRecord, requestMetaFor, runProduction } from "./livepeer/pipeline";
 
 export async function loadCampaign(id: string): Promise<Campaign | undefined> {
   return (await loadDb()).campaigns.find((c) => c.id === id);
 }
 
-export async function createCampaign(input: {
+/**
+ * Only the workspace owner may delete or archive campaigns. Sessions are
+ * already workspace-scoped; this additionally verifies ownership against the
+ * workspaces table so a non-owner session (shared/future multi-user flows)
+ * can never destroy data.
+ */
+export async function requireWorkspaceOwner(): Promise<{ userId: string; workspaceId: string }> {
+  const session = await requireCurrentSession();
+  const [workspace] = await getDb()
+    .select({ ownerId: workspaces.ownerId })
+    .from(workspaces)
+    .where(eq(workspaces.id, session.workspaceId))
+    .limit(1);
+  if (!workspace || workspace.ownerId !== session.userId) throw new WorkspaceOwnerRequiredError();
+  return { userId: session.userId, workspaceId: session.workspaceId };
+}
+
+/** Archived campaigns are read-only history: no edits, production, approval or variants. */
+export function throwIfArchived(campaign: Campaign, action: string): void {
+  if (campaign.status === "archived") {
+    throw new Error(`Archived campaigns are read-only — “${campaign.title}” cannot be ${action}. It is kept for audit history.`);
+  }
+}
+
+export interface CreateCampaignInput {
   title: string;
   brand: string;
   productName: string;
@@ -19,7 +66,9 @@ export async function createCampaign(input: {
   productFactsId: string;
   request: CampaignRequest;
   contextNote?: string;
-}): Promise<Campaign> {
+}
+
+export async function createCampaign(input: CreateCampaignInput): Promise<Campaign> {
   const campaign: Campaign = {
     id: newId("cmp"),
     title: input.title,
@@ -49,10 +98,78 @@ export async function createCampaign(input: {
   return campaign;
 }
 
+/**
+ * Idempotent creation: the same workspace + idempotency key always resolves
+ * to one campaign. The key is client-generated per submission attempt and the
+ * slot lives in the workspace state (durable across retries, restarts and
+ * client aborts); an in-process lock additionally serializes concurrent
+ * same-key requests into a single creation whose result is shared.
+ *
+ * - 201 created: first completion under this key.
+ * - 200 replayed (`deduplicated: true`): retry of an already-completed key —
+ *   returns the ORIGINAL campaign id, never a new row.
+ * - "processing"/"failed" rows with no live holder (crashed or timed-out
+ *   attempt) are taken over and run once more; failed attempts never replay.
+ * - Same key + different payload → IdempotencyMismatchError (422).
+ */
+export async function createCampaignIdempotent(
+  input: CreateCampaignInput,
+  key: string,
+  lockKey: string
+): Promise<{ campaign: Campaign; deduplicated: boolean }> {
+  const fingerprint = fingerprintCreationIntent({
+    title: input.title,
+    brand: input.brand,
+    productName: input.productName,
+    creatorId: input.creatorId,
+    sourceMediaId: input.sourceMediaId,
+    passportId: input.passportId,
+    productFactsId: input.productFactsId,
+    platform: input.request.platform,
+    country: input.request.country,
+    requestedClaims: input.request.requestedClaims,
+    transformation: input.request.transformation,
+    creativeBrief: input.request.creativeBrief
+  });
+  return withIdempotencyLock(lockKey, async () => {
+    const now = nowIso();
+    let reserved: ReturnType<typeof reserveIdempotencySlot> | undefined;
+    await updateDb((d) => {
+      reserved = reserveIdempotencySlot(d, key, fingerprint, now);
+    });
+    if (!reserved || reserved.outcome === "reserved" || reserved.outcome === "takeover") {
+      try {
+        const campaign = await createCampaign(input);
+        await updateDb((d) => completeIdempotencySlot(d, key, campaign.id, nowIso()));
+        return { campaign, deduplicated: false };
+      } catch (error) {
+        // Never leave a poisoned "processing" row: the next retry may take over.
+        await updateDb((d) => failIdempotencySlot(d, key, nowIso())).catch(() => undefined);
+        throw error;
+      }
+    }
+    if (reserved.outcome === "mismatch") throw new IdempotencyMismatchError();
+    const original = await loadCampaign(reserved.campaignId);
+    if (original) return { campaign: original, deduplicated: true };
+    // Defensive only (campaigns have no delete path): the slot claims a
+    // campaign that no longer exists, so create once under the same key
+    // rather than bricking the submission — UNLESS it was hard-deleted, in
+    // which case resurrecting it would violate the deletion. Answer 410.
+    const db = await loadDb();
+    if (isDeleted(db, reserved.campaignId)) {
+      throw new CampaignDeletedError(deletedTitle(db, reserved.campaignId) ?? reserved.campaignId);
+    }
+    const healed = await createCampaign(input);
+    await updateDb((d) => completeIdempotencySlot(d, key, healed.id, nowIso()));
+    return { campaign: healed, deduplicated: false };
+  });
+}
+
 /** Re-check an existing campaign against the current graph (rights may have changed). */
 export async function rePreflight(id: string): Promise<Campaign | undefined> {
   const campaign = await loadCampaign(id);
   if (!campaign) return undefined;
+  throwIfArchived(campaign, "re-checked");
   campaign.preflight = await preflight(campaign);
   campaign.status = campaign.preflight.decision === "block" ? "blocked" : campaign.status === "blocked" ? "draft" : campaign.status;
   const event = preflightEvent(campaign, campaign.preflight);
@@ -97,6 +214,11 @@ export async function updateCampaignBrief(
 ): Promise<{ campaign?: Campaign; error?: string }> {
   const campaign = await loadCampaign(id);
   if (!campaign) return { error: "Campaign not found" };
+  try {
+    throwIfArchived(campaign, "edited");
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Archived campaigns are read-only." };
+  }
 
   const structural =
     patch.platform !== undefined ||
@@ -176,6 +298,11 @@ export async function startProduction(
 ): Promise<{ started: boolean; error?: string }> {
   const campaign = await loadCampaign(id);
   if (!campaign) return { started: false, error: "Campaign not found" };
+  try {
+    throwIfArchived(campaign, "produced");
+  } catch (e) {
+    return { started: false, error: e instanceof Error ? e.message : "Archived campaigns are read-only." };
+  }
   if (campaign.preflight?.decision !== "allow") return { started: false, error: "Preflight has not approved this campaign" };
 
   const planIds = (campaign.preflight?.plan ?? []).map((s) => s.id);
@@ -244,6 +371,11 @@ export async function startProduction(
 export async function reviseStage(id: string, stageId: string, instructions: string): Promise<{ started: boolean; error?: string }> {
   const campaign = await loadCampaign(id);
   if (!campaign) return { started: false, error: "Campaign not found" };
+  try {
+    throwIfArchived(campaign, "revised");
+  } catch (e) {
+    return { started: false, error: e instanceof Error ? e.message : "Archived campaigns are read-only." };
+  }
   const stage = campaign.preflight?.plan.find((s) => s.id === stageId);
   if (!stage) return { started: false, error: "Unknown stage" };
 
@@ -284,6 +416,11 @@ async function runSingleJob(campaignId: string, jobId: string): Promise<void> {
 export async function approveCampaign(id: string): Promise<{ approved: boolean; ual?: string; publicationStatus?: PublicationStatus; verificationRef?: string; verificationWarning?: string; error?: string }> {
   const campaign = await loadCampaign(id);
   if (!campaign) return { approved: false, error: "Campaign not found" };
+  try {
+    throwIfArchived(campaign, "approved");
+  } catch (e) {
+    return { approved: false, error: e instanceof Error ? e.message : "Archived campaigns are read-only." };
+  }
   // Gate on the effective verdict, not the stored label: a stale "draft" row
   // whose preflight denies must never be approvable.
   if (effectiveCampaignStatus(campaign) === "blocked") return { approved: false, error: "Blocked campaigns cannot be approved" };
@@ -336,4 +473,57 @@ export async function approveCampaign(id: string): Promise<{ approved: boolean; 
     verificationWarning = "Approved, but the public verification snapshot failed to save — approve again to retry.";
   }
   return { approved: true, ual: result.ual, publicationStatus: result.publicationStatus, verificationRef, verificationWarning };
+}
+
+/**
+ * Hard-delete a campaign. Owner-only. Allowed solely for workspace-local
+ * drafts (see deletionEligibility): the row, jobs, receipts and plan are
+ * removed, a tombstone is recorded (idempotent retries succeed), activity
+ * events stay, and DKG state is never touched — deletable campaigns have no
+ * public proof by construction.
+ */
+export async function deleteCampaign(id: string): Promise<{ deleted: true; alreadyDeleted: boolean; title: string }> {
+  await requireWorkspaceOwner();
+  const tombstoned = isDeleted(await loadDb(), id);
+  if (tombstoned) {
+    const title = deletedTitle(await loadDb(), id) ?? id;
+    return { deleted: true, alreadyDeleted: true, title };
+  }
+  const campaign = await loadCampaign(id);
+  if (!campaign) throw new CampaignNotFoundError(id);
+  const eligibility = deletionEligibility(campaign);
+  if (!eligibility.deletable) {
+    throw new CampaignProtectedError(eligibility.reasons, eligibility.archiveAvailable);
+  }
+  const now = nowIso();
+  const eventId = newId("evt");
+  let result: { deleted: true; alreadyDeleted: boolean; title: string } | undefined;
+  await updateDb((d) => {
+    result = applyDeleteToDb(d, id, now, eventId);
+  });
+  // applyDeleteToDb throws for unknown ids, so result is always set here.
+  return result ?? { deleted: true, alreadyDeleted: true, title: campaign.title };
+}
+
+/**
+ * Archive a campaign in place. Owner-only. Available for any campaign
+ * without running jobs (including protected ones): the row stays readable
+ * but leaves Campaigns/Overview/metrics. Idempotent.
+ */
+export async function archiveCampaign(id: string): Promise<{ archived: true; alreadyArchived: boolean; title: string }> {
+  await requireWorkspaceOwner();
+  const campaign = await loadCampaign(id);
+  // Deleted rows stay deleted: archiving a tombstone is a 404, never a resurrection.
+  if (!campaign) throw new CampaignNotFoundError(id);
+  const eligibility = deletionEligibility(campaign);
+  if (eligibility.busy) {
+    throw new CampaignProtectedError(eligibility.reasons, false);
+  }
+  const now = nowIso();
+  const eventId = newId("evt");
+  let result: { archived: true; alreadyArchived: boolean; title: string } | undefined;
+  await updateDb((d) => {
+    result = applyArchiveToDb(d, id, now, eventId);
+  });
+  return result ?? { archived: true, alreadyArchived: true, title: campaign.title };
 }

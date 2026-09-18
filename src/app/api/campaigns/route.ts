@@ -1,12 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
+import { AuthenticationRequiredError, requireCurrentSession } from "@/server/auth";
 import { loadDb } from "@/server/store";
-import { createCampaign } from "@/server/campaigns";
+import { createCampaign, createCampaignIdempotent } from "@/server/campaigns";
+import { IDEMPOTENCY_KEY_PATTERN, IdempotencyMismatchError } from "@/server/idempotency";
+import { CampaignDeletedError } from "@/server/deletion";
 import type { CampaignRequest } from "@/server/types";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  return NextResponse.json({ campaigns: (await loadDb()).campaigns });
+  try {
+    return NextResponse.json({ campaigns: (await loadDb()).campaigns });
+  } catch (error) {
+    if (error instanceof AuthenticationRequiredError) {
+      return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+    }
+    throw error;
+  }
 }
 
 export async function POST(request: NextRequest) {
@@ -19,11 +29,39 @@ export async function POST(request: NextRequest) {
     creativeBrief: string;
     brand?: string;
     productName?: string;
+    /** Client-generated per-submission key: retries of the same submission replay the original campaign. */
+    idempotencyKey?: string;
   };
-  const db = await loadDb();
+  const rawKey = typeof body.idempotencyKey === "string" ? body.idempotencyKey.trim() : "";
+  if (body.idempotencyKey !== undefined && !IDEMPOTENCY_KEY_PATTERN.test(rawKey)) {
+    return NextResponse.json({ error: "idempotencyKey must be 1–128 chars of letters, numbers, dash or underscore." }, { status: 400 });
+  }
+  let workspaceId: string;
+  try {
+    workspaceId = (await requireCurrentSession()).workspaceId;
+  } catch (error) {
+    if (error instanceof AuthenticationRequiredError) {
+      return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+    }
+    throw error;
+  }
+  let db;
+  try {
+    db = await loadDb();
+  } catch (error) {
+    if (error instanceof AuthenticationRequiredError) {
+      return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+    }
+    throw error;
+  }
   const creator = db.creators[0];
   const passport = db.passports.find((p) => p.creatorId === creator?.id);
-  const facts = db.productFacts.find((f) => f.brand === body.brand);
+  // The streamlined campaign form currently selects the workspace's default
+  // brand rule rather than exposing a brand/product picker. Respect an
+  // explicitly supplied brand for API callers, otherwise use that default.
+  const facts = body.brand
+    ? db.productFacts.find((f) => f.brand === body.brand)
+    : db.productFacts[0];
   const media = db.sourceMedia.find((m) => m.creatorId === creator?.id);
   if (!creator || !passport || !facts || !media) {
     return NextResponse.json({ error: "Add product facts, a creator permission passport, and source media before creating a campaign." }, { status: 400 });
@@ -35,7 +73,7 @@ export async function POST(request: NextRequest) {
     transformation: body.transformation ?? "image",
     creativeBrief: body.creativeBrief ?? ""
   };
-  const campaign = await createCampaign({
+  const input = {
     title: body.title || `${req.platform} campaign — ${req.country}`,
     brand: body.brand ?? facts.brand,
     productName: body.productName ?? facts.productName,
@@ -44,6 +82,26 @@ export async function POST(request: NextRequest) {
     passportId: passport.id,
     productFactsId: facts.id,
     request: req
-  });
-  return NextResponse.json({ campaign });
+  };
+  // Keyed submissions are idempotent: a retry after a network failure (the
+  // client may have aborted after the server already persisted) replays the
+  // original campaign instead of creating a duplicate. Keyless callers keep
+  // the legacy one-shot behavior.
+  if (!rawKey) {
+    const campaign = await createCampaign(input);
+    return NextResponse.json({ campaign, deduplicated: false }, { status: 201 });
+  }
+  try {
+    const { campaign, deduplicated } = await createCampaignIdempotent(input, rawKey, `${workspaceId}:${rawKey}`);
+    return NextResponse.json({ campaign, deduplicated }, { status: deduplicated ? 200 : 201 });
+  } catch (error) {
+    if (error instanceof IdempotencyMismatchError) {
+      return NextResponse.json({ error: error.message }, { status: 422 });
+    }
+    if (error instanceof CampaignDeletedError) {
+      // The replayed key points at a hard-deleted campaign: Gone, never resurrected.
+      return NextResponse.json({ error: error.message }, { status: 410 });
+    }
+    throw error;
+  }
 }

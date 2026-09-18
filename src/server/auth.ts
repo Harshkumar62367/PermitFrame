@@ -19,7 +19,7 @@ export class AuthenticationRequiredError extends Error {
 
 function emptyDatabase(): Database {
   return {
-    creators: [], passports: [], sourceMedia: [], productFacts: [], campaigns: [], consentInvites: [], events: []
+    creators: [], passports: [], sourceMedia: [], productFacts: [], campaigns: [], consentInvites: [], events: [], idempotencyKeys: {}, deletedCampaigns: []
   };
 }
 

@@ -63,9 +63,12 @@ export class EdgeNodeAdapter implements DkgAdapter {
 
   async health(): Promise<DkgHealth> {
     try {
-      // Health is only a diagnostic. Bound it tightly so a stopped local
-      // daemon never ties up the app's low-priority health request.
-      const status = await this.run(["status"], 3_000);
+      // Health is only a diagnostic. The cold `dkg` CLI spawn alone takes
+      // ~3-6s on Windows, so a 3s bound declares a healthy node unreachable.
+      // 12s tolerates real slowness while staying bounded; the health cache
+      // keeps this off every request path (stale-while-revalidate), so the
+      // bound never gates page loads.
+      const status = await this.run(["status"], 12_000);
       const peers = status.match(/Peers:\s+(\d+)/)?.[1] ?? "?";
       return {
         mode: this.mode,

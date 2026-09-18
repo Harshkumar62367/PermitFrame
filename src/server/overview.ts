@@ -151,8 +151,11 @@ export function buildWorkspaceOverview(db: Database, workspaceName: string | nul
   const creatorNames = new Map(db.passports.map((p) => [p.creatorId, p.creatorName] as const));
   const mediaById = new Map(db.sourceMedia.map((m) => [m.id, m.url] as const));
   const titleByCampaignId = new Map(db.campaigns.map((c) => [c.id, c.title] as const));
+  // Archived campaigns are audit history: they stay resolvable for activity
+  // titles/detail reads but leave every list, metric and pipeline bucket.
+  const visible = db.campaigns.filter((c) => c.status !== "archived");
 
-  const campaigns: OverviewCampaign[] = db.campaigns.map((c) => {
+  const campaigns: OverviewCampaign[] = visible.map((c) => {
     const rollup = campaignCostRollup(c);
     const latestReceipt = c.receipts.at(-1) ?? null;
     const sourceUrl = mediaById.get(c.sourceMediaId) ?? null;

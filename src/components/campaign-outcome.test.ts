@@ -67,4 +67,16 @@ describe("campaignOutcome", () => {
     assert.match(approved.explanation ?? "", /Creator permissions and brand rules/);
     assert.equal(campaignOutcome({ ...base, hasOutputs: true }).label, "Asset created");
   });
+
+  it("labels archived campaigns as archived regardless of verdict", () => {
+    for (const input of [
+      { status: "archived", decision: null, hasOutputs: false },
+      { status: "archived", decision: "allow", hasOutputs: false },
+      { status: "archived", decision: "block", hasOutputs: false }
+    ] as const) {
+      const o = campaignOutcome(input);
+      assert.equal(o.label, "Archived");
+      assert.match(o.explanation ?? "", /audit history/);
+    }
+  });
 });

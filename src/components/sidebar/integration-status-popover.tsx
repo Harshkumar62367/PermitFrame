@@ -50,8 +50,20 @@ export function IntegrationStatusPopover({
   const dkg = health?.dkg ?? null;
   const livepeer = health?.livepeer ?? null;
   const dkgName = !dkg ? "Proof ledger" : dkg.mode === "edge-node" ? "Proof ledger (shared)" : "Proof ledger (this workspace)";
-  const dkgState = !dkg ? "Checking…" : dkg.healthy ? "Healthy" : "Degraded";
-  const livepeerState = !livepeer ? "Checking…" : livepeer.reachable ? "Healthy" : "Degraded";
+  // The server reports an explicit state: "checking" (no probe has settled
+  // yet) is neutral copy, never a red Degraded. Degraded means a real failure.
+  // The `=== null` checks keep TypeScript narrowing intact below.
+  const dkgPending = dkg === null || dkg.state === "checking";
+  const livepeerPending = livepeer === null || livepeer.state === "checking";
+  const dkgState = dkgPending ? "Checking…" : dkg.healthy ? "Healthy" : "Degraded";
+  const livepeerState = livepeerPending ? "Checking…" : livepeer.reachable ? "Healthy" : "Degraded";
+  const dkgCopy = dkgPending
+    ? "Checking service health — permission-check evidence will cite the exact proof records it used."
+    : dkg.mode === "edge-node" && dkg.healthy
+      ? "Shared proof ledger connected — approvals can publish public verification."
+      : dkg.mode === "edge-node"
+        ? "Shared proof ledger unreachable — campaigns keep working with workspace records."
+        : "Workspace proof records — public verification needs the shared ledger (Settings › Advanced).";
 
   return (
     <SidebarPopover
@@ -75,9 +87,9 @@ export function IntegrationStatusPopover({
             <span
               className={cn(
                 "rounded-full px-2 py-0.5 font-mono text-[9.5px] uppercase tracking-[0.12em]",
-                !dkg && "bg-muted text-muted-foreground",
-                dkg?.healthy && "bg-emerald-600/10 text-emerald-700 dark:text-emerald-300",
-                dkg && !dkg.healthy && "bg-rose-600/10 text-rose-700 dark:text-rose-300"
+                dkgPending && "bg-muted text-muted-foreground",
+                !dkgPending && dkg?.healthy && "bg-emerald-600/10 text-emerald-700 dark:text-emerald-300",
+                !dkgPending && dkg && !dkg.healthy && "bg-rose-600/10 text-rose-700 dark:text-rose-300"
               )}
             >
               {dkgState}
@@ -85,13 +97,7 @@ export function IntegrationStatusPopover({
           </p>
           <p className="mt-0.5 font-mono text-[10.5px] text-muted-foreground dark:text-white/50">{dkgName}</p>
           <p className="mt-1.5 text-[12px] leading-relaxed text-muted-foreground dark:text-white/65">
-            {!dkg
-              ? "Checking service health — permission-check evidence will cite the exact proof records it used."
-              : dkg.mode === "edge-node" && dkg.healthy
-                ? "Shared proof ledger connected — approvals can publish public verification."
-                : dkg.mode === "edge-node"
-                  ? "Shared proof ledger unreachable — campaigns keep working with workspace records."
-                  : "Workspace proof records — public verification needs the shared ledger (Settings › Advanced)."}
+            {dkgCopy}
           </p>
           {dkg?.endpoint && (
             <p className="mt-0.5 truncate font-mono text-[10.5px] text-muted-foreground dark:text-white/50" title={dkg.endpoint}>
@@ -109,9 +115,9 @@ export function IntegrationStatusPopover({
             <span
               className={cn(
                 "rounded-full px-2 py-0.5 font-mono text-[9.5px] uppercase tracking-[0.12em]",
-                !livepeer && "bg-muted text-muted-foreground",
-                livepeer?.reachable && "bg-emerald-600/10 text-emerald-700 dark:text-emerald-300",
-                livepeer && !livepeer.reachable && "bg-rose-600/10 text-rose-700 dark:text-rose-300"
+                livepeerPending && "bg-muted text-muted-foreground",
+                !livepeerPending && livepeer?.reachable && "bg-emerald-600/10 text-emerald-700 dark:text-emerald-300",
+                !livepeerPending && livepeer && !livepeer.reachable && "bg-rose-600/10 text-rose-700 dark:text-rose-300"
               )}
             >
               {livepeerState}

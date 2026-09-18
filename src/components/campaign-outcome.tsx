@@ -42,6 +42,13 @@ export function isPublicRecord(input: Pick<OutcomeInput, "publicationStatus" | "
  * genuinely exists.
  */
 export function campaignOutcome(input: OutcomeInput): CampaignOutcome {
+  if (input.status === "archived") {
+    return {
+      label: "Archived",
+      explanation: "Kept for audit history. It no longer appears in lists and cannot be edited, produced, or approved.",
+      tone: "neutral"
+    };
+  }
   if (!input.decision || input.decision === "pending") {
     return { label: "Ready for permission check", tone: "pending" };
   }

@@ -27,12 +27,12 @@ type CapsState =
   | { status: "failed"; at: string; error: string };
 
 export default function SettingsPage() {
-  const [health, setHealth] = useState<{ dkg: DkgHealth; livepeer: { endpoint: string; keyless: boolean; reachable?: boolean; detail?: string } } | null>(null);
+  const [health, setHealth] = useState<{ dkg: DkgHealth & { state?: string }; livepeer: { endpoint: string; keyless: boolean; reachable?: boolean; detail?: string; state?: string } } | null>(null);
   const [caps, setCaps] = useState<CapsState>({ status: "idle" });
 
   useEffect(() => {
     const controller = new AbortController();
-    apiGet<{ dkg: DkgHealth; livepeer: { endpoint: string; keyless: boolean; reachable?: boolean; detail?: string } }>("/api/health", controller.signal)
+    apiGet<{ dkg: DkgHealth & { state?: string }; livepeer: { endpoint: string; keyless: boolean; reachable?: boolean; detail?: string; state?: string } }>("/api/health", controller.signal)
       .then(setHealth)
       .catch(() => undefined);
     return () => controller.abort();
@@ -87,7 +87,7 @@ export default function SettingsPage() {
               </Badge>
             </div>
             <p className="mt-2.5 break-words text-[12.5px] leading-relaxed text-muted-foreground">
-              {!health
+              {!health || health.dkg.state === "checking"
                 ? "Checking proof-ledger diagnostics in the background. Workspace data does not depend on this check."
                 : health.dkg.mode === "edge-node" && health.dkg.healthy
                   ? "Shared proof ledger connected — approvals can publish public verification."

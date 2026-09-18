@@ -41,6 +41,11 @@ export function NewCampaignForm({ onCreated }: { onCreated?: (id: string) => voi
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const invalidateSnapshot = useInvalidateWorkspaceSnapshot();
+  // Idempotency key for the current submission attempt. Reused only while the
+  // payload is byte-identical (a retry of the same submission replays the
+  // original campaign server-side instead of creating a duplicate); any edit
+  // mints a fresh key so an intentional new submission always creates anew.
+  const attemptRef = useRef<{ payload: string; key: string } | null>(null);
 
   function validate(): FieldErrors {
     const errors: FieldErrors = {};
@@ -65,14 +70,29 @@ export function NewCampaignForm({ onCreated }: { onCreated?: (id: string) => voi
     }
     setBusy(true);
     try {
-      const json = await apiPost<{ campaign: { id: string } }>("/api/campaigns", {
+      const payload = {
         title: form.title.trim() || `${form.platform} campaign — ${form.country.trim().toUpperCase()}`,
         platform: form.platform,
         country: form.country.trim().toUpperCase(),
         requestedClaims: form.claims.split(",").map((c) => c.trim()).filter(Boolean),
         transformation: form.transformation,
         creativeBrief: form.creativeBrief.trim()
-      });
+      };
+      const serialized = JSON.stringify(payload);
+      if (!attemptRef.current || attemptRef.current.payload !== serialized) {
+        attemptRef.current = { payload: serialized, key: crypto.randomUUID() };
+      }
+      // Creation consults the live ledger (rights + facts reads) before the
+      // permission check returns, so it legitimately takes longer than an
+      // ordinary write — budget two minutes, still abortable. A client abort
+      // after server-side persistence is safe: retrying with the same key
+      // replays the original campaign instead of duplicating it.
+      const json = await apiPost<{ campaign: { id: string }; deduplicated?: boolean }>(
+        "/api/campaigns",
+        { ...payload, idempotencyKey: attemptRef.current.key },
+        undefined,
+        120_000
+      );
       // The new campaign changes visible workspace data — refresh the
       // shared snapshot in the background before navigating.
       invalidateSnapshot();
@@ -196,7 +216,7 @@ export function NewCampaignForm({ onCreated }: { onCreated?: (id: string) => voi
         {busy ? "Running permission check…" : "Create & run permission check"}
       </Button>
       <p id={`${uid}-submit-hint`} className="mt-2 text-[11.5px] text-muted-foreground">
-        {busy ? "Permission check running — duplicate clicks are ignored." : "Country and creative brief are required."}
+        {busy ? "Permission check running — duplicate clicks are ignored, and a retry of this same submission reuses its result. Checking the ledger can take up to a minute." : "Country and creative brief are required."}
       </p>
     </div>
   );

@@ -83,7 +83,7 @@ export interface CampaignRequest {
   visualDirection?: string;
 }
 
-export type CampaignStatus = "draft" | "blocked" | "generating" | "review" | "approved";
+export type CampaignStatus = "draft" | "blocked" | "generating" | "review" | "approved" | "archived";
 
 export interface PreflightBlocker {
   code:
@@ -272,6 +272,24 @@ export interface ConsentDraft {
   sourceMediaIds: string[];
 }
 
+/**
+ * Durable record of one campaign-creation submission, keyed by a
+ * client-generated idempotency key. A network failure after server-side
+ * persistence must not create a second campaign when the same submission is
+ * retried: the same workspace + key replays the original campaign id.
+ * "processing" rows belong to a live holder or a crashed attempt (safe to
+ * take over — nothing completed); only "completed" rows replay.
+ */
+export interface IdempotencyRecord {
+  key: string;
+  status: "processing" | "completed" | "failed";
+  /** sha256 over the normalized creation payload the key was first used with. */
+  fingerprint: string;
+  campaignId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Database {
   creators: Creator[];
   passports: PermissionPassport[];
@@ -280,6 +298,23 @@ export interface Database {
   campaigns: Campaign[];
   consentInvites: { token: string; creatorId: string; draft: ConsentDraft; status: "pending" | "completed" }[];
   events: AuditEvent[];
+  /** Idempotency slots for campaign creation. Missing on legacy rows — treated as empty. */
+  idempotencyKeys: Record<string, IdempotencyRecord>;
+  /**
+   * Deletion tombstones: id + title + time of hard-deleted campaigns. Makes
+   * DELETE idempotent (retry returns success, never an error) and lets the
+   * creation path answer honestly (410 Gone) instead of resurrecting a
+   * deleted campaign under a replayed idempotency key. Missing on legacy
+   * rows — treated as empty.
+   */
+  deletedCampaigns: DeletedCampaign[];
+}
+
+/** Minimal audit trace of a hard-deleted draft. The row itself is gone. */
+export interface DeletedCampaign {
+  id: string;
+  title: string;
+  deletedAt: string;
 }
 
 /** Rough per-capability price map (USD) used for pre-production estimates.

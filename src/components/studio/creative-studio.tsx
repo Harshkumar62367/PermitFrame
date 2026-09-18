@@ -125,8 +125,8 @@ export function CreativeStudio({ campaign, sourceMedia, passport, productFacts, 
 }
 
 interface ServiceHealth {
-  dkg: { healthy: boolean };
-  livepeer: { reachable?: boolean };
+  dkg: { healthy: boolean; state?: "checking" | "healthy" | "degraded" | "unavailable" };
+  livepeer: { reachable?: boolean; state?: "checking" | "healthy" | "degraded" | "unavailable" };
 }
 
 /**
@@ -145,8 +145,12 @@ function ServiceNotice() {
   }, []);
 
   if (!health) return null;
-  const productionDown = health.livepeer.reachable === false;
-  const ledgerDown = !health.dkg.healthy;
+  // Banner only on settled failures: a "checking" payload (no probe has
+  // answered yet) stays silent — job errors remain the backstop.
+  const down = (state: ServiceHealth["dkg"]["state"], flag: boolean) =>
+    state ? state === "degraded" || state === "unavailable" : flag;
+  const productionDown = down(health.livepeer.state, health.livepeer.reachable === false);
+  const ledgerDown = down(health.dkg.state, !health.dkg.healthy);
   if (!productionDown && !ledgerDown) return null;
 
   return (

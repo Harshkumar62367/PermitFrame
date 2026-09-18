@@ -9,8 +9,8 @@ import { IntegrationStatusStrip } from "./sidebar/integration-status-strip";
 import { AccountMenu } from "./sidebar/account-menu";
 
 export interface ShellHealth {
-  dkg: { mode: string; healthy: boolean; blockchain?: string; detail?: string; endpoint?: string };
-  livepeer: { keyless: boolean; endpoint?: string; reachable?: boolean; detail?: string };
+  dkg: { mode: string; healthy: boolean; blockchain?: string; detail?: string; endpoint?: string; state?: "checking" | "healthy" | "degraded" | "unavailable" };
+  livepeer: { keyless: boolean; endpoint?: string; reachable?: boolean; detail?: string; state?: "checking" | "healthy" | "degraded" | "unavailable" };
 }
 
 /**

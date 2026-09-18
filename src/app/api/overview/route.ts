@@ -13,9 +13,11 @@ export async function GET() {
   try {
     return NextResponse.json(await getWorkspaceOverview());
   } catch (error) {
-    // Authorization behaves exactly like the sibling read routes (propagates
-    // to the default error mapping); only genuine failures become a 503.
-    if (error instanceof AuthenticationRequiredError) throw error;
+    // Same contract as the sibling read routes: expired/missing sessions are
+    // 401 with guidance, never a 500.
+    if (error instanceof AuthenticationRequiredError) {
+      return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+    }
     return NextResponse.json(
       { error: error instanceof Error ? error.message.slice(0, 300) : "Workspace overview failed." },
       { status: 503 }

@@ -25,6 +25,8 @@ export const PRODUCTION_STAGES: { stage: ProductionStage; label: string }[] = [
 export function effectiveCampaignStatus(
   campaign: Pick<Campaign, "status" | "preflight">
 ): CampaignStatus {
+  // Archived is terminal and read-only: the live verdict must never rewrite it.
+  if (campaign.status === "archived") return "archived";
   const decision = campaign.preflight?.decision;
   if (decision === "block") return "blocked";
   // A stored "blocked" whose preflight now allows (or never ran) is stale:
@@ -56,6 +58,8 @@ export function productionStage(campaign: Campaign): ProductionStage {
  * true only when a write actually happened.
  */
 export async function reconcileCampaignStatus(campaign: Campaign): Promise<boolean> {
+  // Archived rows are history, not drift — never rewrite them.
+  if (campaign.status === "archived") return false;
   const effective = effectiveCampaignStatus(campaign);
   if (effective === campaign.status) return false;
   await updateDb((d) => {

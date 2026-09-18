@@ -17,7 +17,9 @@ export function emptyDb(): Database {
     productFacts: [],
     campaigns: [],
     consentInvites: [],
-    events: []
+    events: [],
+    idempotencyKeys: {},
+    deletedCampaigns: []
   };
 }
 

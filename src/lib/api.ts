@@ -81,6 +81,8 @@ export const apiPost = <T>(endpoint: string, body?: unknown, signal?: AbortSigna
   api<T>(endpoint, { method: "POST", body: body ?? {}, signal, timeoutMs });
 export const apiPatch = <T>(endpoint: string, body?: unknown, signal?: AbortSignal, timeoutMs?: number): Promise<T> =>
   api<T>(endpoint, { method: "PATCH", body: body ?? {}, signal, timeoutMs });
+export const apiDelete = <T>(endpoint: string, signal?: AbortSignal, timeoutMs?: number): Promise<T> =>
+  api<T>(endpoint, { method: "DELETE", signal, timeoutMs });
 
 /** Honest publication wording: never claim a shared record for workspace-only saves. */
 export function describeRecord(ual: string | null | undefined): { recorded: boolean; headline: string; detail: string } {
