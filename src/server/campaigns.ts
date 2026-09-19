@@ -15,6 +15,7 @@ import {
   CampaignProtectedError,
   deletedTitle,
   deletionEligibility,
+  forceDeleteEligibility,
   isDeleted,
   WorkspaceOwnerRequiredError
 } from "./deletion";
@@ -434,7 +435,12 @@ export async function approveCampaign(id: string): Promise<{ approved: boolean; 
       c.updatedAt = nowIso();
     }
   });
-  const result = await publishCampaignRecord(id);
+  // On-chain anchoring (SWM publish + async publisher poll + verification
+  // snapshot) runs detached: the publisher poll alone can take minutes and
+  // no HTTP request should await it (proxies/browsers drop long-idle
+  // connections). The UI polls the campaign until the UAL lands; the
+  // existing "pending" banner covers the interim. Same fire-and-forget
+  // shape as production jobs above.
   await updateDb((d) => {
     d.events.push({
       id: newId("evt"),
@@ -444,35 +450,35 @@ export async function approveCampaign(id: string): Promise<{ approved: boolean; 
       refs: [id]
     });
   });
-  // Public verification snapshot: sanitized, stable reference, written at
-  // approval time. Snapshot failures never undo the approval itself.
-  let verificationRef: string | undefined;
-  let verificationWarning: string | undefined;
-  try {
-    const fresh = await loadCampaign(id);
-    if (fresh) {
-      const db = await loadDb();
-      verificationRef = fresh.verificationRef ?? newVerificationRef();
-      await saveVerificationSnapshot(
-        buildPublicSnapshot({
-          ref: verificationRef,
-          campaign: fresh,
-          passport: db.passports.find((p) => p.id === fresh.passportId) ?? null,
-          facts: db.productFacts.find((f) => f.id === fresh.productFactsId) ?? null
-        })
-      );
-      await updateDb((d) => {
-        const c = d.campaigns.find((x) => x.id === id);
-        if (c) {
-          c.verificationRef = verificationRef;
-          c.updatedAt = nowIso();
-        }
-      });
+  void (async () => {
+    await publishCampaignRecord(id);
+    try {
+      const fresh = await loadCampaign(id);
+      if (fresh) {
+        const db = await loadDb();
+        const ref = fresh.verificationRef ?? newVerificationRef();
+        await saveVerificationSnapshot(
+          buildPublicSnapshot({
+            ref,
+            campaign: fresh,
+            passport: db.passports.find((p) => p.id === fresh.passportId) ?? null,
+            facts: db.productFacts.find((f) => f.id === fresh.productFactsId) ?? null
+          })
+        );
+        await updateDb((d) => {
+          const c = d.campaigns.find((x) => x.id === id);
+          if (c) {
+            c.verificationRef = ref;
+            c.updatedAt = nowIso();
+          }
+        });
+      }
+    } catch {
+      // Snapshot failures never undo the approval: the "no public
+      // verification link yet" panel plus Refresh button covers recovery.
     }
-  } catch {
-    verificationWarning = "Approved, but the public verification snapshot failed to save — approve again to retry.";
-  }
-  return { approved: true, ual: result.ual, publicationStatus: result.publicationStatus, verificationRef, verificationWarning };
+  })().catch(() => undefined);
+  return { approved: true };
 }
 
 /**
@@ -481,8 +487,15 @@ export async function approveCampaign(id: string): Promise<{ approved: boolean; 
  * removed, a tombstone is recorded (idempotent retries succeed), activity
  * events stay, and DKG state is never touched — deletable campaigns have no
  * public proof by construction.
+ *
+ * Archived records are refused UNLESS `force: true` is passed explicitly —
+ * the hidden last-resort path. Even force never deletes while jobs run, and
+ * force on a non-archived campaign is rejected (use the normal flows).
  */
-export async function deleteCampaign(id: string): Promise<{ deleted: true; alreadyDeleted: boolean; title: string }> {
+export async function deleteCampaign(
+  id: string,
+  opts?: { force?: boolean }
+): Promise<{ deleted: true; alreadyDeleted: boolean; title: string }> {
   await requireWorkspaceOwner();
   const tombstoned = isDeleted(await loadDb(), id);
   if (tombstoned) {
@@ -491,9 +504,23 @@ export async function deleteCampaign(id: string): Promise<{ deleted: true; alrea
   }
   const campaign = await loadCampaign(id);
   if (!campaign) throw new CampaignNotFoundError(id);
-  const eligibility = deletionEligibility(campaign);
-  if (!eligibility.deletable) {
-    throw new CampaignProtectedError(eligibility.reasons, eligibility.archiveAvailable);
+  if (campaign.status === "archived") {
+    if (!opts?.force) {
+      const eligibility = deletionEligibility(campaign);
+      throw new CampaignProtectedError(eligibility.reasons, eligibility.archiveAvailable);
+    }
+    const force = forceDeleteEligibility(campaign);
+    if (!force.allowed) {
+      throw new CampaignProtectedError(force.reasons, false);
+    }
+  } else {
+    if (opts?.force) {
+      throw new CampaignProtectedError(["Force delete applies only to archived records — use the normal delete or archive flow."], true);
+    }
+    const eligibility = deletionEligibility(campaign);
+    if (!eligibility.deletable) {
+      throw new CampaignProtectedError(eligibility.reasons, eligibility.archiveAvailable);
+    }
   }
   const now = nowIso();
   const eventId = newId("evt");
@@ -503,6 +530,49 @@ export async function deleteCampaign(id: string): Promise<{ deleted: true; alrea
   });
   // applyDeleteToDb throws for unknown ids, so result is always set here.
   return result ?? { deleted: true, alreadyDeleted: true, title: campaign.title };
+}
+
+/**
+ * Owner-only "Refresh verification link" for pre-snapshot approvals: builds a
+ * NEW opaque snapshot from the campaign's REAL current data (honest
+ * publication status included) and attaches its reference. Never marks
+ * anything verified, never rewrites status or proof — a record whose publish
+ * never anchored still reads "Campaign record saved", not public.
+ */
+export async function refreshVerificationSnapshot(id: string): Promise<{ verificationRef: string; created: boolean }> {
+  await requireWorkspaceOwner();
+  const campaign = await loadCampaign(id);
+  if (!campaign) throw new CampaignNotFoundError(id);
+  if (campaign.status !== "approved") {
+    throw new CampaignProtectedError(["Only approved campaign packs can receive a verification link."], false);
+  }
+  const db = await loadDb();
+  const ref = campaign.verificationRef ?? newVerificationRef();
+  const created = !campaign.verificationRef;
+  await saveVerificationSnapshot(
+    buildPublicSnapshot({
+      ref,
+      campaign,
+      passport: db.passports.find((p) => p.id === campaign.passportId) ?? null,
+      facts: db.productFacts.find((f) => f.id === campaign.productFactsId) ?? null
+    })
+  );
+  const now = nowIso();
+  await updateDb((d) => {
+    const c = d.campaigns.find((x) => x.id === id);
+    if (c) {
+      c.verificationRef = ref;
+      c.updatedAt = now;
+    }
+    d.events.push({
+      id: newId("evt"),
+      at: now,
+      kind: "campaign.verification-refreshed",
+      summary: `Verification link ${created ? "created" : "refreshed"} for "${campaign.title}" from its real approval data.`,
+      refs: [id]
+    });
+  });
+  return { verificationRef: ref, created };
 }
 
 /**

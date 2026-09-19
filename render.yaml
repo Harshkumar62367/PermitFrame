@@ -1,0 +1,39 @@
+# Render blueprint for PermitFrame. Apply via "New from Blueprint" and fill
+# the secret values in the dashboard — nothing secret lives in this file.
+services:
+  - type: web
+    name: permitframe
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter # always-on; free sleeps and would kill DKG polling
+    healthCheckPath: /api/health # stale-while-revalidate: answers instantly
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DKG_MODE
+        value: edge
+      - key: DKG_ENDPOINT_LABEL
+        value: EC2 edge node via SSH
+      - key: DKG_SSH_HOST
+        value: 52.58.167.195
+      - key: DKG_SSH_USER
+        value: harsh
+      # Key *content* (Render secret). Local dev uses DKG_SSH_KEY (file path) instead.
+      - key: DKG_SSH_KEY_INLINE
+        sync: false
+      - key: DKG_REMOTE_DKG_BIN
+        value: /home/harsh/.local/bin/dkg
+      - key: DKG_CONTEXT_GRAPH
+        value: permitframe-acceptance-20260919
+      - key: DKG_CONTEXT_GRAPH_ID
+        value: 0x31c83Ac625c29Ef7F4fabDB49ee68Fb56B06977c/permitframe-acceptance-20260919
+      - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_URL_UNPOOLED
+        sync: false
+      - key: PRIVY_APP_SECRET
+        sync: false
+      - key: NEXT_PUBLIC_PRIVY_APP_ID
+        sync: false
+      - key: BASE_SEPOLIA_RPC_URL
+        sync: false
