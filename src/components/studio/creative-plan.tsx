@@ -52,6 +52,7 @@ export function CreativePlan({ campaign, allowed, onChanged }: CreativePlanProps
   const selectedIds = selected ?? selectable.map((s) => s.id);
   const selectedStages = selectable.filter((s) => selectedIds.includes(s.id));
   const estimate = estimateStages(selectedStages);
+  const hasMotion = selectedStages.some((s) => s.kind === "image-to-video");
   const spent = campaign.jobs.filter((j) => j.status === "succeeded").reduce((s, j) => s + (j.costUsd ?? 0), 0);
 
   function toggleStage(stageId: string) {
@@ -265,6 +266,9 @@ export function CreativePlan({ campaign, allowed, onChanged }: CreativePlanProps
             <div className="mt-4 space-y-1 rounded-xl bg-muted/60 p-3.5 text-[12.5px] leading-relaxed ring-1 ring-border">
               <p><span className="font-medium">Estimated spend {formatUsd(estimate)}</span> · {formatUsd(spent)} spent so far on this campaign.</p>
               <p className="text-muted-foreground">Generation spend is non-refundable once a stage runs. Only approved stages are queued — anything unselected stays untouched.</p>
+              {hasMotion && (
+                <p className="text-muted-foreground">Video stages can take several minutes. Generation runs on the server — safe to leave this page; progress is saved per finished stage.</p>
+              )}
             </div>
             {error && <p role="alert" className="mt-3 break-words text-[12px] text-rose-600 dark:text-rose-300">{error}</p>}
             <div className="mt-5 flex flex-wrap justify-end gap-2">

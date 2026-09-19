@@ -367,6 +367,10 @@ export function campaignCostRollup(campaign: Campaign): { spent: number; estimat
 }
 
 /* ------------------------- share links + comments ------------------------- */
+// NOTE: public share reads/writes live in ./public-share (session-free,
+// whitelisted). The session-gated resolveShare/clientReview used to serve the
+// public routes and 500'd logged-out visitors — removed so no future caller
+// can reintroduce the session dependency on a public path.
 
 export async function createShareLink(campaignId: string): Promise<string> {
   const campaign = await findCampaign(campaignId);
@@ -380,41 +384,6 @@ export async function createShareLink(campaignId: string): Promise<string> {
     c.shareToken = token;
   });
   return token;
-}
-
-export async function resolveShare(token: string): Promise<Campaign | undefined> {
-  return (await campaigns()).find((c) => c.shareToken === token);
-}
-
-export async function clientReview(
-  token: string,
-  input: { decision: "approved" | "changes_requested"; clientName?: string; comment?: string }
-): Promise<Campaign> {
-  const campaign = await resolveShare(token);
-  if (!campaign) throw new Error("Share link not found");
-  const { throwIfArchived } = await import("./campaigns");
-  throwIfArchived(campaign, "client-reviewed");
-  await updateDb((d) => {
-    const c = d.campaigns.find((x) => x.id === campaign.id);
-    if (!c) return;
-    c.comments = [...(c.comments ?? []), {
-      id: newId("cmt"),
-      author: input.clientName?.trim() || "client",
-      text: `[${input.decision}] ${input.comment?.trim() || ""}`.trim(),
-      at: nowIso()
-    }];
-    if (input.decision === "approved" && c.status === "review") c.status = "approved";
-    if (input.decision === "changes_requested") c.status = "review";
-    c.updatedAt = nowIso();
-    d.events.push({
-      id: newId("evt"),
-      at: nowIso(),
-      kind: `share.${input.decision}`,
-      summary: `Client review: ${input.decision} on "${c.title}".`,
-      refs: [c.id]
-    });
-  });
-  return (await findCampaign(campaign.id))!;
 }
 
 export async function addComment(campaignId: string, author: string, text: string): Promise<Campaign> {

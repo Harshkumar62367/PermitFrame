@@ -40,6 +40,7 @@ export function ReviewSection({ campaign, onChanged }: ReviewSectionProps) {
     campaignUAL: campaign.campaignUAL
   });
   const [showTechnical, setShowTechnical] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const receiptRecords = campaign.receipts.filter((r) => r.ual);
   const campaignRecord = campaign.campaignUAL ?? approvedUal;
   const hasTechnicalRecords = receiptRecords.length > 0 || !!campaignRecord;
@@ -59,6 +60,27 @@ export function ReviewSection({ campaign, onChanged }: ReviewSectionProps) {
       setError(e instanceof Error ? e.message : "Approval failed.");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function refreshVerification() {
+    if (refreshing) return;
+    setRefreshing(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const j = await apiPost<{ verificationRef: string; created: boolean }>(`/api/campaigns/${campaign.id}/refresh-verification`);
+      setNotice(
+        j.created
+          ? "Verification link created from this approval's real data — share it from any output below."
+          : "Verification link refreshed from this approval's real data."
+      );
+      invalidateSnapshot();
+      await onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Refreshing the verification link failed.");
+    } finally {
+      setRefreshing(false);
     }
   }
 
@@ -118,6 +140,27 @@ export function ReviewSection({ campaign, onChanged }: ReviewSectionProps) {
           )}
         </div>
       </div>
+
+      {/* Pre-snapshot approvals have no public link yet: mint one from real data. */}
+      {campaign.status === "approved" && !campaign.verificationRef && (
+        <div className="mt-4 rounded-xl border border-dashed border-border p-4">
+          <p className="text-[13px] font-medium">No public verification link yet</p>
+          <p className="mt-1 max-w-2xl text-[12.5px] leading-relaxed text-muted-foreground">
+            This pack was approved before public links existed. Create one now from this approval&apos;s real data —
+            nothing is marked verified beyond what the record honestly carries.
+          </p>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void refreshVerification()}
+            disabled={refreshing || busy}
+            aria-busy={refreshing}
+            className="mt-3 rounded-full"
+          >
+            {refreshing ? "Creating link…" : "Refresh verification link"}
+          </Button>
+        </div>
+      )}
 
       {error && <p role="alert" className="mt-3 break-words text-[12.5px] text-rose-600 dark:text-rose-300">{error}</p>}
       {notice && <p role="status" className="mt-3 break-words text-[12.5px] text-amber-700 dark:text-amber-300">{notice}</p>}

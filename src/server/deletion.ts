@@ -49,6 +49,9 @@ export function deletionEligibility(campaign: Campaign): DeletionEligibility {
       busy: false
     };
   }
+  // NOTE: permanent removal of an archived record exists as an explicit,
+  // flag-gated last resort (forceDeleteEligibility below) — never here, so
+  // ordinary delete flows and UIs can never stumble into destroying history.
   const hasAssets = campaign.receipts.length > 0 || campaign.jobs.some((j) => j.status === "succeeded");
   if (hasAssets) {
     reasons.push(
@@ -66,6 +69,65 @@ export function deletionEligibility(campaign: Campaign): DeletionEligibility {
     reasons.push("It has a finalized public proof record — archive it so verification history stays intact.");
   }
   return { deletable: reasons.length === 0, archiveAvailable: true, reasons, busy: false };
+}
+
+/**
+ * Last-resort permanent removal of an ARCHIVED record only. The normal path
+ * above never allows this; callers must pass an explicit force flag (owner
+ * only, hidden UI, type-to-confirm) precisely because it destroys audit
+ * history: the workspace row, its jobs/receipts/plan and its share link go
+ * away. What survives: workspace activity events, verification snapshots
+ * (public proof stays verifiable — it was the point of publishing), and
+ * ledger data (never touched). Active jobs block even force: a background
+ * worker must never write into a removed row mid-flight.
+ */
+export interface ForceDeleteEligibility {
+  allowed: boolean;
+  busy: boolean;
+  reasons: string[];
+  warnings: string[];
+}
+
+export function forceDeleteWarnings(campaign: Campaign): string[] {
+  const warnings: string[] = [
+    "The workspace record is removed permanently — brief, jobs, generated outputs and plan."
+  ];
+  if (campaign.receipts.length > 0) {
+    warnings.push(
+      `${campaign.receipts.length} generated output${campaign.receipts.length === 1 ? "" : "s"} will no longer resolve from this workspace.`
+    );
+  }
+  if (campaign.shareToken) {
+    warnings.push("The client-review link breaks immediately (anyone holding it gets not-found).");
+  }
+  if ((campaign.verificationRef ?? "").length > 0 || (campaign.campaignUAL ?? "").length > 0) {
+    warnings.push(
+      "Public verification snapshots stay published and verifiable — archiving's proof purpose survives, only this workspace's copy goes."
+    );
+  }
+  warnings.push("Workspace activity entries that mention it stay. This cannot be undone.");
+  return warnings;
+}
+
+export function forceDeleteEligibility(campaign: Campaign): ForceDeleteEligibility {
+  const activeJobs = campaign.jobs.filter((j) => j.status === "queued" || j.status === "running");
+  if (activeJobs.length > 0) {
+    return {
+      allowed: false,
+      busy: true,
+      reasons: [`Production is still running (${activeJobs.length} active job${activeJobs.length === 1 ? "" : "s"}) — force delete is blocked until it settles.`],
+      warnings: []
+    };
+  }
+  if (campaign.status !== "archived") {
+    return {
+      allowed: false,
+      busy: false,
+      reasons: ["Force delete applies only to archived records — use the normal delete or archive flow."],
+      warnings: []
+    };
+  }
+  return { allowed: true, busy: false, reasons: [], warnings: forceDeleteWarnings(campaign) };
 }
 
 export class CampaignNotFoundError extends Error {

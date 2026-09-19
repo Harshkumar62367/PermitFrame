@@ -6,7 +6,9 @@ import {
   applyArchiveToDb,
   applyDeleteToDb,
   CampaignNotFoundError,
-  deletionEligibility
+  deletionEligibility,
+  forceDeleteEligibility,
+  forceDeleteWarnings
 } from "./deletion";
 import type { Campaign, Database } from "./types";
 
@@ -201,8 +203,7 @@ describe("applyDeleteToDb", () => {
   });
 });
 
-describe("applyArchiveToDb", () => {
-  it("archives in place, keeps the row readable, and is idempotent on retry", () => {
+describe("applyArchiveToDb", () => {  it("archives in place, keeps the row readable, and is idempotent on retry", () => {
     const db = blankDb();
     db.campaigns.push(draft({ id: "cmp_a", status: "approved" }));
     const first = applyArchiveToDb(db, "cmp_a", "t1", "evt_1");
@@ -219,6 +220,80 @@ describe("applyArchiveToDb", () => {
   });
 });
 
+describe("forceDeleteEligibility (archived last resort)", () => {
+  it("allows force on settled archived records with explicit warnings", () => {
+    const e = forceDeleteEligibility(draft({ status: "archived" }));
+    assert.equal(e.allowed, true);
+    assert.equal(e.busy, false);
+    assert.ok(e.warnings.join(" ").includes("cannot be undone"));
+  });
+
+  it("warns about assets, share links and surviving public proof", () => {
+    const warnings = forceDeleteWarnings(
+      draft({
+        status: "archived",
+        receipts: [
+          {
+            id: "rcp_1",
+            campaignId: "cmp_test",
+            jobId: "job_1",
+            label: "keyframe",
+            mediaType: "image",
+            format: "9:16",
+            outputUrl: "https://example.com/out.png",
+            outputHash: "h",
+            capability: "flux-schnell",
+            promptHash: "p",
+            claimsUsed: [],
+            derivedFrom: { sourceMediaId: "med_1", passportId: "pp_1", productFactsId: "pf_1" },
+            generatedAt: "t",
+            visibility: "private"
+          }
+        ],
+        shareToken: "tok_1",
+        verificationRef: "vrf_abc"
+      })
+    );
+    const text = warnings.join(" ");
+    assert.ok(text.includes("1 generated output"));
+    assert.ok(text.includes("client-review link breaks"));
+    assert.ok(text.includes("stay published and verifiable"));
+  });
+
+  it("still blocks force while jobs run, and rejects force on non-archived rows", () => {
+    const busyArchived = draft({
+      status: "archived",
+      jobs: [
+        {
+          id: "job_1",
+          campaignId: "cmp_test",
+          stageId: "keyframe",
+          kind: "text-to-image",
+          capability: "flux-schnell",
+          prompt: "p",
+          status: "running",
+          startedAt: "t"
+        }
+      ]
+    });
+    const busy = forceDeleteEligibility(busyArchived);
+    assert.equal(busy.allowed, false);
+    assert.equal(busy.busy, true);
+    const notArchived = forceDeleteEligibility(draft());
+    assert.equal(notArchived.allowed, false);
+    assert.ok(notArchived.reasons.join(" ").includes("only to archived records"));
+  });
+
+  it("applyDeleteToDb removes archived rows and tombstones them", () => {
+    const db = blankDb();
+    db.campaigns.push(draft({ id: "cmp_old", status: "archived", title: "Old" }));
+    const res = applyDeleteToDb(db, "cmp_old", "t", "evt_1");
+    assert.deepEqual(res, { deleted: true, alreadyDeleted: false, title: "Old" });
+    assert.equal(db.campaigns.length, 0);
+    assert.equal(applyDeleteToDb(db, "cmp_old", "t", "evt_2").alreadyDeleted, true);
+  });
+});
+
 describe("deletion route authorization (static)", () => {
   const root = process.cwd();
   const read = (rel: string) => fs.readFileSync(path.join(root, ...rel.split("/")), "utf8");
@@ -227,6 +302,7 @@ describe("deletion route authorization (static)", () => {
     const del = read("src/app/api/campaigns/[id]/route.ts");
     assert.ok(del.includes("deleteCampaign"), "DELETE handler delegates to deleteCampaign");
     assert.ok(del.includes("AuthenticationRequiredError"), "auth failures map to 401, never 500");
+    assert.ok(del.includes("force"), "DELETE supports the flag-gated archived last resort");
     const archive = read("src/app/api/campaigns/[id]/archive/route.ts");
     assert.ok(archive.includes("archiveCampaign"), "archive route delegates to archiveCampaign");
     assert.ok(archive.includes("AuthenticationRequiredError"), "archive auth failures map to 401");

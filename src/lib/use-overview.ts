@@ -30,6 +30,7 @@ export type OverviewWarning = SnapshotWarning;
 export interface WorkspaceOverviewData {
   workspaceName: string | null;
   campaigns: OverviewCampaign[];
+  archivedCampaigns: OverviewCampaign[];
   warnings: OverviewWarning[];
   totalSpent: number;
   totalOutputs: number;
@@ -62,6 +63,7 @@ export function useWorkspaceOverview(): OverviewState {
     ? {
         workspaceName: snapshot.data.workspaceName,
         campaigns: snapshot.data.campaigns,
+        archivedCampaigns: snapshot.data.archivedCampaigns ?? [],
         warnings: snapshot.data.warnings,
         totalSpent: snapshot.data.totalSpent,
         totalOutputs: snapshot.data.totalOutputs,

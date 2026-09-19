@@ -9,6 +9,7 @@ import {
   CampaignNotFoundError,
   CampaignProtectedError,
   deletionEligibility,
+  forceDeleteEligibility,
   WorkspaceOwnerRequiredError
 } from "@/server/deletion";
 
@@ -60,8 +61,9 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
     productFacts: db.productFacts.find((f) => f.id === campaign.productFactsId) ?? null,
     // Single source of truth for the danger zone: computed server-side from
     // the same rules that enforce deletion, so the UI can never offer an
-    // action the server would reject (and vice versa).
-    deletion: deletionEligibility(campaign)
+    // action the server would reject (and vice versa). `force` carries the
+    // last-resort archived-removal warnings for the hidden confirm flow.
+    deletion: { ...deletionEligibility(campaign), force: forceDeleteEligibility(campaign) }
   });
 }
 
@@ -104,11 +106,16 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
  * retry for an already-deleted id succeeds with alreadyDeleted instead of an
  * error. Protected campaigns (assets, share link, anchored proof) get a 409
  * pointing at archive; unknown ids get a 404.
+ *
+ * Archived records are refused UNLESS `?force=true` is passed explicitly —
+ * the hidden last-resort path (owner only, type-to-confirm UI). Even force
+ * never deletes while jobs run.
  */
-export async function DELETE(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  const force = new URL(request.url).searchParams.get("force") === "true";
   try {
-    const result = await deleteCampaign(id);
+    const result = await deleteCampaign(id, { force });
     return NextResponse.json(result);
   } catch (error) {
     if (error instanceof AuthenticationRequiredError) return authError();

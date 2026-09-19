@@ -2,7 +2,7 @@ import { getCurrentSession } from "./auth";
 import { effectiveCampaignStatus, productionStage, reconcileCampaignStatus, type ProductionStage } from "./campaign-status";
 import { loadDb } from "./store";
 import { campaignCostRollup, estimateCost, expiryWarnings, type ExpiryWarning } from "./platform";
-import type { CampaignStatus, Database, PublicationStatus } from "./types";
+import type { Campaign, CampaignStatus, Database, PublicationStatus } from "./types";
 
 export interface OverviewBlocker {
   code: string;
@@ -107,6 +107,8 @@ export interface OverviewActivityItem {
 export interface WorkspaceOverview {
   workspaceName: string | null;
   campaigns: OverviewCampaign[];
+  /** Archived rows for the Campaigns "Archived" filter. Excluded from every metric/pipeline rollup. */
+  archivedCampaigns: OverviewCampaign[];
   warnings: ExpiryWarning[];
   totalSpent: number;
   totalOutputs: number;
@@ -153,9 +155,9 @@ export function buildWorkspaceOverview(db: Database, workspaceName: string | nul
   const titleByCampaignId = new Map(db.campaigns.map((c) => [c.id, c.title] as const));
   // Archived campaigns are audit history: they stay resolvable for activity
   // titles/detail reads but leave every list, metric and pipeline bucket.
+  // The row mapper is shared so archived rows render identically in the filter.
   const visible = db.campaigns.filter((c) => c.status !== "archived");
-
-  const campaigns: OverviewCampaign[] = visible.map((c) => {
+  const toOverviewCampaign = (c: Campaign): OverviewCampaign => {
     const rollup = campaignCostRollup(c);
     const latestReceipt = c.receipts.at(-1) ?? null;
     const sourceUrl = mediaById.get(c.sourceMediaId) ?? null;
@@ -217,7 +219,12 @@ export function buildWorkspaceOverview(db: Database, workspaceName: string | nul
         ? { id: facts.id, approvedClaims: facts.approvedClaims, ual: facts.ual ?? null }
         : null
     };
-  });
+  };
+
+  const campaigns: OverviewCampaign[] = visible.map((c) => toOverviewCampaign(c));
+  const archivedCampaigns: OverviewCampaign[] = db.campaigns
+    .filter((c) => c.status === "archived")
+    .map((c) => toOverviewCampaign(c));
 
   let totalSpent = 0;
   let totalOutputs = 0;
@@ -263,6 +270,7 @@ export function buildWorkspaceOverview(db: Database, workspaceName: string | nul
   return {
     workspaceName,
     campaigns,
+    archivedCampaigns,
     warnings,
     totalSpent,
     totalOutputs,

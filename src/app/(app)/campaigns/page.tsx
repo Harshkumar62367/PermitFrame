@@ -15,7 +15,7 @@ import { useWorkspaceOverview } from "@/lib/use-overview";
 import type { SnapshotCampaign } from "@/lib/use-workspace-snapshot";
 import { cn } from "@/lib/utils";
 
-type FilterKey = "all" | "attention" | "ready" | "generating" | "delivered" | "briefed";
+type FilterKey = "all" | "attention" | "ready" | "generating" | "delivered" | "briefed" | "archived";
 
 const FILTERS: { key: FilterKey; label: string; match: (c: SnapshotCampaign) => boolean }[] = [
   { key: "all", label: "All", match: () => true },
@@ -23,7 +23,8 @@ const FILTERS: { key: FilterKey; label: string; match: (c: SnapshotCampaign) => 
   { key: "ready", label: "Ready", match: (c) => c.stage === "ready" },
   { key: "generating", label: "Generating", match: (c) => c.stage === "generating" },
   { key: "delivered", label: "Delivered", match: (c) => c.stage === "delivered" },
-  { key: "briefed", label: "Briefed", match: (c) => c.stage === "briefed" || c.stage === "policy-check" }
+  { key: "briefed", label: "Briefed", match: (c) => c.stage === "briefed" || c.stage === "policy-check" },
+  { key: "archived", label: "Archived", match: () => true }
 ];
 
 function CampaignsContent() {
@@ -36,11 +37,17 @@ function CampaignsContent() {
   const { status, data, error, retry } = useWorkspaceOverview();
   const [formOpen, setFormOpen] = useState(false);
   const campaigns = data?.campaigns ?? null;
+  const archived = data?.archivedCampaigns ?? [];
 
   const rawFilter = searchParams.get("filter");
   const active: FilterKey = FILTERS.some((f) => f.key === rawFilter) ? (rawFilter as FilterKey) : "all";
   const matcher = FILTERS.find((f) => f.key === active)?.match ?? (() => true);
-  const visible = (campaigns ?? []).filter(matcher);
+  // Archived rows live outside the normal lists by design; the Archived
+  // filter is their only in-product discovery (besides direct links).
+  const pool = active === "archived" ? archived : (campaigns ?? []);
+  const visible = pool.filter(matcher);
+  const countFor = (key: FilterKey) =>
+    key === "archived" ? archived.length : (campaigns ?? []).filter(FILTERS.find((f) => f.key === key)?.match ?? (() => true)).length;
 
   function setFilter(key: FilterKey) {
     const params = new URLSearchParams(searchParams.toString());
@@ -87,7 +94,7 @@ function CampaignsContent() {
         <>
           <div className="flex flex-wrap gap-2" role="group" aria-label="Filter campaigns by stage">
             {FILTERS.map((f) => {
-              const count = (campaigns ?? []).filter(f.match).length;
+              const count = countFor(f.key);
               const selected = f.key === active;
               return (
                 <button
@@ -110,10 +117,12 @@ function CampaignsContent() {
           </div>
           {visible.length === 0 ? (
             <EmptyState
-              title={active === "all" ? "No campaigns yet" : "Nothing in this stage"}
+              title={active === "all" ? "No campaigns yet" : active === "archived" ? "No archived campaigns" : "Nothing in this stage"}
               body={active === "all"
                 ? "Get started in four steps: add approved material, brief a campaign, run the permission check, then produce the assets."
-                : "No campaigns currently match this stage. Clear the filter to see everything."}
+                : active === "archived"
+                  ? "Archived campaigns leave the normal lists but stay readable — archive one from its detail page to see it here."
+                  : "No campaigns currently match this stage. Clear the filter to see everything."}
               actions={active === "all" ? (
                 <>
                   <Button asChild variant="outline" className="rounded-full">

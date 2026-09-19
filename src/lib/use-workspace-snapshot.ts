@@ -126,6 +126,8 @@ export interface SnapshotActivityItem {
 export interface WorkspaceSnapshot {
   workspaceName: string | null;
   campaigns: SnapshotCampaign[];
+  /** Archived rows for the Campaigns "Archived" filter. Excluded from metrics. */
+  archivedCampaigns: SnapshotCampaign[];
   warnings: SnapshotWarning[];
   totalSpent: number;
   totalOutputs: number;
