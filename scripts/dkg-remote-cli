@@ -1,0 +1,3 @@
+#!/bin/sh
+# Linux/macOS shim (Render, CI) so DKG_CLI_BIN can point at the remote-CLI wrapper.
+exec node "$(dirname "$0")/dkg-remote-cli.mjs" "$@"

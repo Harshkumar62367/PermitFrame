@@ -9,6 +9,9 @@ import type { KaEnvelope } from "./schemas";
 
 const execFileAsync = promisify(execFile);
 const CG_ENV = process.env.DKG_CONTEXT_GRAPH ?? "permitframe";
+// Where the CLI actually talks to: local daemon by default, EC2 via the
+// SSH wrapper when DKG_CLI_BIN points at scripts/dkg-remote-cli.*.
+const ENDPOINT_LABEL = process.env.DKG_ENDPOINT_LABEL ?? "local daemon (127.0.0.1:9200)";
 
 /**
  * Edge Node adapter: talks to a local OriginTrail Edge Node (DKG v10) through the
@@ -73,7 +76,7 @@ export class EdgeNodeAdapter implements DkgAdapter {
       return {
         mode: this.mode,
         healthy: true,
-        endpoint: "local daemon (127.0.0.1:9200)",
+        endpoint: ENDPOINT_LABEL,
         blockchain: process.env.DKG_BLOCKCHAIN ?? "base:84532 (V10 testnet)",
         detail: `Edge Node running — ${peers} peer(s), context graph "${CG_ENV}". SWM shares are live DKG operations.`
       };
@@ -81,8 +84,8 @@ export class EdgeNodeAdapter implements DkgAdapter {
       return {
         mode: this.mode,
         healthy: false,
-        endpoint: "local daemon (127.0.0.1:9200)",
-        detail: `Edge Node unreachable — run "dkg start". ${(error as Error).message.slice(0, 140)}`
+        endpoint: ENDPOINT_LABEL,
+        detail: `Edge Node unreachable — check the DKG_CLI_BIN target (${process.env.DKG_CLI_BIN ?? "dkg"}). ${(error as Error).message.slice(0, 140)}`
       };
     }
   }
