@@ -1,13 +1,11 @@
-import { execFile } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import type { PermissionPassport, ProductFacts, Visibility } from "../types";
 import { explorerUrlFor, basePublicationStatus, type DkgAdapter, type DkgHealth, type KaRecord } from "./adapter";
 import type { KaEnvelope } from "./schemas";
+import { createTransportFromEnv, type CliTransport } from "./transports";
 
-const execFileAsync = promisify(execFile);
 const CG_ENV = process.env.DKG_CONTEXT_GRAPH ?? "permitframe";
 // Where the CLI actually talks to: local daemon by default, EC2 via the
 // SSH wrapper when DKG_CLI_BIN points at scripts/dkg-remote-cli.*.
@@ -24,14 +22,12 @@ export class EdgeNodeAdapter implements DkgAdapter {
   readonly mode = "edge-node" as const;
   private canonicalCg?: string;
 
+  /** Transport defaults to env selection (SSH when DKG_SSH_HOST is set). */
+  constructor(private readonly transport: CliTransport = createTransportFromEnv()) {}
+
   private async run(args: string[], timeoutMs = 120_000): Promise<string> {
     try {
-      const { stdout } = await execFileAsync(process.env.DKG_CLI_BIN ?? "dkg", args, {
-        timeout: timeoutMs,
-        maxBuffer: 8 * 1024 * 1024,
-        shell: process.platform === "win32" // dkg is a .cmd shim on Windows
-      });
-      return stdout;
+      return await this.transport.run(args, timeoutMs);
     } catch (error) {
       const message = (error as Error).message.replace(/0x[a-fA-F0-9]{64,}/g, "0x[redacted]");
       console.error(`[edge-node] dkg ${args[0]} ${args[1] ?? ""} failed:`, message.slice(0, 400));
