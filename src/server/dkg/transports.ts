@@ -43,27 +43,44 @@ export class LocalCliTransport implements CliTransport {
 export interface SshTransportConfig {
   host: string;
   user: string;
-  /** Local path to the SSH private key (dev machines). */
-  keyFile: string;
+  /** Local path to the SSH private key (dev machines). One of keyFile/keyInline is required. */
+  keyFile?: string;
   /** Raw PEM content (hosted platforms where the key arrives as env). */
   keyInline?: string;
   remoteBin: string;
   connectTimeoutSecs: number;
 }
 
-/** Null when DKG_SSH_HOST is unset — the caller then uses LocalCliTransport. */
+/**
+ * Null when DKG_SSH_HOST is unset — the caller then uses LocalCliTransport.
+ * When a host IS set, every other value is required and a missing one
+ * throws naming exactly what to add. Server details live in env, never
+ * in code, so a future instance only changes env vars.
+ */
 export function loadSshConfigFromEnv(
   env: Record<string, string | undefined> = process.env
 ): SshTransportConfig | null {
   const host = env.DKG_SSH_HOST?.trim();
   if (!host) return null;
+  const missing: string[] = [];
+  const user = env.DKG_SSH_USER?.trim();
+  if (!user) missing.push("DKG_SSH_USER");
+  const keyFile = env.DKG_SSH_KEY?.trim() || undefined;
+  const keyInline = env.DKG_SSH_KEY_INLINE?.trim() || undefined;
+  if (!keyFile && !keyInline) missing.push("DKG_SSH_KEY or DKG_SSH_KEY_INLINE");
+  const remoteBin = env.DKG_REMOTE_DKG_BIN?.trim();
+  if (!remoteBin) missing.push("DKG_REMOTE_DKG_BIN");
+  if (missing.length > 0) {
+    throw new Error(
+      `[dkg-ssh] DKG_SSH_HOST is set but missing required config: ${missing.join(", ")}.`
+    );
+  }
   return {
     host,
-    user: env.DKG_SSH_USER?.trim() || "harsh",
-    keyFile:
-      env.DKG_SSH_KEY?.trim() || path.join(os.homedir(), ".ssh", "id_ed25519_dkg_ec2"),
-    keyInline: env.DKG_SSH_KEY_INLINE?.trim() || undefined,
-    remoteBin: env.DKG_REMOTE_DKG_BIN?.trim() || "/home/harsh/.local/bin/dkg",
+    user: user as string,
+    keyFile,
+    keyInline,
+    remoteBin: remoteBin as string,
     connectTimeoutSecs: Number(env.DKG_SSH_CONNECT_TIMEOUT_SECS ?? 15) || 15
   };
 }
@@ -125,9 +142,11 @@ export class SshCliTransport implements CliTransport {
         /* ignore */
       }
       this.keyCleanup = () => rmSync(dir, { recursive: true, force: true });
-    } else {
+    } else if (config.keyFile) {
       this.keyFile = config.keyFile;
       this.keyCleanup = () => {};
+    } else {
+      throw new Error("[dkg-ssh] either keyFile or keyInline is required.");
     }
     if (!existsSync(this.keyFile)) {
       throw new Error(

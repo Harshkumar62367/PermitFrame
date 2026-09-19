@@ -18,39 +18,46 @@ describe("loadSshConfigFromEnv", () => {
     assert.equal(loadSshConfigFromEnv({ DKG_SSH_HOST: "  " }), null);
   });
 
-  it("applies defaults and trims values", () => {
-    const cfg = loadSshConfigFromEnv({ DKG_SSH_HOST: "  52.58.167.195 " });
+  it("trims values and keeps only the timeout defaulted", () => {
+    const cfg = loadSshConfigFromEnv({
+      DKG_SSH_HOST: "  52.58.167.195 ",
+      DKG_SSH_USER: " harsh ",
+      DKG_SSH_KEY: " /tmp/k ",
+      DKG_REMOTE_DKG_BIN: " /x/dkg "
+    });
     assert.ok(cfg);
     assert.equal(cfg.host, "52.58.167.195");
     assert.equal(cfg.user, "harsh");
-    assert.equal(cfg.remoteBin, "/home/harsh/.local/bin/dkg");
+    assert.equal(cfg.keyFile, "/tmp/k");
+    assert.equal(cfg.remoteBin, "/x/dkg");
     assert.equal(cfg.connectTimeoutSecs, 15);
-    assert.ok(cfg.keyFile.endsWith("id_ed25519_dkg_ec2"));
     assert.equal(cfg.keyInline, undefined);
   });
 
-  it("honours explicit user, key and timeout overrides", () => {
+  it("throws naming every missing value — no server details defaulted in code", () => {
+    assert.throws(
+      () => loadSshConfigFromEnv({ DKG_SSH_HOST: "h" }),
+      /DKG_SSH_USER.*DKG_SSH_KEY or DKG_SSH_KEY_INLINE.*DKG_REMOTE_DKG_BIN/
+    );
+    // Inline key satisfies the key requirement on hosted platforms.
     const cfg = loadSshConfigFromEnv({
       DKG_SSH_HOST: "h",
       DKG_SSH_USER: "u",
-      DKG_SSH_KEY: "/tmp/k",
       DKG_SSH_KEY_INLINE: "inline",
-      DKG_REMOTE_DKG_BIN: "/x/dkg",
-      DKG_SSH_CONNECT_TIMEOUT_SECS: "7"
+      DKG_REMOTE_DKG_BIN: "/x/dkg"
     });
     assert.ok(cfg);
-    assert.equal(cfg.user, "u");
-    assert.equal(cfg.keyFile, "/tmp/k");
+    assert.equal(cfg.keyFile, undefined);
     assert.equal(cfg.keyInline, "inline");
-    assert.equal(cfg.remoteBin, "/x/dkg");
-    assert.equal(cfg.connectTimeoutSecs, 7);
   });
 
   it("selects the SSH transport only when a host is set", () => {
     assert.ok(createTransportFromEnv({}) instanceof LocalCliTransport);
     const ssh = createTransportFromEnv({
       DKG_SSH_HOST: "h",
-      DKG_SSH_KEY: __filename // any existing file satisfies the key check
+      DKG_SSH_USER: "u",
+      DKG_SSH_KEY: __filename, // any existing file satisfies the key check
+      DKG_REMOTE_DKG_BIN: "/x/dkg"
     });
     assert.ok(ssh instanceof SshCliTransport);
   });
