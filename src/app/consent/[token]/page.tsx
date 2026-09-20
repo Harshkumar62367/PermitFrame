@@ -22,7 +22,6 @@ interface ConsentData {
     countries: string[];
     allowedTransformations: string[];
     validUntil: string;
-    sourceMediaIds: string[];
   };
   creator: { name: string; handle: string } | null;
 }
