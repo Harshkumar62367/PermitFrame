@@ -13,6 +13,15 @@ export interface PassportSummary {
   status: string;
   validUntil: string;
   ual: string | null;
+  platforms: string[];
+  countries: string[];
+  allowedTransformations: string[];
+}
+
+export interface CreatorSummary {
+  id: string;
+  name: string;
+  handle: string;
 }
 
 export interface WorkspaceSnapshot extends WorkspaceOverview {
@@ -20,6 +29,7 @@ export interface WorkspaceSnapshot extends WorkspaceOverview {
   sourceMedia: SourceMedia[];
   consentInvites: Database["consentInvites"];
   passports: PassportSummary[];
+  creators: CreatorSummary[];
 }
 
 /**
@@ -48,7 +58,11 @@ export async function getWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
       creatorName: p.creatorName,
       status: p.status,
       validUntil: p.validUntil,
-      ual: p.ual ?? null
-    }))
+      ual: p.ual ?? null,
+      platforms: p.platforms,
+      countries: p.countries,
+      allowedTransformations: p.allowedTransformations
+    })),
+    creators: db.creators.map((c) => ({ id: c.id, name: c.name, handle: c.handle }))
   };
 }

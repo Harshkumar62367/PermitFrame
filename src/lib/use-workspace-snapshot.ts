@@ -88,6 +88,15 @@ export interface SnapshotPassport {
   status: string;
   validUntil: string;
   ual: string | null;
+  platforms: string[];
+  countries: string[];
+  allowedTransformations: string[];
+}
+
+export interface SnapshotCreator {
+  id: string;
+  name: string;
+  handle: string;
 }
 
 export interface SnapshotInvite {
@@ -138,6 +147,7 @@ export interface WorkspaceSnapshot {
   sourceMedia: SourceMedia[];
   consentInvites: SnapshotInvite[];
   passports: SnapshotPassport[];
+  creators: SnapshotCreator[];
 }
 
 /** Single TanStack Query identity for all authenticated workspace data. */

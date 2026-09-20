@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { AuthenticationRequiredError, requireCurrentSession } from "@/server/auth";
 import { loadDb } from "@/server/store";
 import { createCampaign, createCampaignIdempotent } from "@/server/campaigns";
+import { resolveCampaignSelection } from "@/server/campaign-selection";
 import { IDEMPOTENCY_KEY_PATTERN, IdempotencyMismatchError } from "@/server/idempotency";
 import { isDkgUnavailable } from "@/server/dkg/edge-node-adapter";
 import { CampaignDeletedError } from "@/server/deletion";
@@ -28,8 +29,10 @@ export async function POST(request: NextRequest) {
     requestedClaims: string[];
     transformation: "image" | "video";
     creativeBrief: string;
-    brand?: string;
-    productName?: string;
+    creatorId?: string;
+    passportId?: string;
+    sourceMediaId?: string;
+    productFactsId?: string;
     /** Client-generated per-submission key: retries of the same submission replay the original campaign. */
     idempotencyKey?: string;
   };
@@ -55,18 +58,17 @@ export async function POST(request: NextRequest) {
     }
     throw error;
   }
-  const creator = db.creators[0];
-  const passport = db.passports.find((p) => p.creatorId === creator?.id);
-  // The streamlined campaign form currently selects the workspace's default
-  // brand rule rather than exposing a brand/product picker. Respect an
-  // explicitly supplied brand for API callers, otherwise use that default.
-  const facts = body.brand
-    ? db.productFacts.find((f) => f.brand === body.brand)
-    : db.productFacts[0];
-  const media = db.sourceMedia.find((m) => m.creatorId === creator?.id);
-  if (!creator || !passport || !facts || !media) {
-    return NextResponse.json({ error: "Add product facts, a creator permission passport, and source media before creating a campaign." }, { status: 400 });
-  }
+  // Explicit selection only: the server never falls back to the first
+  // workspace record (unsafe with multiple creators/media/brand rules).
+  // The UI disables submission until all four are chosen.
+  const resolved = resolveCampaignSelection(db, {
+    creatorId: body.creatorId,
+    passportId: body.passportId,
+    sourceMediaId: body.sourceMediaId,
+    productFactsId: body.productFactsId
+  });
+  if (!resolved.ok) return NextResponse.json({ error: resolved.error }, { status: 400 });
+  const { creator, passport, media, facts } = resolved.value;
   const req: CampaignRequest = {
     platform: body.platform as CampaignRequest["platform"],
     country: body.country.toUpperCase().slice(0, 2),
@@ -76,8 +78,8 @@ export async function POST(request: NextRequest) {
   };
   const input = {
     title: body.title || `${req.platform} campaign — ${req.country}`,
-    brand: body.brand ?? facts.brand,
-    productName: body.productName ?? facts.productName,
+    brand: facts.brand,
+    productName: facts.productName,
     creatorId: creator.id,
     sourceMediaId: media.id,
     passportId: passport.id,

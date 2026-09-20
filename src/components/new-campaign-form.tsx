@@ -1,6 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { useId, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,7 +16,7 @@ import {
 } from "@/components/ui/select";
 import { apiPost } from "@/lib/api";
 import { stableAttemptKey } from "@/lib/idempotency-key";
-import { useInvalidateWorkspaceSnapshot } from "@/lib/use-workspace-snapshot";
+import { useInvalidateWorkspaceSnapshot, useWorkspaceSnapshot } from "@/lib/use-workspace-snapshot";
 import { cn } from "@/lib/utils";
 
 const PLATFORMS = ["instagram", "tiktok", "youtube", "linkedin"];
@@ -23,6 +24,9 @@ const PLATFORMS = ["instagram", "tiktok", "youtube", "linkedin"];
 interface FieldErrors {
   country?: string;
   brief?: string;
+  permission?: string;
+  media?: string;
+  facts?: string;
 }
 
 export function NewCampaignForm({ onCreated }: { onCreated?: (id: string) => void }) {
@@ -36,12 +40,34 @@ export function NewCampaignForm({ onCreated }: { onCreated?: (id: string) => voi
     country: "",
     claims: "",
     transformation: "video",
-    creativeBrief: ""
+    creativeBrief: "",
+    passportId: "",
+    sourceMediaId: "",
+    productFactsId: ""
   });
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const invalidateSnapshot = useInvalidateWorkspaceSnapshot();
+  const workspace = useWorkspaceSnapshot();
+  const today = new Date().toISOString().slice(0, 10);
+  // Only active, unexpired permissions are offerable — expired or revoked
+  // rows never reach the selector, so they cannot be submitted.
+  const offerablePassports = (workspace.data?.passports ?? []).filter(
+    (p) => p.status === "active" && p.validUntil >= today
+  );
+  const creatorName = (id: string) =>
+    workspace.data?.creators.find((c) => c.id === id)?.name ?? id;
+  const chosenPassport = offerablePassports.find((p) => p.id === form.passportId) ?? null;
+  // Media is always scoped to the chosen permission's creator — other
+  // creators' items are excluded, never silently substituted.
+  const mediaForCreator = (workspace.data?.sourceMedia ?? []).filter(
+    (m) => chosenPassport && m.creatorId === chosenPassport.creatorId
+  );
+  const brandRules = workspace.data?.productFacts ?? [];
+  const workspaceLoading = workspace.isPending;
+  const readyToSubmit =
+    !workspaceLoading && form.passportId !== "" && form.sourceMediaId !== "" && form.productFactsId !== "";
   // Idempotency key for the current submission attempt. Reused only while the
   // payload is byte-identical (a retry of the same submission replays the
   // original campaign server-side instead of creating a duplicate); any edit
@@ -49,6 +75,9 @@ export function NewCampaignForm({ onCreated }: { onCreated?: (id: string) => voi
   const attemptRef = useRef<{ payload: string; key: string } | null>(null);
   function validate(): FieldErrors {
     const errors: FieldErrors = {};
+    if (!form.passportId) errors.permission = "Choose a creator permission — campaigns never pick one automatically.";
+    if (!form.sourceMediaId) errors.media = "Choose the source media for this campaign.";
+    if (!form.productFactsId) errors.facts = "Choose a brand rule for this campaign.";
     if (form.country.trim().length !== 2) errors.country = "Use a 2-letter country code (e.g. GR for Greece, DE for Germany).";
     if (!form.creativeBrief.trim()) errors.brief = "Describe the shot — the studio generates from this brief.";
     else if (form.creativeBrief.trim().length < 12) errors.brief = "Give the brief a little more to work with (12+ characters).";
@@ -76,7 +105,11 @@ export function NewCampaignForm({ onCreated }: { onCreated?: (id: string) => voi
         country: form.country.trim().toUpperCase(),
         requestedClaims: form.claims.split(",").map((c) => c.trim()).filter(Boolean),
         transformation: form.transformation,
-        creativeBrief: form.creativeBrief.trim()
+        creativeBrief: form.creativeBrief.trim(),
+        creatorId: chosenPassport?.creatorId ?? "",
+        passportId: form.passportId,
+        sourceMediaId: form.sourceMediaId,
+        productFactsId: form.productFactsId
       };
       const serialized = JSON.stringify(payload);
       attemptRef.current = stableAttemptKey(attemptRef.current, serialized, () => crypto.randomUUID());
@@ -122,6 +155,95 @@ export function NewCampaignForm({ onCreated }: { onCreated?: (id: string) => voi
             onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
             className="rounded-xl"
           />
+        </div>
+        <div className="space-y-1.5 sm:col-span-2">
+          <Label htmlFor={`${uid}-permission`} className="text-[12px] text-muted-foreground">Creator permission</Label>
+          <Select
+            value={form.passportId}
+            disabled={workspaceLoading}
+            onValueChange={(v) => {
+              setForm((f) => ({ ...f, passportId: v, sourceMediaId: "" }));
+              setFieldErrors((prev) => ({ ...prev, permission: undefined }));
+            }}
+          >
+            <SelectTrigger id={`${uid}-permission`} className="w-full rounded-xl"><SelectValue placeholder={workspaceLoading ? "Loading workspace…" : "Choose whose permission applies"} /></SelectTrigger>
+            <SelectContent>
+              {offerablePassports.map((p) => (
+                <SelectItem key={p.id} value={p.id}>
+                  {p.creatorName} — {p.platforms.join(", ")} · {p.countries.join(", ")} · until {p.validUntil}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {chosenPassport ? (
+            <p className="text-[11.5px] text-muted-foreground">
+              Allows {chosenPassport.allowedTransformations.join(", ")} · expires {chosenPassport.validUntil}
+            </p>
+          ) : (
+            !workspaceLoading && offerablePassports.length === 0 && (
+              <p className="text-[12px] text-muted-foreground">
+                No active permissions yet. <Link href="/consents" className="font-medium text-emerald-700 hover:underline dark:text-emerald-300">Invite a creator</Link> first.
+              </p>
+            )
+          )}
+          {fieldErrors.permission && (
+            <p role="alert" className="text-[12px] text-rose-600 dark:text-rose-300">{fieldErrors.permission}</p>
+          )}
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor={`${uid}-media`} className="text-[12px] text-muted-foreground">Source media</Label>
+          <Select
+            value={form.sourceMediaId}
+            disabled={workspaceLoading || !chosenPassport}
+            onValueChange={(v) => {
+              setForm((f) => ({ ...f, sourceMediaId: v }));
+              setFieldErrors((prev) => ({ ...prev, media: undefined }));
+            }}
+          >
+            <SelectTrigger id={`${uid}-media`} className="w-full rounded-xl"><SelectValue placeholder={chosenPassport ? "Choose approved media" : "Pick a permission first"} /></SelectTrigger>
+            <SelectContent>
+              {mediaForCreator.map((m) => (
+                <SelectItem key={m.id} value={m.id}>{m.title} ({m.type})</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {chosenPassport && (
+            <p className="text-[11.5px] text-muted-foreground">
+              Only {creatorName(chosenPassport.creatorId)}&apos;s approved media is listed.{" "}
+              {mediaForCreator.length === 0 && (
+                <Link href="/media" className="font-medium text-emerald-700 hover:underline dark:text-emerald-300">Register media</Link>
+              )}
+            </p>
+          )}
+          {fieldErrors.media && (
+            <p role="alert" className="text-[12px] text-rose-600 dark:text-rose-300">{fieldErrors.media}</p>
+          )}
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor={`${uid}-facts`} className="text-[12px] text-muted-foreground">Brand rule</Label>
+          <Select
+            value={form.productFactsId}
+            disabled={workspaceLoading}
+            onValueChange={(v) => {
+              setForm((f) => ({ ...f, productFactsId: v }));
+              setFieldErrors((prev) => ({ ...prev, facts: undefined }));
+            }}
+          >
+            <SelectTrigger id={`${uid}-facts`} className="w-full rounded-xl"><SelectValue placeholder={workspaceLoading ? "Loading workspace…" : "Choose a brand rule"} /></SelectTrigger>
+            <SelectContent>
+              {brandRules.map((f) => (
+                <SelectItem key={f.id} value={f.id}>{f.brand} — {f.productName} ({f.approvedClaims.length} approved claims)</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {!workspaceLoading && brandRules.length === 0 && (
+            <p className="text-[12px] text-muted-foreground">
+              No brand rules yet. <Link href="/products" className="font-medium text-emerald-700 hover:underline dark:text-emerald-300">Define one</Link> first.
+            </p>
+          )}
+          {fieldErrors.facts && (
+            <p role="alert" className="text-[12px] text-rose-600 dark:text-rose-300">{fieldErrors.facts}</p>
+          )}
         </div>
         <div className="space-y-1.5">
           <Label htmlFor={`${uid}-platform`} className="text-[12px] text-muted-foreground">Platform</Label>
@@ -206,15 +328,16 @@ export function NewCampaignForm({ onCreated }: { onCreated?: (id: string) => voi
       )}
       <Button
         onClick={submit}
-        disabled={busy}
+        disabled={busy || !readyToSubmit}
         aria-busy={busy}
         aria-describedby={`${uid}-submit-hint`}
+        title={!readyToSubmit && !busy ? "Choose a permission, media, and brand rule first" : undefined}
         className="mt-5 rounded-full bg-emerald-700 font-medium text-emerald-50 hover:bg-emerald-600 dark:bg-emerald-500 dark:text-emerald-950 dark:hover:bg-emerald-400"
       >
         {busy ? "Running permission check…" : "Create & run permission check"}
       </Button>
       <p id={`${uid}-submit-hint`} className="mt-2 text-[11.5px] text-muted-foreground">
-        {busy ? "Permission check running — duplicate clicks are ignored, and a retry of this same submission reuses its result. Checking the ledger can take up to a minute." : "Country and creative brief are required."}
+        {busy ? "Permission check running — duplicate clicks are ignored, and a retry of this same submission reuses its result. Checking the ledger can take up to a minute." : "Country, creative brief, permission, media, and brand rule are required."}
       </p>
     </div>
   );
