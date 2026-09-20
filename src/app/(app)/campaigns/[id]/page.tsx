@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import {
   Archive,
@@ -43,6 +43,11 @@ interface CampaignResponse {
   deletion: DeletionInfo;
 }
 
+// Live progress polling while jobs run: starts at 3s, backs off to 30s on
+// consecutive background failures. See reloadCampaign below.
+const POLL_BASE_MS = 3000;
+const POLL_MAX_MS = 30000;
+
 export default function CampaignWorkspacePage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
@@ -55,6 +60,8 @@ export default function CampaignWorkspacePage() {
   const [forceName, setForceName] = useState("");
 
   const [lastAction, setLastAction] = useState<{ label: string; path: string; body?: unknown } | null>(null);
+  const reloadInflight = useRef(false);
+  const pollBackoffMs = useRef(POLL_BASE_MS);
   const invalidateSnapshot = useInvalidateWorkspaceSnapshot();
   const invalidateDkgGraph = useInvalidateDkgGraph();
 
@@ -78,12 +85,22 @@ export default function CampaignWorkspacePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  async function reloadCampaign() {
+  async function reloadCampaign(quiet = false) {
+    // Single-flight: a slow tick must never stack overlapping requests, and
+    // background ticks back off on consecutive failures instead of flashing
+    // error banners while jobs run. Only the initial load and user actions
+    // surface errors; the interval below resets the backoff on success.
+    if (reloadInflight.current) return;
+    reloadInflight.current = true;
     try {
       setData(await requestCampaign());
       setError(null);
+      pollBackoffMs.current = POLL_BASE_MS;
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Campaign failed to load.");
+      if (!quiet) setError(e instanceof Error ? e.message : "Campaign failed to load.");
+      else pollBackoffMs.current = Math.min(pollBackoffMs.current * 2, POLL_MAX_MS);
+    } finally {
+      reloadInflight.current = false;
     }
   }
 
@@ -94,8 +111,19 @@ export default function CampaignWorkspacePage() {
 
   useEffect(() => {
     if (!active) return;
-    const t = setInterval(() => void reloadCampaign(), 3000);
-    return () => clearInterval(t);
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = () => {
+      if (cancelled) return;
+      void reloadCampaign(true).finally(() => {
+        if (!cancelled) timer = setTimeout(tick, pollBackoffMs.current);
+      });
+    };
+    timer = setTimeout(tick, pollBackoffMs.current);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
 

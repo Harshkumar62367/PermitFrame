@@ -3,6 +3,7 @@ import { AuthenticationRequiredError, requireCurrentSession } from "@/server/aut
 import { loadDb } from "@/server/store";
 import { createCampaign, createCampaignIdempotent } from "@/server/campaigns";
 import { IDEMPOTENCY_KEY_PATTERN, IdempotencyMismatchError } from "@/server/idempotency";
+import { isDkgUnavailable } from "@/server/dkg/edge-node-adapter";
 import { CampaignDeletedError } from "@/server/deletion";
 import type { CampaignRequest } from "@/server/types";
 
@@ -88,8 +89,18 @@ export async function POST(request: NextRequest) {
   // original campaign instead of creating a duplicate. Keyless callers keep
   // the legacy one-shot behavior.
   if (!rawKey) {
-    const campaign = await createCampaign(input);
-    return NextResponse.json({ campaign, deduplicated: false }, { status: 201 });
+    try {
+      const campaign = await createCampaign(input);
+      return NextResponse.json({ campaign, deduplicated: false }, { status: 201 });
+    } catch (error) {
+      if (error instanceof Error && isDkgUnavailable(error.message)) {
+        return NextResponse.json(
+          { error: "Proof ledger unreachable — campaign not created. Nothing was saved; retry in a moment.", retryable: true },
+          { status: 503 }
+        );
+      }
+      throw error;
+    }
   }
   try {
     const { campaign, deduplicated } = await createCampaignIdempotent(input, rawKey, `${workspaceId}:${rawKey}`);
@@ -101,6 +112,15 @@ export async function POST(request: NextRequest) {
     if (error instanceof CampaignDeletedError) {
       // The replayed key points at a hard-deleted campaign: Gone, never resurrected.
       return NextResponse.json({ error: error.message }, { status: 410 });
+    }
+    if (error instanceof Error && isDkgUnavailable(error.message)) {
+      // Creation consults the live ledger (preflight rights/facts reads). A
+      // down ledger is a 503 with retry guidance — never a 500, and the
+      // idempotency slot is already marked failed so the retry takes over.
+      return NextResponse.json(
+        { error: "Proof ledger unreachable — campaign not created. Nothing was saved; retry in a moment.", retryable: true },
+        { status: 503 }
+      );
     }
     throw error;
   }

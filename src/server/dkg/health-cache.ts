@@ -127,7 +127,7 @@ function dkgPlaceholder(): DkgHealth {
   return {
     mode,
     healthy: false,
-    endpoint: "local daemon (127.0.0.1:9200)",
+    endpoint: process.env.DKG_ENDPOINT_LABEL ?? "local daemon (127.0.0.1:9200)",
     detail: "Checking proof-ledger diagnostics — workspace data does not depend on this check."
   };
 }

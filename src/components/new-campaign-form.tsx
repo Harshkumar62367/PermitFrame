@@ -14,6 +14,7 @@ import {
   SelectValue
 } from "@/components/ui/select";
 import { apiPost } from "@/lib/api";
+import { stableAttemptKey } from "@/lib/idempotency-key";
 import { useInvalidateWorkspaceSnapshot } from "@/lib/use-workspace-snapshot";
 import { cn } from "@/lib/utils";
 
@@ -46,7 +47,6 @@ export function NewCampaignForm({ onCreated }: { onCreated?: (id: string) => voi
   // original campaign server-side instead of creating a duplicate); any edit
   // mints a fresh key so an intentional new submission always creates anew.
   const attemptRef = useRef<{ payload: string; key: string } | null>(null);
-
   function validate(): FieldErrors {
     const errors: FieldErrors = {};
     if (form.country.trim().length !== 2) errors.country = "Use a 2-letter country code (e.g. GR for Greece, DE for Germany).";
@@ -79,9 +79,7 @@ export function NewCampaignForm({ onCreated }: { onCreated?: (id: string) => voi
         creativeBrief: form.creativeBrief.trim()
       };
       const serialized = JSON.stringify(payload);
-      if (!attemptRef.current || attemptRef.current.payload !== serialized) {
-        attemptRef.current = { payload: serialized, key: crypto.randomUUID() };
-      }
+      attemptRef.current = stableAttemptKey(attemptRef.current, serialized, () => crypto.randomUUID());
       // Creation consults the live ledger (rights + facts reads) before the
       // permission check returns, so it legitimately takes longer than an
       // ordinary write — budget two minutes, still abortable. A client abort

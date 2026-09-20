@@ -12,6 +12,37 @@ const CG_ENV = process.env.DKG_CONTEXT_GRAPH ?? "permitframe";
 const ENDPOINT_LABEL = process.env.DKG_ENDPOINT_LABEL ?? "local daemon (127.0.0.1:9200)";
 
 /**
+ * Strip secret-shaped material before an error is logged or returned.
+ * CLI/transport failures can echo RPC URLs, tokens, or key material — none
+ * of that may reach server logs or API responses (cookies, Privy tokens,
+ * DKG auth tokens, RPC keys).
+ */
+const SECRET_PATTERNS: Array<[RegExp, string]> = [
+  [/0x[a-fA-F0-9]{64,}/g, "0x[redacted]"],
+  [/alch_[A-Za-z0-9_-]+/g, "alch_[redacted]"],
+  [/\bsk-[A-Za-z0-9_-]{8,}/g, "sk-[redacted]"],
+  [/Bearer\s+[A-Za-z0-9\-._~+/=]+/g, "Bearer [redacted]"]
+];
+
+export function redactSecrets(message: string): string {
+  let out = message;
+  for (const [pattern, replacement] of SECRET_PATTERNS) out = out.replace(pattern, replacement);
+  return out;
+}
+
+/**
+ * True when an error means "the ledger is unreachable" as opposed to a
+ * caller bug (bad input, missing graph). Callers map this to 503 + retry
+ * guidance; everything else stays a 4xx/500. Matches the adapter's own
+ * "dkg CLI failed" prefix plus transport/network signatures.
+ */
+export function isDkgUnavailable(message: string): boolean {
+  return /dkg CLI failed|Edge Node unreachable|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|timed out|timeout|fetch failed|socket hang up|Connection refused|not connected|No such file/i.test(
+    message
+  );
+}
+
+/**
  * Edge Node adapter: talks to a local OriginTrail Edge Node (DKG v10) through the
  * `dkg` CLI (https://www.npmjs.com/package/@origintrail-official/dkg).
  * Knowledge Assets are created in a context graph and shared into Shared Working
@@ -29,7 +60,7 @@ export class EdgeNodeAdapter implements DkgAdapter {
     try {
       return await this.transport.run(args, timeoutMs);
     } catch (error) {
-      const message = (error as Error).message.replace(/0x[a-fA-F0-9]{64,}/g, "0x[redacted]");
+      const message = redactSecrets((error as Error).message);
       console.error(`[edge-node] dkg ${args[0]} ${args[1] ?? ""} failed:`, message.slice(0, 400));
       throw new Error(`dkg CLI failed (${args[0]} ${args[1] ?? ""}): ${message.slice(0, 300)}`);
     }

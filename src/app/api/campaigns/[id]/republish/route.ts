@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { AuthenticationRequiredError } from "@/server/auth";
 import { getDkg } from "@/server/dkg";
 import { receiptKa } from "@/server/dkg/schemas";
 import { loadDb, newId, nowIso, updateDb } from "@/server/store";
@@ -8,7 +9,15 @@ export const dynamic = "force-dynamic";
 /** Re-publish any receipts that were stored locally (e.g. the DKG node was down at generation time). */
 export async function POST(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const db = await loadDb();
+  let db;
+  try {
+    db = await loadDb();
+  } catch (error) {
+    if (error instanceof AuthenticationRequiredError) {
+      return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+    }
+    throw error;
+  }
   const campaign = db.campaigns.find((c) => c.id === id);
   if (!campaign) return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
 
