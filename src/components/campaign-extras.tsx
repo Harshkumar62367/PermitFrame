@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
-import { BadgeCheck, Copy, History, Link2, MessageSquare, Sparkles, Zap } from "lucide-react";
+import { BadgeCheck, ChevronDown, Copy, History, Link2, MessageSquare, Sparkles, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -47,6 +47,7 @@ export function CampaignExtras({ campaign, hideVariants = false }: { campaign: C
   const [shareError, setShareError] = useState<string | null>(null);
   const [timeline, setTimeline] = useState<TimelineEntry[] | null>(null);
   const [timelineError, setTimelineError] = useState<string | null>(null);
+  const [timelineOpen, setTimelineOpen] = useState(false);
   const [comment, setComment] = useState("");
   const [commentError, setCommentError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -65,7 +66,12 @@ export function CampaignExtras({ campaign, hideVariants = false }: { campaign: C
       .catch((e) => setTimelineError(e instanceof Error ? e.message : "Timeline failed to load."));
   }, [campaign.id]);
 
-  useEffect(loadTimeline, [loadTimeline]);
+  // The timeline is collapsed by default and fetched only on first expand —
+  // long audit lists stay out of the way (and off the network) until needed.
+  // Posting a note refreshes the data directly, whether open or not.
+  useEffect(() => {
+    if (timelineOpen && timeline === null && !timelineError) loadTimeline();
+  }, [timelineOpen, timeline, timelineError, loadTimeline]);
 
   const allowed = campaign.preflight?.decision === "allow";
   const estimate = (campaign.preflight?.plan ?? []).reduce((sum, stage) => {
@@ -275,12 +281,24 @@ export function CampaignExtras({ campaign, hideVariants = false }: { campaign: C
       </FadeIn>
       )}
 
-      {/* Comments + timeline */}
+      {/* Comments + timeline — collapsed until needed */}
       <FadeIn>
         <section className="rounded-2xl border border-border bg-card p-6">
-          <h2 className="flex items-center gap-2 text-[15px] font-semibold tracking-tight">
+          <button
+            type="button"
+            onClick={() => setTimelineOpen((v) => !v)}
+            aria-expanded={timelineOpen}
+            aria-controls={`timeline-${campaign.id}`}
+            className="flex w-full items-center gap-2 text-left text-[15px] font-semibold tracking-tight"
+          >
             <History className="h-4 w-4 text-muted-foreground" /> Comments & audit timeline
-          </h2>
+            {timeline !== null && (
+              <span className="font-mono text-[11px] font-normal text-muted-foreground">{timeline.length}</span>
+            )}
+            <ChevronDown className={cn("ml-auto h-4 w-4 text-muted-foreground transition-transform", timelineOpen && "rotate-180")} aria-hidden />
+          </button>
+          {timelineOpen && (
+          <div id={`timeline-${campaign.id}`}>
           <div className="mt-4 flex gap-2">
             <div className="min-w-0 flex-1 space-y-1.5">
               <Label htmlFor={`note-${campaign.id}`} className="sr-only">Add an internal note</Label>
@@ -331,6 +349,8 @@ export function CampaignExtras({ campaign, hideVariants = false }: { campaign: C
             ))}
             {timeline && timeline.length === 0 && <p className="text-[12.5px] text-muted-foreground">No events yet.</p>}
           </div>
+          </div>
+          )}
         </section>
       </FadeIn>
     </div>

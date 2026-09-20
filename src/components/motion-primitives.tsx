@@ -1,7 +1,26 @@
 "use client";
 
 import { motion, useInView, useReducedMotion, useSpring, useTransform } from "framer-motion";
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+
+/**
+ * Entrance animations play exactly once per page lifetime: every instance
+ * mounted during the first commit animates, and everything mounted by later
+ * client-side navigations renders in its final state instantly. A full
+ * reload resets the flag, so the first impression keeps its motion but menu
+ * switches never replay it. Module scope survives App Router navigations
+ * (no remount of the module) and is SSR-safe (server + first client render
+ * both read `false`).
+ */
+let introDone = false;
+
+function useIntroAnimation(): boolean {
+  const [play] = useState(() => !introDone);
+  useEffect(() => {
+    introDone = true;
+  }, []);
+  return play;
+}
 
 export function FadeIn({
   children,
@@ -18,7 +37,8 @@ export function FadeIn({
   subtle?: boolean;
 }) {
   const reduce = useReducedMotion();
-  if (reduce) return <div className={className}>{children}</div>;
+  const play = useIntroAnimation();
+  if (reduce || !play) return <div className={className}>{children}</div>;
   const distance = subtle ? 8 : y;
   const duration = subtle ? 0.2 : 0.6;
   return (
@@ -43,6 +63,9 @@ export function Stagger({
   className?: string;
   gap?: number;
 }) {
+  const reduce = useReducedMotion();
+  const play = useIntroAnimation();
+  if (reduce || !play) return <div className={className}>{children}</div>;
   return (
     <motion.div
       className={className}
@@ -57,7 +80,8 @@ export function Stagger({
 
 export function StaggerItem({ children, className }: { children: ReactNode; className?: string }) {
   const reduce = useReducedMotion();
-  if (reduce) return <div className={className}>{children}</div>;
+  const play = useIntroAnimation();
+  if (reduce || !play) return <div className={className}>{children}</div>;
   return (
     <motion.div
       className={className}
