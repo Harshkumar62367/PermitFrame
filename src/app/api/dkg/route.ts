@@ -11,7 +11,12 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
-  const body = (await request.json()) as { query: string };
+  let body: { query?: string };
+  try {
+    body = (await request.json()) as { query?: string };
+  } catch {
+    return NextResponse.json({ error: "Request body must be valid JSON." }, { status: 400 });
+  }
   if (!body.query?.trim()) return NextResponse.json({ error: "query is required" }, { status: 400 });
   const dkg = getDkg();
   try {

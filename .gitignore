@@ -47,3 +47,7 @@ next-env.d.ts
 
 # internal build logs (local only)
 logs/
+
+# agent skills (third-party, restorable via skills-lock.json)
+.agents/
+.claude/skills/

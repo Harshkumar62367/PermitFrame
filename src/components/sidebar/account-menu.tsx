@@ -114,7 +114,7 @@ export function AccountMenu({ collapsed = false }: { collapsed?: boolean }) {
             setOpen(false);
             void signOut();
           }}
-          className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[12.5px] font-medium text-rose-600 transition hover:bg-rose-50 dark:text-rose-300 dark:hover:bg-rose-950/50"
+          className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[12.5px] font-medium text-rose-600 transition hover:bg-rose-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600 dark:text-rose-300 dark:hover:bg-rose-950/50"
         >
           <LogOut className="h-3.5 w-3.5" aria-hidden /> Sign out
         </button>
@@ -132,7 +132,7 @@ export function AccountMenu({ collapsed = false }: { collapsed?: boolean }) {
           aria-expanded={open}
           aria-label={`Account: ${name}. Open account menu.`}
           title={name}
-          className="mx-auto grid h-10 w-10 place-items-center rounded-full bg-emerald-600/10 text-[13px] font-semibold text-emerald-700 ring-1 ring-emerald-600/20 transition hover:bg-emerald-600/15 dark:bg-emerald-400/10 dark:text-emerald-300 dark:ring-emerald-400/20"
+          className="mx-auto grid h-10 w-10 place-items-center rounded-full bg-emerald-600/10 text-[13px] font-semibold text-emerald-700 ring-1 ring-emerald-600/20 transition hover:bg-emerald-600/15 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600 dark:bg-emerald-400/10 dark:text-emerald-300 dark:ring-emerald-400/20"
         >
           <span aria-hidden>{initial}</span>
         </button>
@@ -160,7 +160,7 @@ export function AccountMenu({ collapsed = false }: { collapsed?: boolean }) {
           aria-expanded={open}
           aria-label={`Account options for ${name}`}
           title="Account options"
-          className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-muted-foreground transition hover:bg-accent hover:text-foreground dark:text-white/55 dark:hover:bg-white/10 dark:hover:text-white"
+          className="relative grid h-8 w-8 shrink-0 place-items-center rounded-lg text-muted-foreground transition before:absolute before:-inset-2 before:content-[''] hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600 dark:text-white/55 dark:hover:bg-white/10 dark:hover:text-white"
         >
           <EllipsisVertical className="h-4 w-4" aria-hidden />
         </button>

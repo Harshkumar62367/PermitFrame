@@ -130,10 +130,10 @@ export function ReviewSection({ campaign, onChanged }: ReviewSectionProps) {
               onClick={() => void approve()}
               disabled={busy || active || succeeded === 0}
               aria-busy={busy}
-              title={succeeded === 0 ? "Generate the pack first — there is nothing to approve yet" : active ? "Wait for production to finish before approving" : "Approve the pack and publish the campaign record"}
+              title={succeeded === 0 ? "Generate the pack first — there is nothing to approve yet" : active ? "Wait for production to finish before approving" : "Approve the pack — the campaign record publishes in the background"}
               className="rounded-full bg-emerald-700 font-medium text-emerald-50 hover:bg-emerald-600 dark:bg-emerald-500 dark:text-emerald-950 dark:hover:bg-emerald-400"
             >
-              {busy ? "Publishing…" : "Approve & publish"}
+              {busy ? "Approving…" : "Approve pack"}
             </Button>
           ) : (
             <OutcomeBadge outcome={outcome} />

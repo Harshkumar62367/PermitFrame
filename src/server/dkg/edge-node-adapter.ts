@@ -322,6 +322,7 @@ export function parseCliTable(out: string): Array<Record<string, string>> {
   const rows: Array<Record<string, string>> = [];
   for (const line of lines.slice(tableStart + 1)) {
     if (/^[-─-╰\s]+$/.test(line)) break;
+    if (/^\d+\s+row\(s\)/i.test(line.trim())) continue; // trailing count summary, not data
     const cells = line.trim().split(/\s{2,}/);
     if (cells.length < headers.length) continue; // wrapped value fragment — skipped for simplicity
     const row: Record<string, string> = {};

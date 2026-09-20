@@ -214,6 +214,16 @@
   display: none;
 }
 
+/* Tailwind v4 leaves buttons with the default arrow cursor. Every
+   actionable button shows a pointer — set once here so current and
+   future buttons never need a per-file class. */
+@layer base {
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]) {
+    cursor: pointer;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-marquee {
     animation: none;

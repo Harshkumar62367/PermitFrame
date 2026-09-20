@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { PermissionPassport } from "@/server/types";
-import { loadDb, newId, nowIso, updateDb } from "@/server/store";
+import { loadInviteContext, newId, nowIso, updateWorkspaceDb } from "@/server/store";
 import { getDkg } from "@/server/dkg";
 import { passportKa } from "@/server/dkg/schemas";
 
@@ -8,9 +8,11 @@ export const dynamic = "force-dynamic";
 
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
-  const invite = await loadInvite(token);
+  const ctx = await loadInviteContext(token);
+  if (!ctx) return NextResponse.json({ error: "Consent link not found" }, { status: 404 });
+  const invite = ctx.db.consentInvites.find((i) => i.token === token) ?? null;
   if (!invite) return NextResponse.json({ error: "Consent link not found" }, { status: 404 });
-  const creator = (await loadDb()).creators.find((c) => c.id === invite.creatorId);
+  const creator = ctx.db.creators.find((c) => c.id === invite.creatorId);
   return NextResponse.json({
     status: invite.status,
     draft: invite.draft,
@@ -26,15 +28,17 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     allowedTransformations?: string[];
     validUntil?: string;
   };
-  const db = await loadDb();
-  const invite = db.consentInvites.find((i) => i.token === token) ?? null;
-  if (!invite) return NextResponse.json({ error: "Consent link not found" }, { status: 404 });
+  const ctx = await loadInviteContext(token);
+  const invite = ctx?.db.consentInvites.find((i) => i.token === token) ?? null;
+  if (!ctx || !invite) return NextResponse.json({ error: "Consent link not found" }, { status: 404 });
   if (invite.status === "completed") return NextResponse.json({ error: "Consent already attested" }, { status: 400 });
 
+  const creatorName =
+    ctx.db.creators.find((c) => c.id === invite.creatorId)?.name ?? "Creator";
   const passport: PermissionPassport = {
     id: newId("passport"),
     creatorId: invite.creatorId,
-    creatorName: db.creators.find((c) => c.id === invite.creatorId)?.name ?? "Creator",
+    creatorName,
     sourceMediaIds: invite.draft.sourceMediaIds,
     platforms: (body.platforms?.length ? body.platforms : invite.draft.platforms) as PermissionPassport["platforms"],
     countries: (body.countries?.length ? body.countries : invite.draft.countries).map((c) => c.toUpperCase()),
@@ -63,7 +67,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     // publication failure shouldn't lose the attestation; passport is stored locally
   }
 
-  await updateDb((d) => {
+  await updateWorkspaceDb(ctx.workspaceId, (d) => {
     d.passports.push({ ...passport, ual });
     const invite2 = d.consentInvites.find((i) => i.token === token);
     if (invite2) invite2.status = "completed";
@@ -77,8 +81,4 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   });
 
   return NextResponse.json({ attested: true, passportId: passport.id, ual, explorerUrl });
-}
-
-async function loadInvite(token: string) {
-  return (await loadDb()).consentInvites.find((i) => i.token === token) ?? null;
 }

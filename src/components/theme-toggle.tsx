@@ -20,7 +20,7 @@ export function ThemeToggle({ subtle = false }: { subtle?: boolean }) {
   }, []);
 
   if (!mounted) {
-    return <Button variant="ghost" size="icon" className={subtle ? "h-8 w-8 text-white/40" : "h-8 w-8"} aria-label="Switch to dark theme" />;
+    return <Button variant="ghost" size="icon" className={subtle ? "relative h-8 w-8 text-white/40 before:absolute before:-inset-2 before:content-['']" : "relative h-8 w-8 before:absolute before:-inset-2 before:content-['']"} aria-label="Switch to dark theme" />;
   }
   const dark = resolvedTheme === "dark";
   return (
@@ -30,7 +30,7 @@ export function ThemeToggle({ subtle = false }: { subtle?: boolean }) {
       onClick={() => setTheme(dark ? "light" : "dark")}
       aria-label={dark ? "Switch to light theme" : "Switch to dark theme"}
       title={dark ? "Switch to light theme" : "Switch to dark theme"}
-      className={subtle ? "h-8 w-8 text-white/50 hover:bg-white/10 hover:text-white" : "h-8 w-8"}
+      className={subtle ? "relative h-8 w-8 text-white/50 before:absolute before:-inset-2 before:content-[''] hover:bg-white/10 hover:text-white" : "relative h-8 w-8 before:absolute before:-inset-2 before:content-['']"}
     >
       {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
     </Button>

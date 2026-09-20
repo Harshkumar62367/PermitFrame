@@ -56,7 +56,7 @@ export function MobileNav({ health }: { health: Health | null }) {
           aria-expanded={open}
           aria-controls="pf-mobile-drawer"
           aria-label="Open navigation menu"
-          className="ml-auto rounded-lg p-2 text-foreground transition hover:bg-accent"
+          className="relative ml-auto rounded-lg p-2 text-foreground transition hover:bg-accent before:absolute before:-inset-2 before:content-[''] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600"
         >
           <Menu className="h-5 w-5" aria-hidden />
         </button>
@@ -85,7 +85,7 @@ export function MobileNav({ health }: { health: Health | null }) {
                   type="button"
                   onClick={() => setOpen(false)}
                   aria-label="Close navigation menu"
-                  className="rounded-lg p-2 text-muted-foreground transition hover:bg-accent hover:text-foreground dark:text-white/60 dark:hover:bg-white/10 dark:hover:text-white"
+                  className="relative rounded-lg p-2 text-muted-foreground transition hover:bg-accent hover:text-foreground before:absolute before:-inset-2 before:content-[''] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600 dark:text-white/60 dark:hover:bg-white/10 dark:hover:text-white"
                 >
                   <X className="h-5 w-5" aria-hidden />
                 </button>

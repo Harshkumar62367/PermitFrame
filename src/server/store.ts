@@ -40,16 +40,51 @@ export async function loadDb(): Promise<Database> {
 
 export async function updateDb(mutator: (db: Database) => void): Promise<Database> {
   const session = await requireCurrentSession();
-  const db = await loadDb();
-  mutator(db);
-  await getDb()
+  return updateWorkspaceDb(session.workspaceId, mutator);
+}
+
+/** Write to an explicitly resolved workspace (no viewer session required). */
+export async function updateWorkspaceDb(
+  workspaceId: string,
+  mutator: (db: Database) => void
+): Promise<Database> {
+  const db = getDb();
+  const [row] = await db
+    .select({ data: workspaceState.data })
+    .from(workspaceState)
+    .where(eq(workspaceState.workspaceId, workspaceId))
+    .limit(1);
+  const data = row?.data ?? emptyDb();
+  mutator(data);
+  await db
     .insert(workspaceState)
-    .values({ workspaceId: session.workspaceId, data: db, updatedAt: new Date() })
+    .values({ workspaceId, data, updatedAt: new Date() })
     .onConflictDoUpdate({
       target: workspaceState.workspaceId,
-      set: { data: db, updatedAt: new Date() }
+      set: { data, updatedAt: new Date() }
     });
-  return db;
+  return data;
+}
+
+/**
+ * Resolve the workspace that owns a creator consent invite, without
+ * requiring the *viewer's* session. The unguessable invite token is the
+ * capability: external creators attest from a bare link with no agency
+ * account. Returns null when no workspace holds the token.
+ */
+export async function loadInviteContext(
+  token: string
+): Promise<{ workspaceId: string; db: Database } | null> {
+  const db = getDb();
+  const rows = await db
+    .select({ workspaceId: workspaceState.workspaceId, data: workspaceState.data })
+    .from(workspaceState);
+  for (const row of rows) {
+    if (row.data.consentInvites.some((i) => i.token === token)) {
+      return { workspaceId: row.workspaceId, db: row.data };
+    }
+  }
+  return null;
 }
 
 /** Public verification reads use the application-level state only when applicable. */
