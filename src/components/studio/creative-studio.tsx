@@ -66,7 +66,7 @@ export function CreativeStudio({ campaign, sourceMedia, passport, productFacts, 
         <p role="alert" className="break-words text-[12.5px] text-rose-600 dark:text-rose-300">{recheckError}</p>
       )}
 
-      <div className="grid items-start gap-4 xl:grid-cols-[300px_minmax(0,1fr)_320px]">
+      <div className="grid items-start gap-4 xl:grid-cols-[300px_minmax(0,1fr)_320px] min-[1600px]:grid-cols-[320px_minmax(0,1fr)_360px]">
         <BriefPanel campaign={campaign} passport={passport} productFacts={productFacts} onChanged={onChanged} />
         <CreativePlan campaign={campaign} allowed={allowed} onChanged={onChanged} />
         <QueuePanel campaign={campaign} allowed={allowed} onChanged={onChanged} />

@@ -1,6 +1,5 @@
 import "server-only";
 import { getCurrentSession } from "./auth";
-import { reconcileCampaignStatus } from "./campaign-status";
 import { loadDb } from "./store";
 import { buildWorkspaceOverview, type WorkspaceOverview } from "./overview";
 import { expiryWarnings } from "./platform";
@@ -41,10 +40,8 @@ export interface WorkspaceSnapshot extends WorkspaceOverview {
  * call; status repairs only write when a row has actually drifted.
  */
 export async function getWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
+  // Read-only like the overview: effective statuses are derived in memory.
   const db = await loadDb();
-  for (const c of db.campaigns) {
-    await reconcileCampaignStatus(c).catch(() => undefined);
-  }
   const session = await getCurrentSession().catch(() => null);
   const overview = buildWorkspaceOverview(db, session?.workspaceName ?? null, await expiryWarnings(30, db));
   return {

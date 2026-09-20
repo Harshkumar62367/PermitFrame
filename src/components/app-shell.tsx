@@ -75,7 +75,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <AppSidebar health={health} collapsed={collapsed} onToggleCollapse={toggleCollapse} />
       <MobileNav health={health} />
       <main id="pf-main" className={cn("pf-main min-w-0 transition-[padding] duration-200", collapsed && "pf-main-collapsed")}>
-        <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 sm:py-10">{children}</div>
+        <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 lg:py-8 min-[1500px]:max-w-[80rem]">{children}</div>
       </main>
     </div>
   );

@@ -135,6 +135,16 @@ describe("buildPublicSnapshot", () => {
     assert.equal(s.creatorName, "Creator");
     assert.equal(s.outputs.length, 1);
   });
+
+  it("refuses snapshots for non-approved campaigns", () => {
+    for (const status of ["draft", "blocked", "generating", "review", "archived"] as const) {
+      assert.throws(
+        () => buildPublicSnapshot({ ref: "vrf_x", campaign: { ...campaign, status } as Campaign, passport, facts }),
+        /approved/,
+        `status ${status} must never produce a public snapshot`
+      );
+    }
+  });
 });
 
 describe("verify module session isolation", () => {

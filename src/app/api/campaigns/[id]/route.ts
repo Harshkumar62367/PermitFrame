@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { AuthenticationRequiredError } from "@/server/auth";
-import { loadDb } from "@/server/store";
-import { reconcileCampaignStatus } from "@/server/campaign-status";
-import { findCampaign } from "@/server/platform";
+import { AuthenticationRequiredError, requireCurrentSession } from "@/server/auth";
+import { effectiveCampaignStatus } from "@/server/campaign-status";
+import { loadCampaignDetailNormalized } from "@/server/campaign-store";
 import { deleteCampaign, updateCampaignBrief, type BriefPatch } from "@/server/campaigns";
 import {
   CampaignDeletedError,
@@ -40,29 +39,27 @@ function deletionError(error: unknown): NextResponse | null {
 
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  let campaign;
+  let workspaceId: string;
   try {
-    campaign = await findCampaign(id);
+    ({ workspaceId } = await requireCurrentSession());
   } catch (error) {
-    // Signed-out reads are 401 ("sign in again"), not a 500. The 404 below
-    // stays reserved for signed-in reads of a genuinely missing campaign.
     if (error instanceof AuthenticationRequiredError) return authError();
     throw error;
   }
-  if (!campaign) return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
-  // Self-healing read: a stored status that drifted from the live preflight
-  // verdict is corrected here, so badges can never contradict the verdict.
-  await reconcileCampaignStatus(campaign).catch(() => undefined);
-  const db = await loadDb();
+  // Hot path: indexed single-campaign + 3 single-row lookups, one RTT each
+  // (parallel). No blob transfer, no DKG calls. Status drift is corrected
+  // in memory only — reads never write, so GETs stay fast and contention-free.
+  // The normalized mirror is authoritative (backfilled + mirrored on every
+  // write, deletes included): a miss is an immediate 404, never a slow
+  // whole-blob fallback scan.
+  const normalized = await loadCampaignDetailNormalized(workspaceId, id).catch(() => null);
+  if (!normalized) return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
+  const campaign = { ...normalized.campaign, status: effectiveCampaignStatus(normalized.campaign) };
   return NextResponse.json({
     campaign,
-    sourceMedia: db.sourceMedia.find((m) => m.id === campaign.sourceMediaId) ?? null,
-    passport: db.passports.find((p) => p.id === campaign.passportId) ?? null,
-    productFacts: db.productFacts.find((f) => f.id === campaign.productFactsId) ?? null,
-    // Single source of truth for the danger zone: computed server-side from
-    // the same rules that enforce deletion, so the UI can never offer an
-    // action the server would reject (and vice versa). `force` carries the
-    // last-resort archived-removal warnings for the hidden confirm flow.
+    sourceMedia: normalized.sourceMedia,
+    passport: normalized.passport,
+    productFacts: normalized.productFacts,
     deletion: { ...deletionEligibility(campaign), force: forceDeleteEligibility(campaign) }
   });
 }

@@ -35,9 +35,9 @@ export function PageHeader({
         <p className="font-mono text-[10.5px] uppercase tracking-[0.18em] text-emerald-700 dark:text-emerald-300">
           {eyebrow}
         </p>
-        <h1 className="font-display mt-1.5 text-balance text-3xl font-semibold tracking-tight">{title}</h1>
+        <h1 className="font-display mt-1 text-balance text-3xl font-semibold tracking-tight">{title}</h1>
         {description && (
-          <p className="mt-1.5 max-w-2xl text-pretty text-[13.5px] leading-relaxed text-muted-foreground">
+          <p className="mt-1 max-w-2xl text-pretty text-[13.5px] leading-relaxed text-muted-foreground">
             {description}
           </p>
         )}

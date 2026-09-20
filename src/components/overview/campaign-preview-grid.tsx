@@ -19,7 +19,7 @@ export function CampaignPreviewGrid({ campaigns }: { campaigns: SnapshotCampaign
         {campaigns.length === 0 ? (
           <EmptyState title="No campaigns yet" body="Brief the first campaign — the permission check verifies rights and claims before anything generates." />
         ) : (
-          <div className="grid gap-4 md:grid-cols-2">
+          <div className="grid gap-4 md:grid-cols-2 min-[1500px]:grid-cols-3">
             {campaigns.map((c) => (
               <CampaignCard key={c.id} campaign={c} />
             ))}

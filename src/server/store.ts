@@ -63,6 +63,10 @@ export async function updateWorkspaceDb(
       target: workspaceState.workspaceId,
       set: { data, updatedAt: new Date() }
     });
+  // Mirror hot collections to normalized tables (best-effort, never throws).
+  // The blob above stays canonical until backfill is verified.
+  const { mirrorWorkspaceToNormalized } = await import("./campaign-store");
+  await mirrorWorkspaceToNormalized(workspaceId, data);
   return data;
 }
 

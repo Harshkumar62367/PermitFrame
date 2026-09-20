@@ -22,6 +22,20 @@
       "when": 1789669914434,
       "tag": "0002_ambiguous_yellow_claw",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1789930017317,
+      "tag": "0003_normalize-campaigns-events",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1789930075855,
+      "tag": "0004_normalize-lookups",
+      "breakpoints": true
     }
   ]
 }

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
+import { CheckCircle2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FadeIn } from "@/components/motion-primitives";
 import { NewCampaignForm } from "@/components/new-campaign-form";
@@ -40,6 +41,7 @@ function CampaignsContent() {
   const archived = data?.archivedCampaigns ?? [];
 
   const rawFilter = searchParams.get("filter");
+  const deletedTitle = searchParams.get("deleted");
   const active: FilterKey = FILTERS.some((f) => f.key === rawFilter) ? (rawFilter as FilterKey) : "all";
   const matcher = FILTERS.find((f) => f.key === active)?.match ?? (() => true);
   // Archived rows live outside the normal lists by design; the Archived
@@ -53,6 +55,13 @@ function CampaignsContent() {
     const params = new URLSearchParams(searchParams.toString());
     if (key === "all") params.delete("filter");
     else params.set("filter", key);
+    const query = params.toString();
+    router.replace(query ? `/campaigns?${query}` : "/campaigns", { scroll: false });
+  }
+
+  function dismissDeleted() {
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("deleted");
     const query = params.toString();
     router.replace(query ? `/campaigns?${query}` : "/campaigns", { scroll: false });
   }
@@ -88,6 +97,23 @@ function CampaignsContent() {
 
       {status === "failed" && (
         <ErrorState message={error ?? "Campaigns failed to load."} onRetry={retry} />
+      )}
+      {deletedTitle && (
+        <div
+          role="status"
+          className="flex flex-wrap items-center gap-2.5 rounded-xl bg-emerald-50 px-4 py-3 text-[13px] text-emerald-800 ring-1 ring-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-200 dark:ring-emerald-900"
+        >
+          <CheckCircle2 className="h-4 w-4 shrink-0" aria-hidden />
+          <span className="min-w-0 flex-1 break-words">“{deletedTitle}” deleted successfully.</span>
+          <button
+            type="button"
+            onClick={dismissDeleted}
+            aria-label="Dismiss deletion confirmation"
+            className="shrink-0 rounded-full p-1 hover:bg-emerald-100 dark:hover:bg-emerald-900"
+          >
+            <X className="h-3.5 w-3.5" aria-hidden />
+          </button>
+        </div>
       )}
       {status === "loading" && <LoadingSkeleton rows={3} />}
       {status === "ready" && (
@@ -138,7 +164,7 @@ function CampaignsContent() {
               ) : undefined}
             />
           ) : (
-            <div className="grid items-stretch gap-4 md:grid-cols-2">
+            <div className="grid items-stretch gap-4 md:grid-cols-2 min-[1500px]:grid-cols-3">
               {visible.map((c) => (
                 <CampaignCard key={c.id} campaign={c} />
               ))}

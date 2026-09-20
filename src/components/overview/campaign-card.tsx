@@ -1,10 +1,12 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { ArrowRight } from "lucide-react";
 import { CampaignThumbnail } from "./campaign-thumbnail";
 import { PolicyResultLine } from "./policy-decision-summary";
 import { campaignOutcome, OutcomeBadge } from "@/components/campaign-outcome";
+import { usePrefetchCampaignDetail } from "@/lib/use-campaign";
 import type { SnapshotCampaign } from "@/lib/use-workspace-snapshot";
 import { cn } from "@/lib/utils";
 
@@ -32,6 +34,12 @@ function nextActionFor(campaign: SnapshotCampaign): string {
  */
 export function CampaignCard({ campaign }: { campaign: SnapshotCampaign }) {
   const blocked = campaign.effectiveStatus === "blocked";
+  const router = useRouter();
+  const prefetchDetail = usePrefetchCampaignDetail();
+  const warm = () => {
+    prefetchDetail(campaign.id);
+    router.prefetch(`/campaigns/${campaign.id}`);
+  };
   const outcome = campaignOutcome({
     status: campaign.effectiveStatus,
     decision: campaign.preflight.decision,
@@ -42,6 +50,8 @@ export function CampaignCard({ campaign }: { campaign: SnapshotCampaign }) {
   return (
     <Link
       href={`/campaigns/${campaign.id}`}
+      onMouseEnter={warm}
+      onFocus={warm}
       className={cn(
         "group flex h-full flex-col overflow-hidden rounded-2xl border border-border bg-card transition-all duration-300 hover:-translate-y-0.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600",
         blocked

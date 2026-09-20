@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import {
   Archive,
@@ -21,27 +22,11 @@ import { CreativeStudio } from "@/components/studio/creative-studio";
 import { SimulationPanel } from "@/components/studio/simulation-panel";
 import { ErrorState } from "@/components/ui/error-state";
 import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
-import { apiDelete, apiGet, apiPost } from "@/lib/api";
+import { apiDelete, apiPost } from "@/lib/api";
+import { campaignDetailKey, useCampaignDetail } from "@/lib/use-campaign";
 import { useInvalidateDkgGraph } from "@/lib/use-dkg-graph";
 import { useInvalidateWorkspaceSnapshot } from "@/lib/use-workspace-snapshot";
-import type { Campaign, PermissionPassport, ProductFacts, SourceMedia } from "@/server/types";
 import { cn } from "@/lib/utils";
-
-interface DeletionInfo {
-  deletable: boolean;
-  archiveAvailable: boolean;
-  reasons: string[];
-  busy: boolean;
-  force: { allowed: boolean; busy: boolean; reasons: string[]; warnings: string[] };
-}
-
-interface CampaignResponse {
-  campaign: Campaign;
-  sourceMedia: SourceMedia | null;
-  passport: PermissionPassport | null;
-  productFacts: ProductFacts | null;
-  deletion: DeletionInfo;
-}
 
 // Live progress polling while jobs run: starts at 3s, backs off to 30s on
 // consecutive background failures. See reloadCampaign below.
@@ -52,9 +37,13 @@ export default function CampaignWorkspacePage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
   const id = params.id;
-  const [data, setData] = useState<CampaignResponse | null>(null);
+  const queryClient = useQueryClient();
+  // Cached detail: hover-prefetch warms this, back-navigation reuses it
+  // (stale 30s, background-refetch). Server data is always the truth —
+  // the cache only hides the fetch latency, never substitutes summaries.
+  const { data, error: queryError, refetch } = useCampaignDetail(id);
   const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<"delete" | "archive" | "force" | null>(null);
   const [forceName, setForceName] = useState("");
@@ -65,25 +54,16 @@ export default function CampaignWorkspacePage() {
   const invalidateSnapshot = useInvalidateWorkspaceSnapshot();
   const invalidateDkgGraph = useInvalidateDkgGraph();
 
-  function requestCampaign(signal?: AbortSignal) {
-    return apiGet<CampaignResponse>(`/api/campaigns/${id}`, signal);
+  function requestCampaign() {
+    return refetch({ throwOnError: false }).then((r) => {
+      if (r.data) return r.data;
+      throw r.error ?? new Error("Campaign failed to load.");
+    });
   }
 
-  useEffect(() => {
-    const controller = new AbortController();
-    requestCampaign(controller.signal).then(
-      (d) => {
-        setData(d);
-        setError(null);
-      },
-      (e: unknown) => {
-        if (e instanceof DOMException && e.name === "AbortError") return;
-        setError(e instanceof Error ? e.message : "Campaign failed to load.");
-      }
-    );
-    return () => controller.abort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+  // Derived (no effect): query failure shows only when no cached data exists;
+  // background-tick failures keep old rows and back off silently.
+  const error = actionError ?? ((!data && queryError) ? (queryError instanceof Error ? queryError.message : "Campaign failed to load.") : null);
 
   async function reloadCampaign(quiet = false) {
     // Single-flight: a slow tick must never stack overlapping requests, and
@@ -93,11 +73,12 @@ export default function CampaignWorkspacePage() {
     if (reloadInflight.current) return;
     reloadInflight.current = true;
     try {
-      setData(await requestCampaign());
-      setError(null);
+      await queryClient.invalidateQueries({ queryKey: campaignDetailKey(id) });
+      await requestCampaign();
+      setActionError(null);
       pollBackoffMs.current = POLL_BASE_MS;
     } catch (e) {
-      if (!quiet) setError(e instanceof Error ? e.message : "Campaign failed to load.");
+      if (!quiet) setActionError(e instanceof Error ? e.message : "Campaign failed to load.");
       else pollBackoffMs.current = Math.min(pollBackoffMs.current * 2, POLL_MAX_MS);
     } finally {
       reloadInflight.current = false;
@@ -131,7 +112,7 @@ export default function CampaignWorkspacePage() {
     if (busy) return;
     setBusy(label);
     setLastAction({ label, path, body });
-    setError(null);
+    setActionError(null);
     try {
       await apiPost(`/api/campaigns/${id}${path}`, body);
       // Policy simulation is what-if only and never changes the campaign;
@@ -142,16 +123,16 @@ export default function CampaignWorkspacePage() {
       await reloadCampaign();
     } catch (e) {
       // Campaign state is untouched; the buttons below retry the same action.
-      setError(e instanceof Error ? e.message : `${label} failed.`);
+      setActionError(e instanceof Error ? e.message : `${label} failed.`);
     } finally {
       setBusy(null);
     }
   }
 
   if (error && !data) {
-    return <div className="pf-page"><ErrorState message={error} onRetry={reloadCampaign} /></div>;
+    return <div className="pf-page space-y-7"><ErrorState message={error} onRetry={reloadCampaign} className="mx-auto w-full max-w-3xl" /></div>;
   }
-  if (!data) return <div className="pf-page"><LoadingSkeleton rows={3} /></div>;
+  if (!data) return <div className="pf-page space-y-7"><LoadingSkeleton rows={3} /></div>;
 
   const { campaign, sourceMedia, passport, productFacts, deletion } = data;
   const isArchived = campaign.status === "archived";
@@ -177,7 +158,7 @@ export default function CampaignWorkspacePage() {
   async function runDeletion(mode: "delete" | "archive" | "force") {
     if (busy) return;
     setBusy(mode);
-    setError(null);
+    setActionError(null);
     setNotice(null);
     try {
       if (mode === "delete" || mode === "force") {
@@ -187,10 +168,12 @@ export default function CampaignWorkspacePage() {
         setConfirm(null);
         setForceName("");
         invalidateSnapshot();
-        // Success feedback stays visible briefly, then the (now empty) detail
-        // route is left for the Campaigns list, which refreshes from cache.
-        setNotice(`“${res.title}” deleted. Returning to Campaigns…`);
-        setTimeout(() => router.push("/campaigns"), 900);
+        // Carry the confirmation across the redirect: the list page shows a
+        // dismissible success banner (the detail page unmounts too fast for
+        // its own notice to be reliably seen).
+        const deletedTitle = res.title;
+        setNotice(`“${deletedTitle}” deleted. Returning to Campaigns…`);
+        setTimeout(() => router.push(`/campaigns?deleted=${encodeURIComponent(deletedTitle)}`), 900);
       } else {
         const res = await apiPost<{ archived: boolean; alreadyArchived?: boolean; title: string }>(`/api/campaigns/${id}/archive`);
         setConfirm(null);
@@ -200,7 +183,7 @@ export default function CampaignWorkspacePage() {
       }
     } catch (e) {
       setConfirm(null);
-      setError(e instanceof Error ? e.message : `${mode === "delete" ? "Delete" : mode === "force" ? "Force delete" : "Archive"} failed — nothing was changed.`);
+      setActionError(e instanceof Error ? e.message : `${mode === "delete" ? "Delete" : mode === "force" ? "Force delete" : "Archive"} failed — nothing was changed.`);
     } finally {
       setBusy(null);
     }
@@ -334,7 +317,7 @@ export default function CampaignWorkspacePage() {
           <button
             type="button"
             onClick={() => {
-              setError(null);
+              setActionError(null);
               setLastAction(null);
             }}
             className="shrink-0 rounded-full px-3 py-1 text-[12px] font-medium text-rose-700 underline underline-offset-2 hover:no-underline dark:text-rose-300"

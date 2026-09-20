@@ -75,7 +75,7 @@ export function QueuePanel({ campaign, allowed, onChanged }: QueuePanelProps) {
   }
 
   return (
-    <section aria-label="Generation queue" className="flex h-full flex-col rounded-2xl border border-border bg-card p-5">
+    <section aria-label="Generation queue" className="flex h-full max-h-none flex-col rounded-2xl border border-border bg-card p-5 xl:sticky xl:top-4 xl:max-h-[calc(100vh-2rem)] xl:overflow-y-auto">
       <div className="flex items-center justify-between gap-2">
         <h3 className="text-[15px] font-semibold tracking-tight">Queue</h3>
         {total > 0 && (

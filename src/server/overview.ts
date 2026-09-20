@@ -1,5 +1,5 @@
 import { getCurrentSession } from "./auth";
-import { effectiveCampaignStatus, productionStage, reconcileCampaignStatus, type ProductionStage } from "./campaign-status";
+import { effectiveCampaignStatus, productionStage, type ProductionStage } from "./campaign-status";
 import { loadDb } from "./store";
 import { campaignCostRollup, estimateCost, expiryWarnings, type ExpiryWarning } from "./platform";
 import type { Campaign, CampaignStatus, Database, PublicationStatus } from "./types";
@@ -140,10 +140,10 @@ const ACTIVITY_LIMIT = 12;
  * badges and verdicts can never contradict each other again.
  */
 export async function getWorkspaceOverview(): Promise<WorkspaceOverview> {
+  // Read-only: drift is corrected in memory via effectiveCampaignStatus in
+  // the builder below. GETs never write, so concurrent reads can't contend
+  // on full-blob rewrites. Persistent repair happens on the write path.
   const db = await loadDb();
-  for (const c of db.campaigns) {
-    await reconcileCampaignStatus(c).catch(() => undefined);
-  }
   const session = await getCurrentSession().catch(() => null);
   return buildWorkspaceOverview(db, session?.workspaceName ?? null, await expiryWarnings(30, db));
 }

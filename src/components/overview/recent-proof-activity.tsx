@@ -1,9 +1,11 @@
 "use client";
 
 import Link from "next/link";
+import { useState } from "react";
 import {
   Ban,
   CheckCircle2,
+  ChevronDown,
   FileText,
   Fingerprint,
   ImagePlus,
@@ -16,6 +18,7 @@ import {
 } from "lucide-react";
 import { FadeIn } from "@/components/motion-primitives";
 import { EmptyState } from "@/components/ui/empty-state";
+import { cn } from "@/lib/utils";
 import type { SnapshotActivityItem } from "@/lib/use-workspace-snapshot";
 
 interface ActivityPresentation {
@@ -62,13 +65,28 @@ function formatTime(at: string): { title: string; short: string } {
  * Honest empty state when nothing has happened yet — never synthetic rows.
  */
 export function RecentProofActivity({ activity }: { activity: SnapshotActivityItem[] }) {
+  const [open, setOpen] = useState(true);
   return (
     <FadeIn subtle>
       <section aria-label="Recent proof and activity" className="rounded-2xl border border-border bg-card p-5">
-        <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <h2 className="text-[15px] font-semibold tracking-tight">Recent proof</h2>
-          <p className="text-[12px] text-muted-foreground">Every row links to its record</p>
-        </div>
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          aria-controls="recent-proof-list"
+          className="flex w-full flex-wrap items-baseline justify-between gap-2 text-left"
+        >
+          <span className="flex items-center gap-2 text-[15px] font-semibold tracking-tight">
+            Recent proof
+            {activity.length > 0 && (
+              <span className="font-mono text-[11px] font-normal text-muted-foreground">{activity.length}</span>
+            )}
+            <ChevronDown className={cn("h-4 w-4 text-muted-foreground transition-transform", open && "rotate-180")} aria-hidden />
+          </span>
+          <span className="text-[12px] font-normal text-muted-foreground">Every row links to its record</span>
+        </button>
+        {open && (
+        <div id="recent-proof-list">
         {activity.length === 0 ? (
           <div className="mt-3">
             <EmptyState
@@ -116,6 +134,8 @@ export function RecentProofActivity({ activity }: { activity: SnapshotActivityIt
               );
             })}
           </ul>
+        )}
+        </div>
         )}
       </section>
     </FadeIn>

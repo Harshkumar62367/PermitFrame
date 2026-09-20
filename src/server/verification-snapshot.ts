@@ -16,6 +16,8 @@ export function newVerificationRef(): string {
  * Pure builder: sanitized public snapshot from already-approved workspace
  * data. Contains ONLY intentional public fields. UAL/explorer are set only
  * when the campaign record genuinely anchored — never from ID shape.
+ * Throws for non-approved campaigns so no future caller can publish a
+ * "verified" snapshot of a draft, blocked, or archived pack.
  * Unit-tested for field leakage and anchored honesty. No I/O, no session.
  */
 export function buildPublicSnapshot(input: {
@@ -25,6 +27,9 @@ export function buildPublicSnapshot(input: {
   facts: ProductFacts | null;
 }): PublicVerificationSnapshot {
   const { ref, campaign, passport, facts } = input;
+  if (campaign.status !== "approved") {
+    throw new Error("Public verification snapshots require an approved campaign pack.");
+  }
   const anchored = campaign.publicationStatus === "anchored" && !!campaign.campaignUAL;
   return {
     ref,
