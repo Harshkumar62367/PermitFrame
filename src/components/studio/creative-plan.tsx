@@ -6,13 +6,16 @@ import { Button } from "@/components/ui/button";
 import { apiPost } from "@/lib/api";
 import { useInvalidateWorkspaceSnapshot } from "@/lib/use-workspace-snapshot";
 import { cn } from "@/lib/utils";
-import type { Campaign } from "@/server/types";
+import type { Campaign, ProductionStagePlan } from "@/server/types";
 import {
+  deliverableKind,
   deliverableState,
   estimateStages,
   formatUsd,
+  hasUnknownPrice,
   planDeliverables,
   receiptsForStages,
+  recommendInitialStages,
   type DeliverableState
 } from "./studio-model";
 
@@ -36,6 +39,22 @@ const STATE_META: Record<DeliverableState, { label: string; className: string }>
  * Selection is honest — only the selected plan stages are sent to the
  * produce endpoint, and stages that already succeeded stay done.
  */
+function KindBadge({ stages }: { stages: ProductionStagePlan[] }) {
+  const kind = deliverableKind(stages);
+  const label = kind === "mixed" ? "Image + video" : kind === "video" ? "Video" : "Image";
+  const tone =
+    label === "Image"
+      ? "bg-sky-50 text-sky-700 ring-sky-600/20 dark:bg-sky-950/40 dark:text-sky-300 dark:ring-sky-800"
+      : "bg-violet-50 text-violet-700 ring-violet-600/20 dark:bg-violet-950/40 dark:text-violet-300 dark:ring-violet-800";
+  return (
+    <span
+      className={cn("rounded-full px-2 py-0.5 text-[10.5px] font-medium ring-1", tone)}
+      title={label === "Image" ? "Image generation" : "Includes video — slower and costlier than image"}
+    >
+      {label}
+    </span>
+  );
+}
 export function CreativePlan({ campaign, allowed, onChanged }: CreativePlanProps) {
   const deliverables = useMemo(() => planDeliverables(campaign), [campaign]);
   const succeededStageIds = useMemo(
@@ -49,9 +68,18 @@ export function CreativePlan({ campaign, allowed, onChanged }: CreativePlanProps
   const invalidateSnapshot = useInvalidateWorkspaceSnapshot();
 
   const selectable = deliverables.flatMap((d) => d.stages).filter((s) => !succeededStageIds.has(s.id));
-  const selectedIds = selected ?? selectable.map((s) => s.id);
+  // Recommended start, not the whole pack: the platform-matched
+  // deliverable's image stages (video is never preselected). Explicit user
+  // choices override and persist; the recommendation only fills in while
+  // nothing has been touched.
+  const recommendedIds = useMemo(
+    () => recommendInitialStages(campaign.request.platform, deliverables, succeededStageIds),
+    [campaign.request.platform, deliverables, succeededStageIds]
+  );
+  const selectedIds = selected ?? recommendedIds;
   const selectedStages = selectable.filter((s) => selectedIds.includes(s.id));
   const estimate = estimateStages(selectedStages);
+  const estimateExact = !hasUnknownPrice(selectedStages);
   const hasMotion = selectedStages.some((s) => s.kind === "image-to-video");
   const spent = campaign.jobs.filter((j) => j.status === "succeeded").reduce((s, j) => s + (j.costUsd ?? 0), 0);
 
@@ -93,8 +121,11 @@ export function CreativePlan({ campaign, allowed, onChanged }: CreativePlanProps
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h3 className="text-[15px] font-semibold tracking-tight">Creative plan</h3>
-          <p className="mt-0.5 font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
-            est. {formatUsd(estimate)} selected · {formatUsd(spent)} spent
+          <p
+            className="mt-0.5 font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground"
+            title={estimateExact ? undefined : "Some stages lack catalogue prices — actual spend may be higher"}
+          >
+            est. {formatUsd(estimate)}{estimateExact ? "" : "+"} selected · {formatUsd(spent)} spent
           </p>
         </div>
         {selectable.length > 0 && (
@@ -109,6 +140,12 @@ export function CreativePlan({ campaign, allowed, onChanged }: CreativePlanProps
         )}
       </div>
 
+      {selected === null && recommendedIds.length > 0 && (
+        <p className="mt-3 text-[12px] leading-relaxed text-muted-foreground">
+          Recommended start: {deliverables.find((d) => d.stages.some((s) => recommendedIds.includes(s.id)))?.title ?? "one deliverable"} —
+          image stages only. Video is slower and costlier — select it deliberately, never by default.
+        </p>
+      )}
       {deliverables.length === 0 && (
         <p className="mt-4 text-[13px] text-muted-foreground">No approved plan stages — re-check rights to rebuild the plan.</p>
       )}
@@ -156,6 +193,8 @@ export function CreativePlan({ campaign, allowed, onChanged }: CreativePlanProps
                   <div className="flex flex-wrap items-center gap-2">
                     <p className="text-[13.5px] font-semibold">{d.title}</p>
                     <span className="rounded-full bg-secondary px-2 py-0.5 font-mono text-[10px] text-secondary-foreground">{d.spec}</span>
+                    <KindBadge stages={d.stages} />
+                    <span className="font-mono text-[10px] text-muted-foreground">{formatUsd(estimateStages(d.stages.filter((s) => !succeededStageIds.has(s.id))))} remaining</span>
                     <span className={cn("rounded-full px-2 py-0.5 text-[10.5px] font-medium ring-1", meta.className)}>{meta.label}</span>
                   </div>
                   <p className="mt-0.5 text-[12px] text-muted-foreground">{d.platforms}</p>
@@ -221,6 +260,12 @@ export function CreativePlan({ campaign, allowed, onChanged }: CreativePlanProps
       {error && <p role="alert" className="mt-3 break-words text-[12px] text-rose-600 dark:text-rose-300">{error}</p>}
 
       <div className="mt-4 border-t border-border pt-4">
+        {hasMotion && !confirming && selectedStages.length > 0 && (
+          <p className="mb-3 flex items-start gap-1.5 text-[12px] leading-relaxed text-muted-foreground">
+            <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-violet-600 dark:text-violet-300" aria-hidden />
+            Selection includes video — slower and costlier than image. The confirm step breaks down the cost before anything spends.
+          </p>
+        )}
         {campaign.jobs.length === 0 && selectable.length > 0 ? (
           <p className="text-[12px] leading-relaxed text-muted-foreground">
             Nothing generated yet — select the deliverables for this pack, then generate. Only approved stages can run.

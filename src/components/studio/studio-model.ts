@@ -109,3 +109,50 @@ export function plainActivity(stageId: string, label: string, status: Production
   if (status === "succeeded") return `${what.charAt(0).toUpperCase() + what.slice(1)} ready`;
   return `${what.charAt(0).toUpperCase() + what.slice(1)} failed`;
 }
+
+/** Image vs video makeup of a stage list — drives kind badges and cost notes. */
+export function deliverableKind(stages: ProductionStagePlan[]): "image" | "video" | "mixed" {
+  const kinds = new Set(stages.map((s) => (s.kind === "image-to-video" ? "video" : "image")));
+  if (kinds.size > 1) return "mixed";
+  return kinds.has("video") ? "video" : "image";
+}
+
+/** True when any stage has no catalogue price — estimates are then lower bounds. */
+export function hasUnknownPrice(stages: ProductionStagePlan[]): boolean {
+  return stages.some((s) => !CAPABILITY_PRICE_MAP[s.capability]);
+}
+
+/**
+ * The one recommended starting point: the platform-matched deliverable's
+ * image stages only. Video (motion) is never preselected — it is slower,
+ * costlier, and a separate deliberate choice. Returns stage ids; empty
+ * when there is nothing sensible to preselect (all done, or motion-only).
+ */
+export function recommendInitialStages(
+  platform: string,
+  deliverables: Deliverable[],
+  succeededStageIds: Set<string>
+): string[] {
+  const match = (d: Deliverable): boolean => {
+    const p = platform.toLowerCase();
+    if (p === "instagram") return d.id === "feed";
+    if (p === "tiktok") return d.id === "vertical";
+    if (p === "youtube" || p === "linkedin") return d.id === "landscape";
+    return false;
+  };
+  const target = deliverables.find(match) ?? deliverables[0];
+  if (!target) return [];
+  const imageStages = target.stages.filter(
+    (s) => s.kind !== "image-to-video" && !succeededStageIds.has(s.id)
+  );
+  if (imageStages.length > 0) return imageStages.map((s) => s.id);
+  // No image work left in the recommendation: fall back to any other
+  // pending image stage rather than preselecting video or nothing useful.
+  for (const d of deliverables) {
+    const fallback = d.stages.filter(
+      (s) => s.kind !== "image-to-video" && !succeededStageIds.has(s.id)
+    );
+    if (fallback.length > 0) return fallback.map((s) => s.id);
+  }
+  return [];
+}
