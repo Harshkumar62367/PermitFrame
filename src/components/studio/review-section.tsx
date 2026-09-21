@@ -10,7 +10,7 @@ import { useInvalidateWorkspaceSnapshot } from "@/lib/use-workspace-snapshot";
 import { cn } from "@/lib/utils";
 import type { Campaign } from "@/server/types";
 import { hasSharableReceipt, isActiveJobStatus } from "@/server/types";
-import { downloadHrefFor } from "@/lib/proof-links";
+import { downloadHrefFor, blockExplorerNftUrl } from "@/lib/proof-links";
 
 interface ReviewSectionProps {
   campaign: Campaign;
@@ -150,7 +150,7 @@ export function ReviewSection({ campaign, onChanged }: ReviewSectionProps) {
         </div>
         <div className="flex flex-wrap gap-2">
           {sharable && (
-            <Button asChild variant="outline" size="sm" className="rounded-full">
+            <Button asChild variant="outline" size="sm" className="rounded-full" title="Download the offline evidence pack: brief, permission decision, per-stage costs and fingerprints, receipts, audit events. No prompts, no secrets — for client handoff, disputes, and archiving.">
               <a href={`/api/campaigns/${campaign.id}/bundle`} download>
                 <Download className="h-3.5 w-3.5" /> Proof bundle
               </a>
@@ -267,12 +267,18 @@ export function ReviewSection({ campaign, onChanged }: ReviewSectionProps) {
             onClick={() => void republishPending()}
             disabled={republishing || active}
             aria-busy={republishing}
-            title={active ? "Wait for production to finish before publishing records" : "Publish locally stored records to the proof ledger"}
+            title={active ? "Wait for production to finish before publishing records" : "Publish locally saved records to the proof ledger — already-published ones are skipped"}
             className="rounded-full"
           >
             {republishing ? "Publishing…" : `Publish ${pendingRecords.length} pending record${pendingRecords.length === 1 ? "" : "s"}`}
           </Button>
           {republishMsg && <p role="status" className="break-words text-[12px] text-muted-foreground">{republishMsg}</p>}
+          {!republishMsg && (
+            <p className="w-full text-[12px] leading-relaxed text-muted-foreground">
+              Saved locally because the ledger was unreachable when generated. Publishing writes each to the proof ledger
+              (giving it a permanent UAL and explorer link) — safe to retry, already-published records are skipped.
+            </p>
+          )}
         </div>
       )}
       {legacyHosted.length > 0 && (
@@ -332,14 +338,36 @@ export function ReviewSection({ campaign, onChanged }: ReviewSectionProps) {
           </button>
           {showTechnical && (
             <div className="mt-3 space-y-2">
-              {receiptRecords.map((r) => (
-                <p key={r.id} className="break-all font-mono text-[10.5px] text-muted-foreground" title={r.ual}>
-                  <span className="text-foreground">{r.label}</span> · {r.ual}
-                </p>
-              ))}
+              {receiptRecords.map((r) => {
+                const nftLink = r.ual ? blockExplorerNftUrl(r.ual) : null;
+                return (
+                  <p key={r.id} className="break-all font-mono text-[10.5px] text-muted-foreground" title={r.ual}>
+                    <span className="text-foreground">{r.label}</span> · {r.ual}
+                    {nftLink && (
+                      <>
+                        {" · "}
+                        <a href={nftLink.href} target="_blank" rel="noreferrer" className="font-sans text-sky-700 hover:underline dark:text-sky-300">
+                          {nftLink.label}
+                        </a>
+                      </>
+                    )}
+                  </p>
+                );
+              })}
               {campaignRecord && (
                 <p className="break-all font-mono text-[10.5px] text-muted-foreground" title={campaignRecord}>
                   Campaign record · {campaignRecord}
+                  {(() => {
+                    const nftLink = blockExplorerNftUrl(campaignRecord);
+                    return nftLink ? (
+                      <>
+                        {" · "}
+                        <a href={nftLink.href} target="_blank" rel="noreferrer" className="font-sans text-sky-700 hover:underline dark:text-sky-300">
+                          {nftLink.label}
+                        </a>
+                      </>
+                    ) : null;
+                  })()}
                 </p>
               )}
             </div>

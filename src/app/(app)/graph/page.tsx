@@ -13,6 +13,7 @@ import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { HealthDot } from "@/components/ui/integration-status";
 import { apiPost } from "@/lib/api";
+import { blockExplorerNftUrl } from "@/lib/proof-links";
 import { useDkgGraph, type DkgAsset, type DkgHealth } from "@/lib/use-dkg-graph";
 
 const EXAMPLE_QUERY = `PREFIX pf: <https://permitframe.app/ns#>
@@ -180,18 +181,37 @@ export default function GraphPage() {
                 {(a.ual || a.evidenceUri) && (
                   <CopyableIdentifier value={a.ual || a.evidenceUri!} className="mt-2 max-w-full text-xs" />
                 )}
-                {a.explorerUrl ? (
-                  <a
-                    href={a.explorerUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="mt-3 inline-block text-xs font-medium text-emerald-700 hover:text-emerald-600 dark:text-emerald-300 dark:hover:text-emerald-200"
-                  >
-                    explorer →
-                  </a>
-                ) : (
-                  <p className="mt-3 text-[11px] text-muted-foreground">Working Memory only — no explorer anchor yet.</p>
-                )}
+                {(() => {
+                  const nftLink = a.ual ? blockExplorerNftUrl(a.ual) : null;
+                  if (!a.explorerUrl && !nftLink) {
+                    return <p className="mt-3 text-[11px] text-muted-foreground">Working Memory only — no explorer anchor yet.</p>;
+                  }
+                  return (
+                    <p className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs font-medium">
+                      {a.explorerUrl && (
+                        <a
+                          href={a.explorerUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-emerald-700 hover:text-emerald-600 dark:text-emerald-300 dark:hover:text-emerald-200"
+                        >
+                          explorer →
+                        </a>
+                      )}
+                      {nftLink && (
+                        <a
+                          href={nftLink.href}
+                          target="_blank"
+                          rel="noreferrer"
+                          title="Testnet tokens are not indexed by the OriginTrail explorer — view the token contract directly"
+                          className="text-emerald-700 hover:text-emerald-600 dark:text-emerald-300 dark:hover:text-emerald-200"
+                        >
+                          {nftLink.label} →
+                        </a>
+                      )}
+                    </p>
+                  );
+                })()}
               </article>
             );
           })}
