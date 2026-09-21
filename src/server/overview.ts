@@ -3,6 +3,7 @@ import { effectiveCampaignStatus, productionStage, type ProductionStage } from "
 import { loadDb } from "./store";
 import { campaignCostRollup, estimateCost, expiryWarnings, type ExpiryWarning } from "./platform";
 import type { Campaign, CampaignStatus, Database, PublicationStatus } from "./types";
+import { isActiveJobStatus } from "./types";
 
 export interface OverviewBlocker {
   code: string;
@@ -59,6 +60,8 @@ export interface OverviewCampaign {
   thumbnailUrl: string | null;
   /** Latest generated output (Livepeer), when production has produced one. */
   generatedUrl: string | null;
+  /** Media type of the latest generated output. Drives image vs video rendering. */
+  generatedMediaType: "image" | "video" | null;
   receiptsCount: number;
   /** Campaign evidence record, when approval published one. Null until then. */
   campaignUAL: string | null;
@@ -183,11 +186,12 @@ export function buildWorkspaceOverview(db: Database, workspaceName: string | nul
       updatedAt: c.updatedAt,
       thumbnailUrl,
       generatedUrl: latestReceipt?.outputUrl ?? null,
+      generatedMediaType: latestReceipt?.mediaType ?? null,
       receiptsCount: c.receipts.length,
       campaignUAL: c.campaignUAL ?? null,
       recordPublicationStatus: c.publicationStatus ?? null,
       verificationRef: c.verificationRef ?? null,
-      activeJobs: c.jobs.filter((j) => j.status === "queued" || j.status === "running").length,
+      activeJobs: c.jobs.filter((j) => isActiveJobStatus(j.status)).length,
       spentUsd: rollup.spent,
       estimatedUsd: preflight ? estimateCost(preflight) : 0,
       preflight: {

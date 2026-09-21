@@ -1,9 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Check, CircleDashed, Loader2, Sparkles, TriangleAlert, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { apiPost } from "@/lib/api";
+import { apiGet, apiPost } from "@/lib/api";
 import { useInvalidateWorkspaceSnapshot } from "@/lib/use-workspace-snapshot";
 import { cn } from "@/lib/utils";
 import type { Campaign, ProductionStagePlan } from "@/server/types";
@@ -11,12 +11,14 @@ import {
   deliverableKind,
   deliverableState,
   estimateStages,
+  estimateStagesLive,
   formatUsd,
   hasUnknownPrice,
   planDeliverables,
   receiptsForStages,
   recommendInitialStages,
-  type DeliverableState
+  type DeliverableState,
+  type LivePriceEntry
 } from "./studio-model";
 
 interface CreativePlanProps {
@@ -24,7 +26,6 @@ interface CreativePlanProps {
   allowed: boolean;
   onChanged: () => Promise<void>;
 }
-
 const STATE_META: Record<DeliverableState, { label: string; className: string }> = {
   ready: { label: "Not started", className: "bg-muted text-muted-foreground" },
   queued: { label: "Queued", className: "bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-800" },
@@ -58,7 +59,7 @@ function KindBadge({ stages }: { stages: ProductionStagePlan[] }) {
 export function CreativePlan({ campaign, allowed, onChanged }: CreativePlanProps) {
   const deliverables = useMemo(() => planDeliverables(campaign), [campaign]);
   const succeededStageIds = useMemo(
-    () => new Set(campaign.jobs.filter((j) => j.status === "succeeded").map((j) => j.stageId)),
+    () => new Set(campaign.jobs.filter((j) => j.status === "ready_to_share").map((j) => j.stageId)),
     [campaign]
   );
   const [selected, setSelected] = useState<string[] | null>(null);
@@ -81,7 +82,37 @@ export function CreativePlan({ campaign, allowed, onChanged }: CreativePlanProps
   const estimate = estimateStages(selectedStages);
   const estimateExact = !hasUnknownPrice(selectedStages);
   const hasMotion = selectedStages.some((s) => s.kind === "image-to-video");
-  const spent = campaign.jobs.filter((j) => j.status === "succeeded").reduce((s, j) => s + (j.costUsd ?? 0), 0);
+  const spent = campaign.jobs.filter((j) => j.status === "ready_to_share").reduce((s, j) => s + (j.costUsd ?? 0), 0);
+
+  // Live Creative MCP prices load once, quietly, and never block the plan:
+  // unreachable agent → historical estimates carry the "est." label as before.
+  const [livePrices, setLivePrices] = useState<Record<string, LivePriceEntry> | null>(null);
+  useEffect(() => {
+    let active = true;
+    apiGet<{ ok: boolean; prices?: { name: string; usd: number; unit: string }[] }>(
+      "/api/livepeer/pricing",
+      undefined,
+      15000
+    ).then(
+      (d) => {
+        if (!active || !d.ok || !d.prices) return;
+        const map: Record<string, LivePriceEntry> = {};
+        for (const p of d.prices) map[p.name] = { usd: p.usd, unit: p.unit };
+        if (active) setLivePrices(map);
+      },
+      () => undefined // unreachable: historical estimates stand in
+    );
+    return () => {
+      active = false;
+    };
+  }, []);
+  const liveEstimate = estimateStagesLive(selectedStages, livePrices);
+  const estimateLabel =
+    liveEstimate && liveEstimate.exact
+      ? `live ${formatUsd(liveEstimate.total)} selected`
+      : livePrices
+        ? "live pricing unavailable for this selection"
+        : `est. ${formatUsd(estimate)}${estimateExact ? "" : "+"} selected`;
 
   function toggleStage(stageId: string) {
     setError(null);
@@ -123,9 +154,17 @@ export function CreativePlan({ campaign, allowed, onChanged }: CreativePlanProps
           <h3 className="text-[15px] font-semibold tracking-tight">Creative plan</h3>
           <p
             className="mt-0.5 font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground"
-            title={estimateExact ? undefined : "Some stages lack catalogue prices — actual spend may be higher"}
+            title={
+              liveEstimate && liveEstimate.exact
+                ? "Quoted from live Creative MCP prices"
+                : livePrices
+                  ? `Historical estimate ${formatUsd(estimate)}${estimateExact ? "" : "+"} — live prices do not cover this selection exactly`
+                  : estimateExact
+                    ? undefined
+                    : "Some stages lack catalogue prices — actual spend may be higher"
+            }
           >
-            est. {formatUsd(estimate)}{estimateExact ? "" : "+"} selected · {formatUsd(spent)} spent
+            {estimateLabel} · {formatUsd(spent)} spent
           </p>
         </div>
         {selectable.length > 0 && (
@@ -204,7 +243,7 @@ export function CreativePlan({ campaign, allowed, onChanged }: CreativePlanProps
                   <ul className="mt-2 space-y-1">
                     {d.stages.map((stage) => {
                       const job = campaign.jobs.find((j) => j.stageId === stage.id);
-                      const done = job?.status === "succeeded";
+                      const done = job?.status === "ready_to_share";
                       const selectableStage = !done;
                       const isChecked = selectedIds.includes(stage.id);
                       return (
@@ -229,7 +268,7 @@ export function CreativePlan({ campaign, allowed, onChanged }: CreativePlanProps
                           <span className={cn("min-w-0 flex-1 truncate", !isChecked && selectableStage && "text-muted-foreground")}>
                             {stage.label}
                           </span>
-                          {job && job.status === "running" && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-amber-600" aria-hidden />}
+                          {job && job.status === "generating" && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-amber-600" aria-hidden />}
                           {job && job.status === "queued" && <CircleDashed className="h-3.5 w-3.5 shrink-0 text-amber-600" aria-hidden />}
                           {job && job.status === "failed" && <X className="h-3.5 w-3.5 shrink-0 text-rose-600" aria-hidden />}
                         </li>
@@ -309,7 +348,16 @@ export function CreativePlan({ campaign, allowed, onChanged }: CreativePlanProps
               ))}
             </ul>
             <div className="mt-4 space-y-1 rounded-xl bg-muted/60 p-3.5 text-[12.5px] leading-relaxed ring-1 ring-border">
-              <p><span className="font-medium">Estimated spend {formatUsd(estimate)}</span> · {formatUsd(spent)} spent so far on this campaign.</p>
+              <p>
+                <span className="font-medium">
+                  {liveEstimate && liveEstimate.exact
+                    ? `Live estimate ${formatUsd(liveEstimate.total)}`
+                    : livePrices
+                      ? "Live pricing unavailable for this selection"
+                      : `Estimated spend ${formatUsd(estimate)}`}
+                </span>{" "}
+                · {formatUsd(spent)} spent so far on this campaign.
+              </p>
               <p className="text-muted-foreground">Generation spend is non-refundable once a stage runs. Only approved stages are queued — anything unselected stays untouched.</p>
               {hasMotion && (
                 <p className="text-muted-foreground">Video stages can take several minutes. Generation runs on the server — safe to leave this page; progress is saved per finished stage.</p>
@@ -326,7 +374,7 @@ export function CreativePlan({ campaign, allowed, onChanged }: CreativePlanProps
                 aria-busy={busy}
                 className="rounded-full bg-emerald-700 font-medium text-emerald-50 hover:bg-emerald-600 dark:bg-emerald-500 dark:text-emerald-950 dark:hover:bg-emerald-400"
               >
-                {busy ? "Starting…" : `Confirm · ${formatUsd(estimate)} est.`}
+                {busy ? "Starting…" : liveEstimate && liveEstimate.exact ? `Confirm · ${formatUsd(liveEstimate.total)}` : `Confirm · ${formatUsd(estimate)} est.`}
               </Button>
             </div>
           </div>

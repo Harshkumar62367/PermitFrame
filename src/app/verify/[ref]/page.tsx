@@ -1,6 +1,7 @@
 import { Check } from "lucide-react";
 import { notFound } from "next/navigation";
 import { lookupVerification } from "@/server/verify";
+import { blockExplorerNftUrl } from "@/lib/proof-links";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +18,7 @@ export default async function VerifyPage({ params }: { params: Promise<{ ref: st
   if (!v.found) notFound();
   const s = v.snapshot;
   const anchored = s.publicationStatus === "anchored" && !!s.ual;
+  const nftLink = anchored && s.ual ? blockExplorerNftUrl(s.ual) : null;
 
   return (
     <div className="pf-page min-h-screen bg-background">
@@ -115,11 +117,20 @@ export default async function VerifyPage({ params }: { params: Promise<{ ref: st
               <p className="break-all font-mono text-[11px] text-muted-foreground" title={s.ual ?? undefined}>
                 Record ·{" "}
                 {s.explorerUrl ? (
-                  <a href={s.explorerUrl} target="_blank" rel="noreferrer" className="text-sky-700 hover:underline dark:text-sky-300">{s.ual}</a>
+                  <a href={s.explorerUrl} target="_blank" rel="noreferrer" className="text-sky-700 hover:underline dark:text-sky-300">OriginTrail explorer</a>
                 ) : (
                   s.ual
                 )}
+                {s.ual && nftLink && (
+                  <>
+                    {" · "}
+                    <a href={nftLink.href} target="_blank" rel="noreferrer" className="text-sky-700 hover:underline dark:text-sky-300">
+                      {nftLink.label}
+                    </a>
+                  </>
+                )}
               </p>
+              <p className="break-all font-mono text-[11px] text-muted-foreground" title={s.ual ?? undefined}>{s.ual}</p>
               <p className="text-[11.5px] text-muted-foreground">Verification reference {s.ref}</p>
             </div>
           </details>

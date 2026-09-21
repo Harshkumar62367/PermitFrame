@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   const db = await loadDb();
   const perCampaign = db.campaigns.map((c) => {
-    const succeeded = c.jobs.filter((j) => j.status === "succeeded");
+    const succeeded = c.jobs.filter((j) => j.status === "ready_to_share");
     return {
       campaignId: c.id,
       title: c.title,

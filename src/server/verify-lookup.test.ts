@@ -141,7 +141,7 @@ describe("anonymous verification reads", () => {
     ].sort();
     assert.deepEqual(Object.keys(body.snapshot ?? {}).sort(), allowedSnapshotKeys);
     const dump = JSON.stringify(body);
-    for (const key of ["workspaceId", "userId", "wallet", "session", "token", "secret", "credential", "password", "creatorId", "sourceMediaId", "passportId", "productFactsId", "consent", "declaration", "prohibitedClaims", "evidenceNotes", "comment", "prompt", "contact", "email", "phone", "contract"]) {
+    for (const key of ["workspaceId", "userId", "wallet", "session", "token", "secret", "credential", "password", "creatorId", "sourceMediaId", "passportId", "productFactsId", "consent", "declaration", "prohibitedClaims", "evidenceNotes", "comment", "prompt", "contact", "email", "phone", "contract", "outputHash"]) {
       assert.ok(!dump.includes(`"${key}"`), `API leaked private key: ${key}`);
     }
   });

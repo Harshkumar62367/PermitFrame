@@ -7,7 +7,6 @@ export interface Deliverable {
   platforms: string;
   stages: ProductionStagePlan[];
 }
-
 export type DeliverableState = "ready" | "queued" | "running" | "partial" | "done" | "failed";
 
 /**
@@ -71,10 +70,13 @@ export function deliverableState(jobs: ProductionJob[], stageIds: string[]): Del
   const mine = jobsForStages(jobs, stageIds);
   if (mine.length === 0) return "ready";
   const states = new Set(mine.map((j) => j.status));
-  if (states.has("running")) return "running";
+  if (states.has("generating") || states.has("preview_ready") || states.has("storage_pending")) return "running";
   if (states.has("queued")) return states.size === 1 ? "queued" : "partial";
-  if (states.has("failed")) return mine.every((j) => j.status === "failed" || j.status === "succeeded") && mine.some((j) => j.status === "failed") ? "failed" : "partial";
-  if (mine.every((j) => j.status === "succeeded")) return "done";
+  if (states.has("failed") || states.has("storage_retry_needed")) {
+    const settled = mine.every((j) => j.status === "failed" || j.status === "storage_retry_needed" || j.status === "ready_to_share");
+    return settled && mine.some((j) => j.status !== "ready_to_share") ? "failed" : "partial";
+  }
+  if (mine.every((j) => j.status === "ready_to_share")) return "done";
   return "partial";
 }
 
@@ -85,6 +87,44 @@ export function estimateStages(stages: ProductionStagePlan[]): number {
     if (!price) return sum;
     return sum + (price.unit === "second" ? price.usd * 5 : price.usd);
   }, 0);
+}
+
+export interface LivePriceEntry {
+  usd: number;
+  unit: string;
+}
+
+export interface LiveEstimate {
+  total: number;
+  /** True only when every stage mapped to a live per-image/per-second price. */
+  exact: boolean;
+}
+
+/**
+ * Live Creative MCP estimate for the selected stages. Per-image prices map
+ * directly; per-second prices use the 5s motion default. Anything else
+ * (per-megapixel, per-token, unlisted) is not quotable live — the result is
+ * marked inexact and the UI must say live pricing is unavailable rather
+ * than present a number as a live quote.
+ */
+export function estimateStagesLive(
+  stages: ProductionStagePlan[],
+  live: Record<string, LivePriceEntry> | null
+): LiveEstimate | null {
+  if (!live) return null;
+  let total = 0;
+  let exact = true;
+  for (const stage of stages) {
+    const entry = live[stage.capability];
+    if (entry && entry.unit === "image") {
+      total += entry.usd;
+    } else if (entry && entry.unit === "second") {
+      total += entry.usd * 5;
+    } else {
+      exact = false;
+    }
+  }
+  return { total, exact };
 }
 
 export function formatUsd(value: number): string {
@@ -104,9 +144,10 @@ const STAGE_PLAIN: Record<string, string> = {
  */
 export function plainActivity(stageId: string, label: string, status: ProductionJob["status"]): string {
   const what = STAGE_PLAIN[stageId] ?? label.toLowerCase();
-  if (status === "running") return `Creating ${what}…`;
+  if (status === "generating") return `Creating ${what}…`;
   if (status === "queued") return `Queued — ${what}`;
-  if (status === "succeeded") return `${what.charAt(0).toUpperCase() + what.slice(1)} ready`;
+  if (status === "storage_pending") return `Generated — saving ${what} securely…`;
+  if (status === "ready_to_share") return `${what.charAt(0).toUpperCase() + what.slice(1)} ready`;
   return `${what.charAt(0).toUpperCase() + what.slice(1)} failed`;
 }
 

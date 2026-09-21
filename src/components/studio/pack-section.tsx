@@ -26,6 +26,10 @@ export function PackSection({ campaign, onChanged }: PackSectionProps) {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [variants, setVariants] = useState<{ id: string; title: string }[] | null>(null);
+  // Which platform button is mid-creation. Buttons share the `busy` lock so
+  // two variants can never be created concurrently, but only the clicked one
+  // reads "Creating…" — the others keep their labels.
+  const [pendingPlatform, setPendingPlatform] = useState<string | null>(null);
   const invalidateSnapshot = useInvalidateWorkspaceSnapshot();
 
   const others = PLATFORMS.filter((p) => p !== campaign.request.platform);
@@ -33,10 +37,18 @@ export function PackSection({ campaign, onChanged }: PackSectionProps) {
   async function addPlatforms(platforms: string[]) {
     if (busy) return;
     setBusy(true);
+    setPendingPlatform(platforms[0] ?? null);
     setMessage(null);
     setError(null);
     try {
-      const j = await apiPost<{ campaigns: { id: string; title: string }[] }>(`/api/campaigns/${campaign.id}/variants`, { platforms });
+      // Variant creation runs a full permission check (DKG reads), which can
+      // take well over the default 30s budget — allow two minutes.
+      const j = await apiPost<{ campaigns: { id: string; title: string }[] }>(
+        `/api/campaigns/${campaign.id}/variants`,
+        { platforms },
+        undefined,
+        120000
+      );
       setVariants(j.campaigns);
       setMessage(
         j.campaigns.length > 0
@@ -49,6 +61,7 @@ export function PackSection({ campaign, onChanged }: PackSectionProps) {
       setError(e instanceof Error ? e.message : "Variant creation failed.");
     } finally {
       setBusy(false);
+      setPendingPlatform(null);
     }
   }
 
@@ -68,10 +81,11 @@ export function PackSection({ campaign, onChanged }: PackSectionProps) {
             size="sm"
             onClick={() => void addPlatforms([p])}
             disabled={busy}
-            aria-busy={busy}
+            aria-busy={pendingPlatform === p}
+            title={pendingPlatform === p ? `Creating the ${p} variant — permission check runs first` : `Clone this brief for ${p}`}
             className="rounded-full capitalize"
           >
-            {busy ? "Creating…" : `+ ${p}`}
+            {pendingPlatform === p ? "Creating…" : `+ ${p}`}
           </Button>
         ))}
       </div>

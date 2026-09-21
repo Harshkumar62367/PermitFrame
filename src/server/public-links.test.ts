@@ -43,7 +43,7 @@ function seedCampaign(): Campaign {
         kind: "text-to-image",
         capability: "flux-schnell",
         prompt: "FULL PROMPT with secret art-direction sauce — must never go public",
-        status: "succeeded",
+        status: "ready_to_share",
         outputUrl: "https://example.com/out.png",
         startedAt: "2026-01-01T00:00:00.000Z"
       }

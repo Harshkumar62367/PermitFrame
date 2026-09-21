@@ -1,4 +1,4 @@
-import { index, jsonb, pgTable, text, timestamp } from "drizzle-orm/pg-core";
+import { index, integer, jsonb, pgTable, real, text, timestamp } from "drizzle-orm/pg-core";
 import type { AuditEvent, Campaign, Database, PublicVerificationSnapshot } from "../types";
 
 /**
@@ -129,6 +129,50 @@ export const productFactsRows = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
   },
   (t) => [index("product_facts_workspace_idx").on(t.workspaceId)]
+);
+
+/**
+ * Durable asset store (Cloudinary). One row per generation job output:
+ * Livepeer provider provenance plus Cloudinary delivery identity. All
+ * storage columns are nullable/backward-compatible — legacy outputs simply
+ * have no row here and render provider-hosted. Never stores bytes or
+ * credentials, only identifiers, URLs, and safe diagnostics.
+ */
+export const campaignAssets = pgTable(
+  "campaign_assets",
+  {
+    jobId: text("job_id").primaryKey(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    campaignId: text("campaign_id").notNull(),
+    receiptId: text("receipt_id"),
+    storageProvider: text("storage_provider").notNull().default("cloudinary"),
+    storagePublicId: text("storage_public_id"),
+    storageVersion: integer("storage_version"),
+    storageUrl: text("storage_url"),
+    storageResourceType: text("storage_resource_type"),
+    storageFormat: text("storage_format"),
+    storageBytes: integer("storage_bytes"),
+    storageWidth: integer("storage_width"),
+    storageHeight: integer("storage_height"),
+    storageDuration: real("storage_duration"),
+    storageStatus: text("storage_status").notNull().default("pending"),
+    storageError: text("storage_error"),
+    attempts: integer("attempts").notNull().default(0),
+    persistedAt: timestamp("persisted_at", { withTimezone: true }),
+    providerUrl: text("provider_url"),
+    providerJobId: text("provider_job_id"),
+    providerModel: text("provider_model"),
+    providerCost: text("provider_cost"),
+    promptHash: text("prompt_hash"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+  },
+  (t) => [
+    index("campaign_assets_workspace_campaign_idx").on(t.workspaceId, t.campaignId),
+    index("campaign_assets_status_idx").on(t.storageStatus)
+  ]
 );
 
 /** Only a SHA-256 hash of the opaque browser session token is persisted. */

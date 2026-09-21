@@ -26,6 +26,7 @@ import { apiDelete, apiPost } from "@/lib/api";
 import { campaignDetailKey, useCampaignDetail } from "@/lib/use-campaign";
 import { useInvalidateDkgGraph } from "@/lib/use-dkg-graph";
 import { useInvalidateWorkspaceSnapshot } from "@/lib/use-workspace-snapshot";
+import { isActiveJobStatus } from "@/server/types";
 import { cn } from "@/lib/utils";
 
 // Live progress polling while jobs run: starts at 3s, backs off to 30s on
@@ -86,7 +87,7 @@ export default function CampaignWorkspacePage() {
   }
 
   const active = useMemo(
-    () => data?.campaign.jobs.some((j) => j.status === "queued" || j.status === "running") ?? false,
+    () => data?.campaign.jobs.some((j) => isActiveJobStatus(j.status)) ?? false,
     [data]
   );
 

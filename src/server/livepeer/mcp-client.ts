@@ -1,9 +1,14 @@
 import crypto from "node:crypto";
 
 /**
- * Minimal MCP (streamable HTTP) client for the Livepeer Agent raw surface.
- * Pattern proven by the official hackathon example app:
- * JSON-RPC 2.0 POSTs, mcp-session-id capture, async jobs via get_create_media.
+ * Minimal MCP (streamable HTTP) client for the Livepeer Agent Creative
+ * surface (registered-hackathon endpoint). Pattern proven by the official
+ * hackathon example app: JSON-RPC 2.0 POSTs, mcp-session-id capture.
+ *
+ * Renders dispatch through `create_media` (the Creative surface does not
+ * expose `run_capability`); async jobs are polled with `get_create_media`.
+ * Bearer tokens travel only in the Authorization header — never in errors,
+ * logs, or persisted records (see redactSecrets).
  */
 
 export interface LivepeerConfig {
@@ -13,7 +18,7 @@ export interface LivepeerConfig {
 
 export function livepeerConfig(): LivepeerConfig {
   return {
-    endpoint: process.env.LIVEPEER_MCP_URL ?? "https://agent.livepeer.org/api/mcp/raw",
+    endpoint: process.env.LIVEPEER_MCP_URL ?? "https://agent.livepeer.org/api/mcp/creative",
     bearer: process.env.LIVEPEER_MCP_BEARER || undefined
   };
 }
@@ -115,43 +120,63 @@ export class LivepeerMcpClient {
   }
 
   /**
-   * Run a capability with exact dispatch. Jobs render inline (async: false)
-   * on the calling worker — faster and more reliable than the async background
-   * pool. If the server backgrounds the job anyway, we poll get_create_media.
+   * Run a capability through the Creative surface (`create_media`).
+   * Stable internal contract kept for the pipeline: capability/prompt/
+   * source/ids in, parsed outcome out. Action selection is deliberate —
+   * image-to-video (and upscale) need a source image (`animate`/`upscale`
+   * with `source_url`); everything else renders via `generate` with the
+   * selected capability as `model_override`. Jobs render inline
+   * (async: false); if the server backgrounds the job anyway, we poll
+   * get_create_media. Nothing is fabricated: missing outputs, ids, status,
+   * costs, or model names surface as errors, never guesses.
    */
   async runCapability(input: {
     capability: string;
+    kind?: "text-to-image" | "image-to-image" | "image-to-video" | "upscale" | "audio-to-text";
     prompt?: string;
     sourceUrl?: string;
     inputs?: Record<string, unknown>;
     timeoutSeconds?: number;
     sessionId?: string;
     idempotencyKey?: string;
+    maxCostUsd?: number;
   }): Promise<CapabilityRunResult> {
+    const action = actionFor(input.kind, input.sourceUrl);
     const timeout = Math.min(Math.max(input.timeoutSeconds ?? 60, 10), 900);
+    const aspectRatio = typeof input.inputs?.aspect_ratio === "string" ? (input.inputs.aspect_ratio as string) : undefined;
+    const duration =
+      typeof input.inputs?.duration === "number"
+        ? (input.inputs.duration as number)
+        : action === "animate"
+          ? 5
+          : undefined;
     let payload = await this.callTool(
-      "run_capability",
+      "create_media",
       {
-        capability: input.capability,
+        action,
         ...(input.prompt ? { prompt: input.prompt } : {}),
+        model_override: input.capability,
         ...(input.sourceUrl ? { source_url: input.sourceUrl } : {}),
-        ...(input.inputs ? { inputs: input.inputs } : {}),
-        timeout,
+        ...(aspectRatio ? { aspect_ratio: aspectRatio } : {}),
+        ...(duration !== undefined ? { duration } : {}),
         async: false,
         persist: false,
+        ...(input.maxCostUsd !== undefined ? { max_cost_usd: input.maxCostUsd } : {}),
+        // Fast path for stills; motion quality matters more than speed.
+        ...(action === "generate" ? { prefer_fast: true } : {}),
         session_id: input.sessionId ? `permitframe_${sanitize(input.sessionId)}` : "permitframe",
         ...(input.idempotencyKey ? { idempotency_key: input.idempotencyKey } : {})
       },
       timeout * 1000 + 30_000
     );
-    assertToolOk(payload, `run_capability(${input.capability})`);
+    assertToolOk(payload, `create_media(${action}, ${input.capability})`);
 
     let jobId = extractJobId(payload);
     if (isFailed(extractStatus(payload))) {
       throw new Error(`Livepeer job failed: ${resultText(payload).slice(0, 300)}`);
     }
     if (extractReference(payload)) {
-      return finalize(payload, jobId);
+      return finalize(payload, jobId, input.capability);
     }
     if (!jobId) {
       throw new Error(`Livepeer returned no output and no job id: ${resultText(payload).slice(0, 300)}`);
@@ -166,13 +191,36 @@ export class LivepeerMcpClient {
       if (isFailed(extractStatus(payload))) {
         throw new Error(`Livepeer job failed: ${resultText(payload).slice(0, 300)}`);
       }
-      if (extractReference(payload)) return finalize(payload, jobId);
+      if (extractReference(payload)) return finalize(payload, jobId, input.capability);
     }
     throw new Error(`Livepeer job timed out after ${timeout}s`);
   }
 }
 
-function finalize(payload: Record<string, unknown>, jobId?: string): CapabilityRunResult {
+/**
+ * Deliberate action selection for `create_media`. Animate/upscale transform
+ * an existing image, so they require a source URL — without one the call
+ * would fail server-side after spending, so we refuse locally instead.
+ */
+export function actionFor(
+  kind: "text-to-image" | "image-to-image" | "image-to-video" | "upscale" | "audio-to-text" | undefined,
+  sourceUrl: string | undefined
+): "generate" | "animate" | "upscale" {
+  if (kind === "image-to-video") {
+    if (!sourceUrl) throw new Error("Image-to-video needs a source image — nothing to animate without one.");
+    return "animate";
+  }
+  if (kind === "upscale") {
+    if (!sourceUrl) throw new Error("Upscale needs a source image — nothing to upscale without one.");
+    return "upscale";
+  }
+  if (kind === "audio-to-text") {
+    throw new Error("Audio transcription is not supported on the Creative surface.");
+  }
+  return "generate";
+}
+
+function finalize(payload: Record<string, unknown>, jobId?: string, requestedCapability?: string): CapabilityRunResult {
   const s = structured(payload) as Record<string, unknown>;
   const outputUrl = extractReference(payload);
   if (!outputUrl) throw new Error("Livepeer completed without an output URL.");
@@ -181,15 +229,25 @@ function finalize(payload: Record<string, unknown>, jobId?: string): CapabilityR
       ? s.cost_paid_usd
       : typeof s.cost_usd_estimated === "number"
         ? s.cost_usd_estimated
-        : undefined;
+        : typeof s.cost_usd === "number"
+          ? s.cost_usd
+          : typeof s.total_cost_usd === "number"
+            ? s.total_cost_usd
+            : undefined;
+  const substitution =
+    s.model_note ? JSON.stringify(s.model_note)
+    : s.model_substitution ? JSON.stringify(s.model_substitution)
+    : s.substitution_note && typeof s.substitution_note === "string"
+      ? s.substitution_note
+      : undefined;
   return {
     outputUrl,
     status: extractStatus(payload) || "completed",
     raw: s,
     humanSummary: extractHumanSummary(payload),
-    capability: str(s.capability ?? s.capability_used ?? payload.capability),
-    requestedCapability: str(s.requested_capability),
-    modelNote: s.model_note ? JSON.stringify(s.model_note) : undefined,
+    capability: str(s.capability ?? s.capability_used ?? s.model ?? s.model_used) ?? requestedCapability,
+    requestedCapability,
+    modelNote: substitution,
     jobId,
     costUsd: cost
   };
@@ -237,7 +295,7 @@ function extractJobId(payload: Record<string, unknown>): string | undefined {
 
 function extractStatus(payload: Record<string, unknown>): string {
   const s = structured(payload) as Record<string, unknown>;
-  for (const candidate of [s?.status]) {
+  for (const candidate of [s?.status, s?.state]) {
     if (typeof candidate === "string") return candidate.toLowerCase();
   }
   return resultText(payload).match(/status["'\s:]+([A-Za-z_-]+)/i)?.[1]?.toLowerCase() ?? "";

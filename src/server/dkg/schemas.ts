@@ -85,7 +85,9 @@ export function sourceMediaKa(media: SourceMedia): KaEnvelope {
       "pf:creatorId": media.creatorId,
       "pf:mediaType": media.type,
       "pf:referenceUrl": media.url,
-      "pf:contentHash": media.hash,
+      // Reference-URL fingerprint for registry correlation — not a byte hash
+      // of the media (source bytes stay with the creator by design).
+      "pf:referenceFingerprint": media.hash,
       "pf:visibility": "private"
     }
   };
@@ -129,7 +131,16 @@ export function receiptKa(receipt: DerivativeReceipt): KaEnvelope {
       "pf:mediaType": receipt.mediaType,
       "pf:format": receipt.format,
       "pf:outputUrl": receipt.outputUrl,
-      "pf:outputHash": receipt.outputHash,
+      // Correlation only: fingerprints the provider URL string, never byte
+      // content. Durable proof references are the delivery URL + storage
+      // identity below plus job provenance — fingerprints prove nothing
+      // about the media bytes (a future byte-stream SHA-256 can add
+      // cryptographic identity).
+      ...(receipt.providerUrlFingerprint ?? receipt.outputHash
+        ? { "pf:providerUrlFingerprint": receipt.providerUrlFingerprint ?? receipt.outputHash }
+        : {}),
+      ...(receipt.storagePublicId ? { "pf:storagePublicId": receipt.storagePublicId } : {}),
+      ...(receipt.storageUrl ? { "pf:deliveryUrl": receipt.storageUrl } : {}),
       "pf:generationCapability": receipt.capability,
       "pf:promptHash": receipt.promptHash,
       "pf:claimsUsed": receipt.claimsUsed,

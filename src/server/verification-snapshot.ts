@@ -66,7 +66,9 @@ export function buildPublicSnapshot(input: {
       mediaType: r.mediaType,
       format: r.format,
       outputUrl: r.outputUrl,
-      outputHash: r.outputHash,
+      // Correlation-only URL fingerprint (legacy rows carry outputHash of the
+      // same meaning). Never content evidence — see types.
+      providerUrlFingerprint: r.providerUrlFingerprint ?? r.outputHash,
       capability: r.capability,
       promptHash: r.promptHash,
       claimsUsed: r.claimsUsed,

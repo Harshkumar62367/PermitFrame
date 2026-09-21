@@ -42,14 +42,15 @@ WHERE {
 
 export function findReceiptsForCampaignSparql(campaignId: string): string {
   return `PREFIX pf: <${PF_NS}>
-SELECT ?receipt ?outputUrl ?outputHash ?capability ?generatedAt
+SELECT ?receipt ?outputUrl ?outputHash ?providerUrlFingerprint ?capability ?generatedAt
 WHERE {
   ?receipt a pf:PermitFrameDerivativeReceipt ;
     pf:campaign ?campaign ;
     pf:outputUrl ?outputUrl ;
-    pf:outputHash ?outputHash ;
     pf:generationCapability ?capability ;
     pf:generatedAt ?generatedAt .
+  OPTIONAL { ?receipt pf:outputHash ?outputHash . }
+  OPTIONAL { ?receipt pf:providerUrlFingerprint ?providerUrlFingerprint . }
   ?campaign pf:campaignId "${campaignId}" .
 }`;
 }

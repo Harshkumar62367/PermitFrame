@@ -51,7 +51,9 @@ export async function api<T>(
       signal
     });
   } catch (cause) {
-    if (cause instanceof DOMException && cause.name === "AbortError") {
+    // AbortSignal.timeout() aborts with TimeoutError (not AbortError) in
+    // modern browsers — both mean our own budget expired, never the network.
+    if (cause instanceof DOMException && (cause.name === "AbortError" || cause.name === "TimeoutError")) {
       if (timeout.aborted && !options?.signal?.aborted) {
         throw new ApiError(
           endpoint,

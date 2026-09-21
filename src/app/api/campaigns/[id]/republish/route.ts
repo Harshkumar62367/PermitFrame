@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { AuthenticationRequiredError } from "@/server/auth";
 import { getDkg } from "@/server/dkg";
 import { receiptKa } from "@/server/dkg/schemas";
+import { hasSharableReceipt } from "@/server/types";
 import { loadDb, newId, nowIso, updateDb } from "@/server/store";
 
 export const dynamic = "force-dynamic";
@@ -23,7 +24,9 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
 
   const republished: string[] = [];
   for (const receipt of campaign.receipts) {
-    if (receipt.ual) continue;
+    // Proof only for durable outputs: provider-hosted legacy receipts wait
+    // for "Store securely" instead of publishing previews as evidence.
+    if (receipt.ual || !hasSharableReceipt(receipt)) continue;
     try {
       const record = await getDkg().publish(receiptKa(receipt), receipt.visibility);
       await updateDb((d) => {

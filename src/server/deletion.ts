@@ -1,4 +1,5 @@
 import type { Campaign, Database } from "./types";
+import { isActiveJobStatus } from "./types";
 
 /**
  * Campaign deletion rules. Pure functions over domain objects (no session, no
@@ -32,7 +33,7 @@ export interface DeletionEligibility {
 
 export function deletionEligibility(campaign: Campaign): DeletionEligibility {
   const reasons: string[] = [];
-  const activeJobs = campaign.jobs.filter((j) => j.status === "queued" || j.status === "running");
+  const activeJobs = campaign.jobs.filter((j) => isActiveJobStatus(j.status));
   if (activeJobs.length > 0) {
     return {
       deletable: false,
@@ -52,7 +53,7 @@ export function deletionEligibility(campaign: Campaign): DeletionEligibility {
   // NOTE: permanent removal of an archived record exists as an explicit,
   // flag-gated last resort (forceDeleteEligibility below) — never here, so
   // ordinary delete flows and UIs can never stumble into destroying history.
-  const hasAssets = campaign.receipts.length > 0 || campaign.jobs.some((j) => j.status === "succeeded");
+  const hasAssets = campaign.receipts.length > 0 || campaign.jobs.some((j) => j.status === "ready_to_share");
   if (hasAssets) {
     reasons.push(
       `It has generated assets (${campaign.receipts.length} output${campaign.receipts.length === 1 ? "" : "s"}) — archive it so the audit history stays intact.`
@@ -110,7 +111,7 @@ export function forceDeleteWarnings(campaign: Campaign): string[] {
 }
 
 export function forceDeleteEligibility(campaign: Campaign): ForceDeleteEligibility {
-  const activeJobs = campaign.jobs.filter((j) => j.status === "queued" || j.status === "running");
+  const activeJobs = campaign.jobs.filter((j) => isActiveJobStatus(j.status));
   if (activeJobs.length > 0) {
     return {
       allowed: false,

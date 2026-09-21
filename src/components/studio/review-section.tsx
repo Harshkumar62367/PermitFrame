@@ -9,12 +9,13 @@ import { apiPost } from "@/lib/api";
 import { useInvalidateWorkspaceSnapshot } from "@/lib/use-workspace-snapshot";
 import { cn } from "@/lib/utils";
 import type { Campaign } from "@/server/types";
+import { hasSharableReceipt, isActiveJobStatus } from "@/server/types";
+import { downloadHrefFor } from "@/lib/proof-links";
 
 interface ReviewSectionProps {
   campaign: Campaign;
   onChanged: () => Promise<void>;
 }
-
 /**
  * Review & deliver: real outputs with per-asset evidence, the proof bundle,
  * and the approve action. Approval stays gated server-side (needs succeeded
@@ -27,10 +28,17 @@ export function ReviewSection({ campaign, onChanged }: ReviewSectionProps) {
   const [approvedUal, setApprovedUal] = useState<string | null>(campaign.campaignUAL ?? null);
   const [republishing, setRepublishing] = useState(false);
   const [republishMsg, setRepublishMsg] = useState<string | null>(null);
+  const [retryingStorage, setRetryingStorage] = useState(false);
+  const [storageMsg, setStorageMsg] = useState<string | null>(null);
   const invalidateSnapshot = useInvalidateWorkspaceSnapshot();
 
-  const succeeded = campaign.jobs.filter((j) => j.status === "succeeded").length;
-  const active = campaign.jobs.some((j) => j.status === "queued" || j.status === "running");
+  const succeeded = campaign.jobs.filter((j) => j.status === "ready_to_share").length;
+  const active = campaign.jobs.some((j) => isActiveJobStatus(j.status));
+  const storagePending = campaign.jobs.filter((j) => j.status === "storage_pending");
+  // Only durable outputs unlock share/download/proof. Provider-hosted legacy
+  // outputs stay previewable until stored via the action below.
+  const sharable = campaign.receipts.some((r) => hasSharableReceipt(r));
+  const legacyHosted = campaign.receipts.filter((r) => !hasSharableReceipt(r));
   const pendingRecords = campaign.receipts.filter((r) => !r.ual);
   const outcome = campaignOutcome({
     status: campaign.status,
@@ -90,7 +98,8 @@ export function ReviewSection({ campaign, onChanged }: ReviewSectionProps) {
     setRepublishMsg(null);
     setError(null);
     try {
-      const j = await apiPost<{ republished: string[] }>(`/api/campaigns/${campaign.id}/republish`);
+      // Sequential ledger publishes can exceed the default 30s budget.
+      const j = await apiPost<{ republished: string[] }>(`/api/campaigns/${campaign.id}/republish`, {}, undefined, 120000);
       setRepublishMsg(
         j.republished.length > 0
           ? `${j.republished.length} record${j.republished.length === 1 ? "" : "s"} published to the proof ledger.`
@@ -102,6 +111,29 @@ export function ReviewSection({ campaign, onChanged }: ReviewSectionProps) {
       setError(e instanceof Error ? e.message : "Republish failed. The ledger may be offline — retry once it is back.");
     } finally {
       setRepublishing(false);
+    }
+  }
+
+  async function retryStorage() {
+    if (retryingStorage) return;
+    setRetryingStorage(true);
+    setStorageMsg(null);
+    setError(null);
+    try {
+      // Cloudinary imports run ~35s per asset — budget three minutes.
+      const j = await apiPost<{ finalized: number; legacyStored?: number; message: string }>(
+        `/api/campaigns/${campaign.id}/retry-storage`,
+        {},
+        undefined,
+        180000
+      );
+      setStorageMsg(j.message);
+      invalidateSnapshot();
+      await onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Storage retry failed — the provider result is intact; try again in a moment.");
+    } finally {
+      setRetryingStorage(false);
     }
   }
 
@@ -117,7 +149,7 @@ export function ReviewSection({ campaign, onChanged }: ReviewSectionProps) {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          {campaign.receipts.length > 0 && (
+          {sharable && (
             <Button asChild variant="outline" size="sm" className="rounded-full">
               <a href={`/api/campaigns/${campaign.id}/bundle`} download>
                 <Download className="h-3.5 w-3.5" /> Proof bundle
@@ -128,9 +160,9 @@ export function ReviewSection({ campaign, onChanged }: ReviewSectionProps) {
             <Button
               size="sm"
               onClick={() => void approve()}
-              disabled={busy || active || succeeded === 0}
+              disabled={busy || active || succeeded === 0 || !sharable}
               aria-busy={busy}
-              title={succeeded === 0 ? "Generate the pack first — there is nothing to approve yet" : active ? "Wait for production to finish before approving" : "Approve the pack — the campaign record publishes in the background"}
+              title={succeeded === 0 ? "Generate the pack first — there is nothing to approve yet" : active ? "Wait for production to finish before approving" : !sharable ? "Store outputs securely before approving — provider-hosted assets cannot be published as proof yet" : "Approve the pack — the campaign record publishes in the background"}
               className="rounded-full bg-emerald-700 font-medium text-emerald-50 hover:bg-emerald-600 dark:bg-emerald-500 dark:text-emerald-950 dark:hover:bg-emerald-400"
             >
               {busy ? "Approving…" : "Approve pack"}
@@ -178,6 +210,10 @@ export function ReviewSection({ campaign, onChanged }: ReviewSectionProps) {
               <div className="space-y-1 p-3">
                 <p className="text-[12.5px] font-medium leading-tight">{r.label}</p>
                 <p className="font-mono text-[9.5px] uppercase tracking-[0.1em] text-muted-foreground">{r.format} · {r.capability}</p>
+                <p className="text-[10.5px] text-muted-foreground" title={r.storageStatus === "stored" ? "Persisted to PermitFrame durable storage; the provider original stays on record" : "Provider-hosted legacy output — previewable, but not share-ready until stored securely"}>
+                  {r.storageStatus === "stored" ? "Stored in PermitFrame" : r.storageStatus === "failed" ? "Storage failed" : "Provider-hosted legacy asset"}
+                </p>
+                <span className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 pt-0.5">
                 {campaign.verificationRef ? (
                   <Link href={`/verify/${campaign.verificationRef}#output-${r.id}`} className="inline-flex items-center gap-1 text-[11px] font-medium text-sky-700 hover:underline dark:text-sky-300">
                     Verify <ArrowRight className="h-3 w-3" />
@@ -187,6 +223,22 @@ export function ReviewSection({ campaign, onChanged }: ReviewSectionProps) {
                     Verify after approval
                   </span>
                 )}
+                {(() => {
+                  const dl = downloadHrefFor(r.outputUrl, r.storageUrl);
+                  return (
+                    <a
+                      href={dl.href}
+                      target="_blank"
+                      rel="noreferrer"
+                      download={dl.attachment ? true : undefined}
+                      className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                      title={dl.attachment ? "Download the stored file" : "Open the original in a new tab to save it"}
+                    >
+                      <Download className="h-3 w-3" /> Download
+                    </a>
+                  );
+                })()}
+                </span>
               </div>
             </div>
           ))}
@@ -221,6 +273,50 @@ export function ReviewSection({ campaign, onChanged }: ReviewSectionProps) {
             {republishing ? "Publishing…" : `Publish ${pendingRecords.length} pending record${pendingRecords.length === 1 ? "" : "s"}`}
           </Button>
           {republishMsg && <p role="status" className="break-words text-[12px] text-muted-foreground">{republishMsg}</p>}
+        </div>
+      )}
+      {legacyHosted.length > 0 && (
+        <div
+          role="status"
+          className="mt-3 flex flex-wrap items-center gap-2 rounded-xl bg-sky-50 px-4 py-3 text-[12.5px] text-sky-800 ring-1 ring-sky-200 dark:bg-sky-950/40 dark:text-sky-200 dark:ring-sky-900"
+        >
+          <span className="min-w-0 flex-1 break-words">
+            Provider-hosted legacy asset{legacyHosted.length === 1 ? "" : "s"} — store securely before sharing or publishing proof.
+            Previews stay visible; share, download, and proof unlock once stored.
+          </span>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void retryStorage()}
+            disabled={retryingStorage}
+            aria-busy={retryingStorage}
+            className="shrink-0 rounded-full"
+          >
+            {retryingStorage ? "Storing…" : "Store securely"}
+          </Button>
+          {storageMsg && <span className="w-full break-words text-[12px]">{storageMsg}</span>}
+        </div>
+      )}
+      {storagePending.length > 0 && (
+        <div
+          role="status"
+          className="mt-3 flex flex-wrap items-center gap-2 rounded-xl bg-amber-50 px-4 py-3 text-[12.5px] text-amber-800 ring-1 ring-amber-200 dark:bg-amber-950/40 dark:text-amber-200 dark:ring-amber-900"
+        >
+          <span className="min-w-0 flex-1 break-words">
+            {storagePending.length} output{storagePending.length === 1 ? "" : "s"} generated — saving securely. {storagePending.length === 1 ? "It" : "They"} will
+            appear for review once stored; the provider result is safe meanwhile.
+          </span>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void retryStorage()}
+            disabled={retryingStorage}
+            aria-busy={retryingStorage}
+            className="shrink-0 rounded-full"
+          >
+            {retryingStorage ? "Retrying…" : "Retry storage"}
+          </Button>
+          {storageMsg && <span className="w-full break-words text-[12px]">{storageMsg}</span>}
         </div>
       )}
       {hasTechnicalRecords && (

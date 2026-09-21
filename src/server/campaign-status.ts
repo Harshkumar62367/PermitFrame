@@ -1,5 +1,6 @@
 import "server-only";
 import type { Campaign, CampaignStatus } from "./types";
+import { isActiveJobStatus } from "./types";
 import { newId, nowIso, updateDb } from "./store";
 
 export type ProductionStage = "briefed" | "policy-check" | "ready" | "generating" | "delivered";
@@ -41,7 +42,7 @@ export function effectiveCampaignStatus(
  * must never imply drag-and-drop state movement.
  */
 export function productionStage(campaign: Campaign): ProductionStage {
-  const active = campaign.jobs.some((j) => j.status === "queued" || j.status === "running");
+  const active = campaign.jobs.some((j) => isActiveJobStatus(j.status));
   if (active || campaign.status === "generating") return "generating";
   if (campaign.receipts.length > 0 || campaign.status === "approved" || campaign.status === "review") {
     return "delivered";

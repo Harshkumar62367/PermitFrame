@@ -42,7 +42,9 @@ export function CreativeStudio({ campaign, sourceMedia, passport, productFacts, 
     setRechecking(true);
     setRecheckError(null);
     try {
-      await apiPost(`/api/campaigns/${campaign.id}/repreflight`);
+      // Re-checks consult the live ledger (rights + facts reads) and can
+      // take well over the default 30s budget — allow two minutes.
+      await apiPost(`/api/campaigns/${campaign.id}/repreflight`, {}, undefined, 120000);
       invalidateSnapshot();
       await onChanged();
     } catch (e) {

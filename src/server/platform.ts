@@ -9,7 +9,7 @@ import type {
   SourceMedia,
   Transformation
 } from "./types";
-import { CAPABILITY_PRICE_MAP } from "./types";
+import { CAPABILITY_PRICE_MAP, hasSharableReceipt } from "./types";
 import { loadDb, newId, nowIso, sha256, updateDb } from "./store";
 import { preflightEvent } from "./campaign-status";
 import { getDkg } from "./dkg";
@@ -25,7 +25,6 @@ import { preflight } from "./policy/engine";
 async function campaigns(): Promise<Campaign[]> {
   return (await loadDb()).campaigns;
 }
-
 function normalize(c: Campaign): Campaign {
   return { ...c, comments: c.comments ?? [], captions: c.captions ?? [] };
 }
@@ -358,9 +357,9 @@ export function estimateCost(decision: PreflightDecision): number {
 }
 
 export function campaignCostRollup(campaign: Campaign): { spent: number; estimated: number; byStage: { label: string; usd: number }[] } {
-  const spent = campaign.jobs.filter((j) => j.status === "succeeded").reduce((sum, j) => sum + (j.costUsd ?? 0), 0);
+  const spent = campaign.jobs.filter((j) => j.status === "ready_to_share").reduce((sum, j) => sum + (j.costUsd ?? 0), 0);
   const byStage = campaign.jobs
-    .filter((j) => j.status === "succeeded")
+    .filter((j) => j.status === "ready_to_share")
     .map((j) => ({ label: j.stageId, usd: j.costUsd ?? 0 }));
   const estimated = campaign.preflight ? estimateCost(campaign.preflight) : 0;
   return { spent, estimated, byStage };
@@ -377,6 +376,9 @@ export async function createShareLink(campaignId: string): Promise<string> {
   if (!campaign) throw new Error("Campaign not found");
   const { throwIfArchived } = await import("./campaigns");
   throwIfArchived(campaign, "shared");
+  if (!campaign.receipts.some((r) => hasSharableReceipt(r))) {
+    throw new Error("Share links need a ready-to-share output — previews and unsaved outputs stay private until durable storage confirms them.");
+  }
   const token = newId("share");
   await updateDb((d) => {
     const c = d.campaigns.find((x) => x.id === campaignId);

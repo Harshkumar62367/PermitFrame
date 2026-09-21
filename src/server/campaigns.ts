@@ -1,4 +1,5 @@
 import type { Campaign, CampaignRequest, Platform, ProductionJob, PublicationStatus } from "./types";
+import { hasSharableReceipt } from "./types";
 import { loadDb, newId, nowIso, updateDb } from "./store";
 import { eq } from "drizzle-orm";
 import { getDb } from "./db/client";
@@ -311,16 +312,19 @@ export async function startProduction(
   if (wanted.length === 0) return { started: false, error: "No matching plan stages selected" };
 
   if (campaign.jobs.length > 0) {
-    // resume: keep succeeded stages, reset failed ones and queue any
-    // selected stages that have no job record yet (generate-remaining).
+    // resume: keep delivered stages, reset failed ones (and storage-retry
+    // stages being regenerated) and queue any selected stages that have no
+    // job record yet (generate-remaining).
+    const resetIds: string[] = [];
     await updateDb((d) => {
       const c = d.campaigns.find((x) => x.id === id);
       if (!c) return;
       for (const j of c.jobs) {
-        if (j.status === "failed" && wanted.includes(j.stageId)) {
+        if ((j.status === "failed" || j.status === "storage_retry_needed") && wanted.includes(j.stageId)) {
           if (capabilityOverride?.trim()) j.capability = capabilityOverride.trim();
           j.status = "queued";
           j.error = undefined;
+          resetIds.push(j.id);
         }
       }
       const covered = new Set(c.jobs.map((j) => j.stageId));
@@ -343,6 +347,13 @@ export async function startProduction(
       c.status = "generating";
       c.updatedAt = nowIso();
     });
+    // Regenerated outputs deserve a fresh storage budget: drop stale asset
+    // rows so the new generation persists under the same job id.
+    if (resetIds.length > 0) {
+      const { campaignAssets } = await import("./db/schema");
+      const { inArray } = await import("drizzle-orm");
+      await getDb().delete(campaignAssets).where(inArray(campaignAssets.jobId, resetIds)).catch(() => undefined);
+    }
   } else {
     const jobs = createJobRecords(campaign, wanted);
     await updateDb((d) => {
@@ -355,7 +366,9 @@ export async function startProduction(
     });
   }
   // background execution of exactly the selected stages; UI polls GET /api/campaigns/[id] for progress
-  void runProduction(id, wanted).catch(() => undefined);
+  // workspaceId is resolved here (request context) because the worker below outlives the response.
+  const { workspaceId } = await requireCurrentSession();
+  void runProduction(id, wanted, workspaceId).catch(() => undefined);
   await updateDb((d) => {
     d.events.push({
       id: newId("evt"),
@@ -395,11 +408,12 @@ export async function reviseStage(id: string, stageId: string, instructions: str
     const c = d.campaigns.find((x) => x.id === id);
     if (c) c.jobs.push(revised);
   });
-  void runSingleJob(id, revised.id).catch(() => undefined);
+  const { workspaceId } = await requireCurrentSession();
+  void runSingleJob(id, revised.id, workspaceId).catch(() => undefined);
   return { started: true };
 }
 
-async function runSingleJob(campaignId: string, jobId: string): Promise<void> {
+async function runSingleJob(campaignId: string, jobId: string, workspaceId?: string): Promise<void> {
   // Queue only the target job; the stage filter makes runProduction skip
   // everything else without touching it (no more marking queued stages
   // succeeded just to skip them).
@@ -411,7 +425,7 @@ async function runSingleJob(campaignId: string, jobId: string): Promise<void> {
     c.status = "generating";
   });
   const target = (await loadCampaign(campaignId))?.jobs.find((j) => j.id === jobId);
-  await runProduction(campaignId, target ? [target.stageId] : []);
+  await runProduction(campaignId, target ? [target.stageId] : [], workspaceId);
 }
 
 export async function approveCampaign(id: string): Promise<{ approved: boolean; ual?: string; publicationStatus?: PublicationStatus; verificationRef?: string; verificationWarning?: string; error?: string }> {
@@ -425,8 +439,13 @@ export async function approveCampaign(id: string): Promise<{ approved: boolean; 
   // Gate on the effective verdict, not the stored label: a stale "draft" row
   // whose preflight denies must never be approvable.
   if (effectiveCampaignStatus(campaign) === "blocked") return { approved: false, error: "Blocked campaigns cannot be approved" };
-  if (campaign.jobs.filter((j) => j.status === "succeeded").length === 0) {
-    return { approved: false, error: "Produce the campaign pack before approving — there is nothing to sign off yet" };
+  if (campaign.jobs.filter((j) => j.status === "ready_to_share").length === 0) {
+    return { approved: false, error: "Produce the campaign pack before approving — previews and unsaved outputs cannot be signed off yet" };
+  }
+  // Proof needs durable identity: provider-hosted legacy outputs must be
+  // stored securely first — approval publishes evidence, never previews.
+  if (!campaign.receipts.some((r) => hasSharableReceipt(r))) {
+    return { approved: false, error: "Store outputs securely before approving — provider-hosted legacy assets cannot be published as proof yet" };
   }
   await updateDb((d) => {
     const c = d.campaigns.find((x) => x.id === id);

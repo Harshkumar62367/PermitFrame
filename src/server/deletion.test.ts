@@ -120,7 +120,7 @@ describe("deletionEligibility", () => {
           kind: "text-to-image",
           capability: "flux-schnell",
           prompt: "p",
-          status: "succeeded",
+          status: "ready_to_share",
           outputUrl: "https://example.com/out.png",
           startedAt: "t"
         }
@@ -146,7 +146,7 @@ describe("deletionEligibility", () => {
   });
 
   it("blocks both operations while jobs are running", () => {
-    for (const status of ["queued", "running"] as const) {
+    for (const status of ["queued", "generating", "preview_ready", "storage_pending"] as const) {
       const c = draft({
         status: "generating",
         jobs: [
@@ -271,7 +271,7 @@ describe("forceDeleteEligibility (archived last resort)", () => {
           kind: "text-to-image",
           capability: "flux-schnell",
           prompt: "p",
-          status: "running",
+          status: "generating",
           startedAt: "t"
         }
       ]

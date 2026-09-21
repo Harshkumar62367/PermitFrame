@@ -29,11 +29,15 @@ type CapsState =
 export default function SettingsPage() {
   const [health, setHealth] = useState<{ dkg: DkgHealth & { state?: string }; livepeer: { endpoint: string; keyless: boolean; reachable?: boolean; detail?: string; state?: string } } | null>(null);
   const [caps, setCaps] = useState<CapsState>({ status: "idle" });
+  const [storage, setStorage] = useState<{ configured: boolean; reachable: boolean; detail: string } | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
     apiGet<{ dkg: DkgHealth & { state?: string }; livepeer: { endpoint: string; keyless: boolean; reachable?: boolean; detail?: string; state?: string } }>("/api/health", controller.signal)
       .then(setHealth)
+      .catch(() => undefined);
+    apiGet<{ configured: boolean; reachable: boolean; detail: string }>("/api/storage/health", controller.signal)
+      .then(setStorage)
       .catch(() => undefined);
     return () => controller.abort();
   }, []);
@@ -159,6 +163,24 @@ export default function SettingsPage() {
                   Retry check
                 </Button>
               </div>
+            )}
+          </SectionCard>
+          <SectionCard title="Durable storage">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="font-mono text-[11px] text-muted-foreground">provider</span>
+              <Badge variant="outline" className="rounded-full bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-950/40 dark:text-emerald-300 dark:ring-emerald-800">
+                {!storage ? "checking" : storage.configured ? "PermitFrame storage" : "not configured"}
+              </Badge>
+            </div>
+            <p className="mt-2 break-words text-[12.5px] leading-relaxed text-muted-foreground">
+              {!storage
+                ? "Loading storage status…"
+                : storage.detail}
+            </p>
+            {storage?.configured && !storage.reachable && (
+              <p className="mt-1.5 text-[12px] text-amber-700 dark:text-amber-300">
+                Completed outputs wait as storage-pending with provider results intact — no proof is published for undelivered assets.
+              </p>
             )}
           </SectionCard>
         </div>

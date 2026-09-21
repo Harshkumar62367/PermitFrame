@@ -177,3 +177,27 @@ export async function resolvePlanCapabilities(): Promise<{
     };
   }
 }
+
+/**
+ * Refuse dispatch for capabilities the live catalogue does not report as
+ * available. Throws an honest, retryable error naming the capability —
+ * the pipeline surfaces it on the job instead of spending against a
+ * missing model.
+ */
+export async function assertCapabilityAvailable(capability: string): Promise<void> {
+  let snapshot: CatalogueSnapshot;
+  try {
+    snapshot = await fetchCapabilityCatalogue();
+  } catch {
+    return; // discovery unreachable: let the render attempt speak for itself
+  }
+  if (!snapshot.reachable) return;
+  const available = new Set(
+    snapshot.capabilities.filter((c) => c.availability === "available").map((c) => c.name)
+  );
+  if (!available.has(capability)) {
+    throw new Error(
+      `Capability "${capability}" is not currently available on the Creative surface — retry once it returns to discovery, or pick a listed model.`
+    );
+  }
+}

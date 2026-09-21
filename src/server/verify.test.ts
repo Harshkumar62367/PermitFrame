@@ -84,7 +84,8 @@ const BANNED_KEYS = [
   "evidenceNotes",
   "note",
   "comment",
-  "prompt:"
+  "prompt:",
+  "outputHash"
 ];
 
 describe("buildPublicSnapshot", () => {
@@ -98,6 +99,7 @@ describe("buildPublicSnapshot", () => {
     assert.equal(s.status, "approved");
     assert.equal(s.outputs.length, 1);
     assert.equal(s.verifiedClaims.length, 1);
+    assert.equal(s.outputs[0].providerUrlFingerprint, "abc", "legacy URL fingerprints map to the honest key");
   });
 
   it("sets UAL/explorer only for genuinely anchored records", () => {

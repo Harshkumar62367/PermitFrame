@@ -57,6 +57,7 @@ export interface SnapshotCampaign {
   updatedAt: string;
   thumbnailUrl: string | null;
   generatedUrl: string | null;
+  generatedMediaType: "image" | "video" | null;
   receiptsCount: number;
   /** Campaign evidence record, when approval published one. Null until then. */
   campaignUAL: string | null;

@@ -89,7 +89,7 @@ export default function MediaLibraryPage() {
         <PageHeader
           eyebrow="Media library"
           title="Media library"
-          description="Source images and video, plus generated campaign assets. Only the reference and a checksum are stored — the files stay with the creator."
+          description="Source images and video, plus generated campaign assets. Only the reference and its fingerprint are stored — the files stay with the creator."
         />
       </FadeIn>
 
@@ -156,7 +156,7 @@ export default function MediaLibraryPage() {
               ? "Register is disabled until a public URL is pasted — placeholders don't count."
               : busy
                 ? "Registering — duplicate clicks are ignored and your input is preserved on failure."
-                : "Only the URL and its content hash enter the evidence layer."}
+                : "Only the URL and its reference fingerprint enter the evidence layer."}
           </p>
           {result && (
             <div
@@ -179,7 +179,7 @@ export default function MediaLibraryPage() {
       <section aria-label="Approved source media">
         <h2 className="mb-1 text-[15px] font-semibold tracking-tight">Approved source media</h2>
         <p className="mb-3 text-[12px] text-muted-foreground">
-          Registered inputs for generation — only the reference and a checksum are stored.
+          Registered inputs for generation — only the reference and its fingerprint are stored.
         </p>
       <Stagger className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {(media ?? []).map((m) => (
@@ -194,8 +194,8 @@ export default function MediaLibraryPage() {
               <div className="min-w-0 p-4">
                 <p className="text-[13.5px] font-medium leading-snug">{m.title}</p>
                 <CopyableIdentifier value={m.id} className="mt-1 max-w-full text-[10.5px]" />
-                <p className="mt-0.5 break-all font-mono text-[10px] text-muted-foreground" title={`checksum ${m.hash}`}>
-                  checksum {m.hash.slice(0, 24)}…
+                <p className="mt-0.5 break-all font-mono text-[10px] text-muted-foreground" title={`reference fingerprint ${m.hash}`}>
+                  fingerprint {m.hash.slice(0, 24)}…
                 </p>
               </div>
             </div>
@@ -248,8 +248,24 @@ function GeneratedOutputs({ campaigns }: { campaigns: SnapshotCampaign[] | null 
               className="group min-w-0 overflow-hidden rounded-2xl border border-border bg-card transition hover:border-emerald-600/30 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600"
             >
               {c.generatedUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={c.generatedUrl} alt={c.title} loading="lazy" className="aspect-video w-full object-cover" />
+                c.generatedMediaType === "video" ? (
+                  <span className="relative block aspect-video w-full bg-black">
+                    <video
+                      src={c.generatedUrl}
+                      muted
+                      playsInline
+                      preload="metadata"
+                      aria-label={`Generated video preview for ${c.title}`}
+                      className="h-full w-full object-cover"
+                    />
+                    <span className="absolute bottom-2 right-2 rounded-full bg-black/70 px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.1em] text-white">
+                      Video
+                    </span>
+                  </span>
+                ) : (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={c.generatedUrl} alt={c.title} loading="lazy" className="aspect-video w-full object-cover" />
+                )
               ) : (
                 <span className="grid aspect-video w-full place-items-center bg-muted font-mono text-[11px] text-muted-foreground">
                   video pack

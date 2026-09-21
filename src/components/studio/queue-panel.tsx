@@ -9,6 +9,7 @@ import { apiPost } from "@/lib/api";
 import { useInvalidateWorkspaceSnapshot } from "@/lib/use-workspace-snapshot";
 import { cn } from "@/lib/utils";
 import type { Campaign } from "@/server/types";
+import { isActiveJobStatus } from "@/server/types";
 import { formatUsd, plainActivity } from "./studio-model";
 
 interface QueuePanelProps {
@@ -19,8 +20,11 @@ interface QueuePanelProps {
 
 const STATUS_META: Record<string, { label: string; className: string }> = {
   queued: { label: "Queued", className: "bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-800" },
-  running: { label: "Running", className: "bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-800" },
-  succeeded: { label: "Done", className: "bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-950/40 dark:text-emerald-300 dark:ring-emerald-800" },
+  generating: { label: "Generating", className: "bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-800" },
+  preview_ready: { label: "Preview", className: "bg-sky-50 text-sky-700 ring-sky-600/20 dark:bg-sky-950/40 dark:text-sky-300 dark:ring-sky-800" },
+  storage_pending: { label: "Saving", className: "bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-800" },
+  storage_retry_needed: { label: "Retry needed", className: "bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-800" },
+  ready_to_share: { label: "Ready to share", className: "bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-950/40 dark:text-emerald-300 dark:ring-emerald-800" },
   failed: { label: "Failed", className: "bg-rose-50 text-rose-700 ring-rose-600/20 dark:bg-rose-950/40 dark:text-rose-300 dark:ring-rose-800" }
 };
 
@@ -38,7 +42,7 @@ export function QueuePanel({ campaign, allowed, onChanged }: QueuePanelProps) {
   const [detailsFor, setDetailsFor] = useState<string | null>(null);
   const invalidateSnapshot = useInvalidateWorkspaceSnapshot();
 
-  const done = campaign.jobs.filter((j) => j.status === "succeeded").length;
+  const done = campaign.jobs.filter((j) => j.status === "ready_to_share").length;
   const total = campaign.jobs.length;
   const failed = campaign.jobs.filter((j) => j.status === "failed");
 
@@ -101,9 +105,10 @@ export function QueuePanel({ campaign, allowed, onChanged }: QueuePanelProps) {
             return (
               <li key={job.id} className="rounded-xl bg-muted/50 p-3 ring-1 ring-border">
                 <div className="flex items-center gap-2">
-                  {job.status === "running" && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-amber-600" aria-hidden />}
+                  {job.status === "generating" && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-amber-600" aria-hidden />}
                   {job.status === "queued" && <CircleDashed className="h-3.5 w-3.5 shrink-0 text-amber-600" aria-hidden />}
-                  {job.status === "succeeded" && <Check className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" aria-hidden />}
+                  {job.status === "storage_pending" && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-amber-600" aria-hidden />}
+                  {job.status === "ready_to_share" && <Check className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" aria-hidden />}
                   {job.status === "failed" && <X className="h-3.5 w-3.5 shrink-0 text-rose-600 dark:text-rose-300" aria-hidden />}
                   <p className="min-w-0 flex-1 truncate text-[12.5px] font-medium">{stage?.label ?? job.stageId}</p>
                   <span className={cn("shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ring-1", meta.className)}>
@@ -114,12 +119,12 @@ export function QueuePanel({ campaign, allowed, onChanged }: QueuePanelProps) {
                   {job.capability}
                   {typeof job.costUsd === "number" && ` · ${formatUsd(job.costUsd)}`}
                 </p>
-                {(job.status === "queued" || job.status === "running") && (
+                {isActiveJobStatus(job.status) && (
                   <p className="mt-1 animate-pulse text-[12px] font-medium text-amber-700 dark:text-amber-300" role="status">
                     {plainActivity(job.stageId, stage?.label ?? job.stageId, job.status)}
                   </p>
                 )}
-                {job.outputUrl && job.status === "succeeded" && (
+                {job.outputUrl && (job.status === "ready_to_share" || job.status === "preview_ready" || job.status === "storage_pending" || job.status === "storage_retry_needed") && (
                   job.kind === "image-to-video" ? (
                     <video src={job.outputUrl} controls preload="metadata" className="mt-2 aspect-video w-full rounded-lg bg-black object-contain" />
                   ) : (
@@ -127,11 +132,19 @@ export function QueuePanel({ campaign, allowed, onChanged }: QueuePanelProps) {
                     <img src={job.outputUrl} alt={stage?.label ?? "generated output"} loading="lazy" className="mt-2 aspect-video w-full rounded-lg object-cover ring-1 ring-border" />
                   )
                 )}
+                {(job.status === "preview_ready" || job.status === "storage_pending") && (
+                  <p className="mt-1.5 text-[11px] text-muted-foreground">Preview — saving securely. Not share-ready yet.</p>
+                )}
+                {job.status === "storage_retry_needed" && (
+                  <p className="mt-1.5 text-[11px] text-amber-700 dark:text-amber-300">
+                    Preview kept — secure storage needs a retry. Use “Retry secure storage” in Review &amp; deliver.
+                  </p>
+                )}
                 {job.error && (
                   <p className="mt-1.5 break-words text-[11.5px] text-rose-600 dark:text-rose-300">{job.error}</p>
                 )}
                 {job.humanSummary && (
-                  <p className="mt-1 text-[11.5px] italic text-muted-foreground">{job.humanSummary}</p>
+                  <p className="mt-1 break-words text-[11.5px] italic text-muted-foreground">{job.humanSummary}</p>
                 )}
                 <button
                   type="button"
@@ -176,7 +189,7 @@ export function QueuePanel({ campaign, allowed, onChanged }: QueuePanelProps) {
                     )}
                   </dl>
                 )}
-                {job.status === "succeeded" && (
+                {job.status === "ready_to_share" && (
                   <div className="mt-2">
                     {refining ? (
                       <div className="space-y-1.5">

@@ -52,7 +52,8 @@ export interface SourceMedia {
   title: string;
   type: "video" | "image";
   url: string;
-  hash: string; // sha256 of reference bytes/URL at registration
+  /** Fingerprint of the reference URL string (registry correlation only — not a byte hash of the media). */
+  hash: string;
   ual?: string;
 }
 
@@ -84,6 +85,46 @@ export interface CampaignRequest {
 }
 
 export type CampaignStatus = "draft" | "blocked" | "generating" | "review" | "approved" | "archived";
+
+export type JobStatus = ProductionJob["status"];
+
+/**
+ * A job is active while queued, rendering, previewed, or awaiting durable
+ * storage. `storage_retry_needed` is settled (explicit user retry only) and
+ * `ready_to_share` / `failed` are terminal. Single helper so polling,
+ * badges, metrics, and deletion guards agree.
+ */
+export function isActiveJobStatus(status: JobStatus): boolean {
+  return status === "queued" || status === "generating" || status === "preview_ready" || status === "storage_pending";
+}
+
+/** Delivered: durable (or grandfathered legacy) and clear for share/proof. */
+export function isDeliveredJobStatus(status: JobStatus): boolean {
+  return status === "ready_to_share";
+}
+
+/**
+ * One-time data migration for pre-lifecycle rows: `running` → `generating`,
+ * `succeeded` → `ready_to_share` (legacy outputs were provider-hosted and
+ * keep their powers, labeled honestly), `storage_pending` unchanged.
+ * Throws on unknown values so the migrator reports instead of guessing.
+ */
+export function migrateJobStatus(status: string): JobStatus {
+  if (status === "running") return "generating";
+  if (status === "succeeded") return "ready_to_share";
+  const valid: JobStatus[] = ["queued", "generating", "preview_ready", "storage_pending", "storage_retry_needed", "ready_to_share", "failed"];
+  if ((valid as string[]).includes(status)) return status as JobStatus;
+  throw new Error(`Unknown job status "${status}" — manual review required.`);
+}
+
+/**
+ * Share/proof gate: only confirmed durable receipts. Legacy provider-hosted
+ * outputs (no Cloudinary identity) stay previewable and readable, but locked
+ * out of sharing, final delivery, and proof publication until stored.
+ */
+export function hasSharableReceipt(receipt: Pick<DerivativeReceipt, "storageStatus">): boolean {
+  return receipt.storageStatus === "stored";
+}
 
 export interface PreflightBlocker {
   code:
@@ -131,9 +172,18 @@ export interface ProductionJob {
     durationSeconds?: number;
     sourceKind?: "source-media" | "prior-output";
   };
-  status: "queued" | "running" | "succeeded" | "failed";
+  status: "queued" | "generating" | "preview_ready" | "storage_pending" | "storage_retry_needed" | "ready_to_share" | "failed";
   error?: string;
   outputUrl?: string;
+  /** Provider output URL (Livepeer) — kept as provenance even after durable storage. */
+  providerOutputUrl?: string;
+  /**
+   * Fingerprint of the provider URL string (correlation/debugging only).
+   * NOT a content hash: no bytes are hashed, so it proves nothing about the
+   * media itself. Never publish or display as content evidence.
+   */
+  providerUrlFingerprint?: string;
+  /** @deprecated Retained for reading pre-fingerprint rows; same URL fingerprint as above. */
   outputHash?: string;
   livepeerJobId?: string;
   costUsd?: number;
@@ -150,7 +200,15 @@ export interface DerivativeReceipt {
   mediaType: "image" | "video";
   format: string;
   outputUrl: string;
-  outputHash: string;
+  /**
+   * Fingerprint of the provider URL string (correlation/debugging only).
+   * NOT a content hash: no bytes are hashed, so it proves nothing about the
+   * media itself. Never publish or display as content evidence. Durable
+   * proof references are the Cloudinary identity below plus job provenance.
+   */
+  providerUrlFingerprint?: string;
+  /** @deprecated No longer written; retained for reading pre-fingerprint rows (same URL fingerprint). */
+  outputHash?: string;
   capability: string;
   promptHash: string;
   claimsUsed: string[];
@@ -166,6 +224,16 @@ export interface DerivativeReceipt {
   ualExplorer?: string;
   /** Explicit state from the real publish result. Missing on legacy rows (non-public). */
   publicationStatus?: PublicationStatus;
+  /**
+   * Durable storage overlay (Cloudinary). Missing on legacy rows, which
+   * render provider-hosted. `outputUrl` stays the canonical delivery URL
+   * (durable once stored); provider provenance lives on the job record and
+   * the asset row, never silently discarded.
+   */
+  storageProvider?: "cloudinary";
+  storagePublicId?: string;
+  storageUrl?: string;
+  storageStatus?: "pending" | "stored" | "failed";
 }
 
 /**
@@ -182,7 +250,11 @@ export interface PublicVerificationOutput {
   mediaType: "image" | "video";
   format: string;
   outputUrl: string;
-  outputHash: string;
+  /**
+   * Provider-URL fingerprint for correlation only — never content evidence.
+   * Falls back to legacy rows' URL fingerprint of the same meaning.
+   */
+  providerUrlFingerprint?: string;
   capability: string;
   promptHash: string;
   claimsUsed: string[];

@@ -18,7 +18,7 @@ An agency creative producer or brand marketing manager needs AI campaign assets 
 
 ## Why Livepeer Agent is essential
 
-Generation is not a mock: the studio dispatches exact capabilities (`flux-schnell` text-to-image, `seedance-mini-i2v` image-to-video, chosen from **live MCP discovery**, never a hardcoded claim) through the Livepeer Agent raw surface. The orchestrator runs only producer-selected stages, chains stage outputs, records the real capability served (including network-recommended auto-recovery), per-stage cost in USD, job ids, and output URLs. A failed provider call surfaces honestly with retry — outputs, receipts, and verification links only ever reference real results.
+Generation is not a mock: the studio dispatches exact capabilities (`flux-schnell` text-to-image, `seedance-mini-i2v` image-to-video, chosen from **live MCP discovery**, never a hardcoded claim) through the Livepeer Agent Creative surface (`create_media` with deliberate `generate`/`animate` actions, per-call `max_cost_usd` ceilings, and live pricing where exactly mappable). The orchestrator runs only producer-selected stages, chains stage outputs, records the real capability served (including network-recommended auto-recovery), per-stage cost in USD, job ids, and output URLs. A failed provider call surfaces honestly with retry — outputs, receipts, and verification links only ever reference real results.
 
 ## How OriginTrail DKG materially changes behaviour
 
@@ -39,7 +39,7 @@ npm install
 npm run dev          # http://localhost:3000
 ```
 
-`.env.local` requires: `DATABASE_URL`, `NEXT_PUBLIC_PRIVY_APP_ID`, `PRIVY_APP_SECRET` for login; `DKG_MODE=edge`, `DKG_CLI_BIN=dkg`, `DKG_API_PORT=9200`, `DKG_CONTEXT_GRAPH_ID=<agent-address>/permitframe` for the real DKG path (`local` mode keeps identical schemas offline); `LIVEPEER_MCP_URL` defaults to the hosted agent, optional `LIVEPEER_MCP_BEARER` for the API-key path. DKG capabilities can be pinned via `LIVEPEER_IMAGE_CAPABILITY` / `LIVEPEER_VIDEO_CAPABILITY`.
+`.env.local` requires: `DATABASE_URL`, `NEXT_PUBLIC_PRIVY_APP_ID`, `PRIVY_APP_SECRET` for login; `DKG_MODE=edge`, `DKG_CLI_BIN=dkg`, `DKG_API_PORT=9200`, `DKG_CONTEXT_GRAPH_ID=<agent-address>/permitframe` for the real DKG path (`local` mode keeps identical schemas offline); `LIVEPEER_MCP_URL` defaults to the Creative hackathon endpoint (`https://agent.livepeer.org/api/mcp/creative`), optional `LIVEPEER_MCP_BEARER` for the API-key path. DKG capabilities can be pinned via `LIVEPEER_IMAGE_CAPABILITY` / `LIVEPEER_VIDEO_CAPABILITY`.
 
 Edge Node: `npm i -g @origintrail-official/dkg`, `dkg init --role edge --network testnet`, then keep `dkg start` running. Check with `dkg status`, `dkg wallet`, `dkg publisher job <id>`; app health at `/api/health` (signed in) and discovery at `/api/livepeer`.
 
@@ -55,8 +55,8 @@ In-product example fillers are labeled **Guided scenario**. Health: `node --env-
 ## Known limitations
 
 - The DKG Edge Node daemon must be running; when it is down, preflight, publishing, and verification fail explicitly with retries — nothing is faked.
-- Anonymous (logged-out) `/verify/*` and `/share/*` requests currently fail because verification reads are session-scoped; public client review links require the viewer to be signed in.
-- Keyless Livepeer access depends on hosted quota; set `LIVEPEER_MCP_BEARER` for the key path.
+- Anonymous (logged-out) `/share/*` client review links require the viewer to be signed in; `/verify/*` proof pages are fully public (signed-out safe, allowlisted fields only).
+- Creative MCP credit/quota is per-hacker and server-reported: the studio shows live prices where exactly mappable, "live pricing unavailable" otherwise, and every render carries a `max_cost_usd` ceiling. Actual returned costs only — no hardcoded balances.
 - On-chain finalization needs a funded node wallet and takes minutes; statuses stay at “Campaign record saved” until it genuinely finalizes.
 
 Built for **Track 2 (Livepeer Agent + OriginTrail DKG)** of the Atumera Livepeer Agent Hackathon.
