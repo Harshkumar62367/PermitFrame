@@ -6,7 +6,7 @@ import type { Campaign } from "./types";
 /**
  * Public client-review reads and writes. Session-free by design: share links
  * must work logged out, so this module NEVER touches cookies, sessions, or
- * session-scoped workspace reads. The share token is the sole capability —
+ * session-scoped workspace reads. The share token is the sole capability -
  * it must be valid and opaque, and every response is built from an explicit
  * whitelist (PublicShareView). Internal data (workspace ids, source URLs,
  * prompts, notes, contracts, costs, credentials) cannot leak because it is
@@ -49,7 +49,7 @@ export type ShareLookup = { found: false } | { found: true; view: PublicShareVie
 
 export class ShareNotFoundError extends Error {
   constructor() {
-    super("Share link not found. It may have been removed — ask the campaign owner for a fresh link.");
+    super("Share link not found. It may have been removed - ask the campaign owner for a fresh link.");
     this.name = "ShareNotFoundError";
   }
 }
@@ -74,6 +74,10 @@ function toPublicView(campaign: Campaign): PublicShareView {
       mediaType: r.mediaType,
       format: r.format,
       outputUrl: r.outputUrl,
+      ...(r.actualWidth !== undefined && r.actualHeight !== undefined
+        ? { actualWidth: r.actualWidth, actualHeight: r.actualHeight }
+        : {}),
+      ...(r.aspectVerdict ? { aspectVerdict: r.aspectVerdict } : {}),
       claimsUsed: r.claimsUsed,
       verifyUrl: verificationRef ? `/verify/${verificationRef}#output-${r.id}` : null
     })),
@@ -83,7 +87,7 @@ function toPublicView(campaign: Campaign): PublicShareView {
 
 /**
  * Anonymous share lookup: scans workspace states for the token without any
- * session. Malformed (non-opaque) tokens miss immediately — legacy or guessed
+ * session. Malformed (non-opaque) tokens miss immediately - legacy or guessed
  * identifiers can never resolve to workspace data.
  */
 export async function lookupShare(token: string): Promise<ShareLookup> {
@@ -120,7 +124,7 @@ export async function appendShareReview(token: string, input: ShareReviewInput):
   // Archived records stay readable (the link promise) but read-only: reviews
   // on history would silently mutate what archiving froze.
   if (campaign.status === "archived") {
-    throw new Error("This campaign is archived — reviews are closed, but the record stays readable.");
+    throw new Error("This campaign is archived - reviews are closed, but the record stays readable.");
   }
   const entry = {
     id: `cmt_${crypto.randomBytes(6).toString("hex")}`,

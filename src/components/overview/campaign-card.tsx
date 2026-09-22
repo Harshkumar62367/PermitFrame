@@ -8,7 +8,7 @@ import { PolicyResultLine } from "./policy-decision-summary";
 import { campaignOutcome, OutcomeBadge } from "@/components/campaign-outcome";
 import { usePrefetchCampaignDetail } from "@/lib/use-campaign";
 import type { SnapshotCampaign } from "@/lib/use-workspace-snapshot";
-import { cn } from "@/lib/utils";
+import { cn, displayText } from "@/lib/utils";
 
 const STAGE_LABEL: Record<SnapshotCampaign["stage"], string> = {
   briefed: "Briefed",
@@ -59,7 +59,7 @@ export function CampaignCard({ campaign }: { campaign: SnapshotCampaign }) {
           : "hover:border-emerald-600/30 hover:shadow-[0_12px_40px_-16px_rgba(16,185,129,0.2)]"
       )}
     >
-      <CampaignThumbnail src={campaign.thumbnailUrl} title={campaign.title} brand={campaign.brand} />
+      <CampaignThumbnail src={campaign.thumbnailUrl} title={displayText(campaign.title)} brand={campaign.brand} />
       <span className="flex flex-1 flex-col p-5">
         <span className="flex flex-wrap items-center gap-2">
           <OutcomeBadge outcome={outcome} />
@@ -70,7 +70,7 @@ export function CampaignCard({ campaign }: { campaign: SnapshotCampaign }) {
             {campaign.platform} · {campaign.country}
           </span>
         </span>
-        <span className="mt-3 block text-[15px] font-semibold leading-snug tracking-tight">{campaign.title}</span>
+        <span className="mt-3 block text-[15px] font-semibold leading-snug tracking-tight">{displayText(campaign.title)}</span>
         <span className="mt-0.5 block text-[12px] text-muted-foreground">
           {campaign.brand} · {campaign.creatorName}
         </span>

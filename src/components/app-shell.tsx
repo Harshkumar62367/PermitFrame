@@ -30,7 +30,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       if (window.localStorage.getItem(COLLAPSE_KEY) === "1") setCollapsed(true);
     } catch {
-      // private mode etc. — expanded sidebar is the safe default
+      // private mode etc. - expanded sidebar is the safe default
     }
   }, []);
 

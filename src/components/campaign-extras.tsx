@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { FadeIn } from "@/components/motion-primitives";
 import { apiGet, apiPost } from "@/lib/api";
+import { useLongAction } from "@/lib/use-long-action";
 import { useInvalidateWorkspaceSnapshot } from "@/lib/use-workspace-snapshot";
 import { CAPABILITY_PRICE_MAP, hasSharableReceipt, type Campaign } from "@/server/types";
 import { cn } from "@/lib/utils";
@@ -25,7 +26,7 @@ interface Caption {
   disclosure: string;
 }
 
-/** Plain-language event kinds for the audit timeline — never raw internals. */
+/** Plain-language event kinds for the audit timeline - never raw internals. */
 function plainEventKind(kind: string): string {
   if (kind === "comment") return "note";
   if (kind.startsWith("preflight.")) return "permission check";
@@ -44,6 +45,19 @@ export function CampaignExtras({ campaign, hideVariants = false }: { campaign: C
   const [captionMsg, setCaptionMsg] = useState<string | null>(null);
   const [shareUrl, setShareUrl] = useState<string | null>(campaign.shareToken ? `/share/${campaign.shareToken}` : null);
   const [shareError, setShareError] = useState<string | null>(null);
+  // A share link is a database-only write - no proof wording, ever. It is
+  // normally quick, but a cold database connection can be slow; communicate
+  // that before the browser's timeout instead of making a successful write
+  // look like a failed action. Stays at 90s, not the 120s ledger policy.
+  const shareAction = useLongAction(
+    {
+      working: "Creating a private review link. This normally takes a few seconds - please wait before retrying.",
+      slow: "Still creating your private review link. Please keep this page open - it can take up to about a minute on a cold database connection.",
+      timedOut:
+        "Creating the client link is taking longer than expected. Refresh this page once before retrying - the link may already have been created."
+    },
+    { timeoutMs: 90_000 }
+  );
   const [timeline, setTimeline] = useState<TimelineEntry[] | null>(null);
   const [timelineError, setTimelineError] = useState<string | null>(null);
   const [timelineOpen, setTimelineOpen] = useState(false);
@@ -56,7 +70,7 @@ export function CampaignExtras({ campaign, hideVariants = false }: { campaign: C
   const [variantMsg, setVariantMsg] = useState<string | null>(null);
   // Which platform button is mid-creation. Buttons share the `busy` lock so
   // two variants can never be created concurrently, but only the clicked one
-  // reads "Creating…" — the others keep their labels.
+  // reads "Creating…" - the others keep their labels.
   const [pendingVariant, setPendingVariant] = useState<string | null>(null);
   const invalidateSnapshot = useInvalidateWorkspaceSnapshot();
 
@@ -69,7 +83,7 @@ export function CampaignExtras({ campaign, hideVariants = false }: { campaign: C
       .catch((e) => setTimelineError(e instanceof Error ? e.message : "Timeline failed to load."));
   }, [campaign.id]);
 
-  // The timeline is collapsed by default and fetched only on first expand —
+  // The timeline is collapsed by default and fetched only on first expand -
   // long audit lists stay out of the way (and off the network) until needed.
   // Posting a note refreshes the data directly, whether open or not.
   useEffect(() => {
@@ -100,19 +114,27 @@ export function CampaignExtras({ campaign, hideVariants = false }: { campaign: C
   }
 
   async function createShare() {
-    if (busy) return;
+    if (busy || shareAction.busy) return;
     setBusy("share");
     setShareError(null);
-    try {
-      const j = await apiPost<{ token: string; url: string }>(`/api/campaigns/${campaign.id}/share`);
-      setShareUrl(j.url);
-      setCopied(false);
-      setCopyFailed(false);
-    } catch (e) {
-      setShareError(e instanceof Error ? e.message : "Share link creation failed.");
-    } finally {
-      setBusy(null);
+    const result = await shareAction.execute(() =>
+      apiPost<{ token: string; url: string }>(
+        `/api/campaigns/${campaign.id}/share`,
+        undefined,
+        undefined,
+        shareAction.timeoutMs
+      )
+    );
+    setBusy(null);
+    if (!result.ok || !result.value) {
+      // Refresh-first: the link may already exist server-side.
+      setShareError(result.message ?? "Share link creation failed.");
+      return;
     }
+    const j = result.value;
+    setShareUrl(j.url);
+    setCopied(false);
+    setCopyFailed(false);
   }
 
   async function copyShare() {
@@ -153,7 +175,7 @@ export function CampaignExtras({ campaign, hideVariants = false }: { campaign: C
     setVariants(null);
     try {
       // Variant creation runs a full permission check (DKG reads), which can
-      // take well over the default 30s budget — allow two minutes and say
+      // take well over the default 30s budget - allow two minutes and say
       // so honestly on timeout instead of blaming the network.
       const j = await apiPost<{ campaigns: { id: string; title: string }[] }>(
         `/api/campaigns/${campaign.id}/variants`,
@@ -165,8 +187,8 @@ export function CampaignExtras({ campaign, hideVariants = false }: { campaign: C
       if (j.campaigns.length > 0) invalidateSnapshot();
       setVariantMsg(
         j.campaigns.length > 0
-          ? `${j.campaigns.length} variant(s) created — each independently permission-checked.`
-          : "No variants created — that platform matches this campaign."
+          ? `${j.campaigns.length} variant(s) created - each independently permission-checked.`
+          : "No variants created - that platform matches this campaign."
       );
     } catch (e) {
       setVariantMsg(e instanceof Error ? e.message : "Variant creation failed.");
@@ -231,11 +253,16 @@ export function CampaignExtras({ campaign, hideVariants = false }: { campaign: C
                   onClick={createShare}
                   disabled={busy !== null || !campaign.receipts.some((r) => hasSharableReceipt(r))}
                   aria-busy={busy === "share"}
-                  title={campaign.receipts.length === 0 ? "Produce the pack first — a share link needs outputs to review" : "Share links unlock once an output is ready-to-share — previews stay private"}
+                  title={campaign.receipts.length === 0 ? "Produce the pack first - a share link needs outputs to review" : "Share links unlock once an output is ready-to-share - previews stay private"}
                   className="rounded-full"
                 >
                   <Link2 className="h-3.5 w-3.5" aria-hidden /> {busy === "share" ? "Creating…" : "Create client share link"}
                 </Button>
+                {busy === "share" && shareAction.status && (
+                  <p role="status" className="basis-full text-[12px] text-muted-foreground">
+                    {shareAction.status}
+                  </p>
+                )}
                 {shareError && <p role="alert" className="break-words text-[12px] text-rose-600 dark:text-rose-300">{shareError}</p>}
               </div>
             ) : (
@@ -248,31 +275,31 @@ export function CampaignExtras({ campaign, hideVariants = false }: { campaign: C
                   size="sm"
                   className="h-7 rounded-full px-2.5"
                   onClick={copyShare}
-                  aria-label={copyFailed ? "Copy failed — select the link manually" : "Copy client share link"}
+                  aria-label={copyFailed ? "Copy failed - select the link manually" : "Copy client share link"}
                 >
                   <Copy className="h-3.5 w-3.5" aria-hidden /> {copied ? "Copied" : "Copy"}
                 </Button>
                 {copyFailed && (
                   <p role="alert" className="text-[12px] text-amber-600 dark:text-amber-300">
-                    Clipboard blocked — long-press the link to copy it manually.
+                    Clipboard blocked - long-press the link to copy it manually.
                   </p>
                 )}
               </>
             )}
-            {campaign.receipts.length === 0 && <p className="text-[12px] text-muted-foreground">Produce the pack first — a share link needs outputs to review.</p>}
+            {campaign.receipts.length === 0 && <p className="text-[12px] text-muted-foreground">Produce the pack first - a share link needs outputs to review.</p>}
             {campaign.receipts.length > 0 && !campaign.receipts.some((r) => hasSharableReceipt(r)) && (
-              <p className="text-[12px] text-muted-foreground">Outputs are still preview-only — the share link unlocks once durable storage confirms one.</p>
+              <p className="text-[12px] text-muted-foreground">Outputs are still preview-only - the share link unlocks once durable storage confirms one.</p>
             )}
           </div>
         </section>
       </FadeIn>
 
-      {/* Variants — hidden when the Creative Studio owns the asset-pack workflow. */}
+      {/* Variants - hidden when the Creative Studio owns the asset-pack workflow. */}
       {!hideVariants && (
       <FadeIn>
         <section className="rounded-2xl border border-dashed border-border bg-card p-6">
           <p className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
-            <Zap className="h-3.5 w-3.5" /> Platform variants — clone this brief, permission-check each independently
+            <Zap className="h-3.5 w-3.5" /> Platform variants - clone this brief, permission-check each independently
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
             {otherPlatforms.map((p) => (
@@ -283,7 +310,7 @@ export function CampaignExtras({ campaign, hideVariants = false }: { campaign: C
                 onClick={() => createVariants([p])}
                 disabled={busy !== null}
                 aria-busy={pendingVariant === p}
-                title={pendingVariant === p ? `Creating the ${p} variant — permission check runs first` : `Clone this brief for ${p}`}
+                title={pendingVariant === p ? `Creating the ${p} variant - permission check runs first` : `Clone this brief for ${p}`}
                 className="rounded-full capitalize"
               >
                 {pendingVariant === p ? "Creating…" : `+ ${p} variant`}
@@ -306,7 +333,7 @@ export function CampaignExtras({ campaign, hideVariants = false }: { campaign: C
       </FadeIn>
       )}
 
-      {/* Comments + timeline — collapsed until needed */}
+      {/* Comments + timeline - collapsed until needed */}
       <FadeIn>
         <section className="rounded-2xl border border-border bg-card p-6">
           <button

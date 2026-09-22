@@ -8,10 +8,11 @@ import { EvidenceSummary } from "./evidence-summary";
 import { campaignOutcome, OutcomeBadge } from "@/components/campaign-outcome";
 import { apiPost } from "@/lib/api";
 import { useInvalidateWorkspaceSnapshot, type SnapshotCampaign } from "@/lib/use-workspace-snapshot";
+import { displayText } from "@/lib/utils";
 
 /**
  * The positive workflow: a cleared campaign with its verified checks and the
- * next production action. Generates through the real produce endpoint —
+ * next production action. Generates through the real produce endpoint -
  * when outputs already exist it shows the generated media instead.
  */
 export function ReadyToProducePanel({ campaign }: { campaign: SnapshotCampaign }) {
@@ -44,13 +45,13 @@ export function ReadyToProducePanel({ campaign }: { campaign: SnapshotCampaign }
       ok: platformPermitted,
       text: platformPermitted
         ? `${campaign.platform} permitted by ${rights?.passportId}`
-        : `${campaign.platform} — permission unclear, review rights`
+        : `${campaign.platform} - permission unclear, review rights`
     },
     {
       ok: territoryCovered,
       text: territoryCovered
         ? `${campaign.country} covered${rights?.validUntil ? ` until ${rights.validUntil}` : ""}`
-        : `${campaign.country} — territory unclear, review rights`
+        : `${campaign.country} - territory unclear, review rights`
     },
     ...campaign.preflight.allowedClaims.map((claim) => ({
       ok: true,
@@ -75,7 +76,7 @@ export function ReadyToProducePanel({ campaign }: { campaign: SnapshotCampaign }
 
       <CampaignThumbnail
         src={hasOutputs && campaign.generatedUrl ? campaign.generatedUrl : campaign.thumbnailUrl}
-        title={campaign.title}
+        title={displayText(campaign.title)}
         brand={campaign.brand}
       />
 
@@ -95,7 +96,7 @@ export function ReadyToProducePanel({ campaign }: { campaign: SnapshotCampaign }
           </span>
         </div>
         <h3 id={`ready-${campaign.id}`} className="mt-2.5 text-[17px] font-semibold leading-snug tracking-tight">
-          {campaign.title}
+          {displayText(campaign.title)}
         </h3>
         <p className="mt-0.5 text-[12.5px] text-muted-foreground">
           {campaign.brand} · {campaign.creatorName}

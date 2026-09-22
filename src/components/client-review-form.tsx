@@ -21,7 +21,7 @@ export function ClientReviewForm({ token }: { token: string }) {
   async function submit() {
     if (!decision || busy) return;
     if (decision === "changes_requested" && !comment.trim()) {
-      setSubmitError("Describe what should change — the agency needs your notes to revise.");
+      setSubmitError("Describe what should change - the agency needs your notes to revise.");
       return;
     }
     setSubmitError(null);
@@ -41,7 +41,7 @@ export function ClientReviewForm({ token }: { token: string }) {
     return (
       <div role="status" className="rounded-2xl bg-emerald-50 p-5 text-center ring-1 ring-emerald-200 dark:bg-emerald-950/40 dark:ring-emerald-900">
         <p className="text-[14px] font-semibold text-emerald-800 dark:text-emerald-300">
-          {done === "approved" ? "Approved — the agency has been notified." : "Changes requested — the agency will revise."}
+          {done === "approved" ? "Approved - the agency has been notified." : "Changes requested - the agency will revise."}
         </p>
       </div>
     );

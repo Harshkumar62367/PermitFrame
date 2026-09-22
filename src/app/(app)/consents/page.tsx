@@ -16,6 +16,8 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
 import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
 import { apiPost } from "@/lib/api";
+import { COUNTRIES } from "@/lib/countries";
+import { useLongAction } from "@/lib/use-long-action";
 import { useInvalidateDkgGraph } from "@/lib/use-dkg-graph";
 import { useInvalidateWorkspaceSnapshot, useWorkspaceSnapshot } from "@/lib/use-workspace-snapshot";
 import { cn } from "@/lib/utils";
@@ -46,7 +48,7 @@ interface Warning {
 export default function ConsentsPage() {
   const uid = useId();
   // Invitations, passport summaries, and expiry warnings all read from the
-  // shared ["workspace-snapshot"] cache — no separate /api/consents or
+  // shared ["workspace-snapshot"] cache - no separate /api/consents or
   // /api/expiry reads on mount. Cached rows render instantly and stay visible
   // during background refetches; an inline skeleton shows only when no cached
   // snapshot exists at all.
@@ -68,7 +70,24 @@ export default function ConsentsPage() {
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [inviteLink, setInviteLink] = useState<string | null>(null);
   const [inviteCopied, setInviteCopied] = useState(false);
-  const [inviteForm, setInviteForm] = useState({ name: "", handle: "", platforms: ["instagram"] as string[], countries: "", validUntil: "" });
+  const [inviteForm, setInviteForm] = useState({ name: "", handle: "", platforms: ["instagram"] as string[], countries: [] as string[], validUntil: "" });
+  // Revocation and renewal both await ledger writes (amendment / republished
+  // passport) plus permission re-evaluation, so they can legitimately
+  // outlast the default 30s browser budget - 120s with slow status and
+  // refresh-first recovery. The invite itself is database-only and keeps the
+  // normal timeout with no proof wording.
+  const revokeAction = useLongAction({
+    working: "Revoking permission…",
+    slow: "Still revoking and recording the change. Please keep this page open - proof services can take a little longer.",
+    timedOut:
+      "Revoking is taking longer than expected. Refresh this page once before retrying - the revocation may already have completed."
+  });
+  const renewAction = useLongAction({
+    working: "Renewing permission…",
+    slow: "Still renewing and recording the change. Please keep this page open - proof services can take a little longer.",
+    timedOut:
+      "Renewal is taking longer than expected. Refresh this page once before retrying - the renewal may already have completed."
+  });
   const invalidateSnapshot = useInvalidateWorkspaceSnapshot();
   const invalidateDkgGraph = useInvalidateDkgGraph();
 
@@ -85,8 +104,20 @@ export default function ConsentsPage() {
     setInviteError(null);
   }
 
+  function toggleInviteCountry(code: string) {
+    setInviteForm((f) => ({
+      ...f,
+      countries: f.countries.includes(code) ? f.countries.filter((x) => x !== code) : [...f.countries, code]
+    }));
+    setInviteError(null);
+  }
+
   async function createInvite() {
     if (inviteBusy) return;
+    if (inviteForm.countries.length === 0) {
+      setInviteError("Choose at least one territory for this permission.");
+      return;
+    }
     setInviteBusy(true);
     setInviteError(null);
     setInviteLink(null);
@@ -100,7 +131,7 @@ export default function ConsentsPage() {
         validUntil: inviteForm.validUntil
       });
       setInviteLink(j.url);
-      setInviteForm({ name: "", handle: "", platforms: ["instagram"], countries: "", validUntil: "" });
+      setInviteForm({ name: "", handle: "", platforms: ["instagram"], countries: [], validUntil: "" });
       await invalidateSnapshot();
     } catch (e) {
       setInviteError(e instanceof Error ? e.message : "Invite creation failed. Your input is preserved.");
@@ -121,61 +152,64 @@ export default function ConsentsPage() {
   }
 
   async function confirmRevoke() {
-    if (!revokeTarget || busyId) return;
+    if (!revokeTarget || busyId || revokeAction.busy) return;
     const id = revokeTarget.id;
     setBusyId(id);
     setNotice(null);
-    try {
-      const j = await apiPost<{ revoked: boolean; blockedCampaigns: string[] }>(`/api/passports/${id}/revoke`, {
+    const result = await revokeAction.execute(() =>
+      apiPost<{ revoked: boolean; blockedCampaigns: string[] }>(`/api/passports/${id}/revoke`, {
         note: "Revoked from the PermitFrame consents page."
-      });
+      }, undefined, revokeAction.timeoutMs)
+    );
+    setBusyId(null);
+    if (!result.ok || !result.value) {
+      setNotice({ ok: false, text: result.message ?? "Revocation failed." });
+      setRevokeTarget(null);
+      return;
+    }
+    const j = result.value;
       setNotice({
         ok: true,
         text: j.revoked
           ? j.blockedCampaigns.length > 0
-            ? `Rights for ${id} revoked — the permission record was updated and ${j.blockedCampaigns.length} dependent campaign(s) are now blocked by the permission check.`
-            : `Rights for ${id} revoked — the permission record was updated (no active campaigns affected).`
-          : `Rights for ${id} were already revoked — nothing changed.`
+            ? `Rights for ${id} revoked - the permission record was updated and ${j.blockedCampaigns.length} dependent campaign(s) are now blocked by the permission check.`
+            : `Rights for ${id} revoked - the permission record was updated (no active campaigns affected).`
+          : `Rights for ${id} were already revoked - nothing changed.`
       });
       setRevokeTarget(null);
       // Revocation publishes an Amendment Knowledge Asset: refresh the shared
       // snapshot (awaited) and mark the cached graph stale.
       await invalidateSnapshot();
       invalidateDkgGraph();
-    } catch (e) {
-      setNotice({ ok: false, text: e instanceof Error ? e.message : "Revocation failed." });
-      setRevokeTarget(null);
-    } finally {
-      setBusyId(null);
-    }
   }
 
   async function renew(id: string) {
-    if (busyId) return;
+    if (busyId || renewAction.busy) return;
     if (!/^\d{4}-\d{2}-\d{2}$/.test(renewDate)) {
       setRenewError("Pick a renewal date from the calendar.");
       return;
     }
     if (renewDate <= new Date().toISOString().slice(0, 10)) {
-      setRenewError("Renewal must extend into the future — pick a date after today.");
+      setRenewError("Renewal must extend into the future - pick a date after today.");
       return;
     }
     setRenewError(null);
     setNotice(null);
     setBusyId(id);
-    try {
-      await apiPost(`/api/passports/${id}/renew`, { validUntil: renewDate });
-      setNotice({ ok: true, text: `Rights for ${id} renewed until ${renewDate} — status is active again.` });
-      setRenewFor(null);
-      setRenewDate("");
-      // Renewal republishes the passport Knowledge Asset: same treatment.
-      await invalidateSnapshot();
-      invalidateDkgGraph();
-    } catch (e) {
-      setRenewError(e instanceof Error ? e.message : "Renewal failed. The date you picked is preserved.");
-    } finally {
-      setBusyId(null);
+    const result = await renewAction.execute(() =>
+      apiPost(`/api/passports/${id}/renew`, { validUntil: renewDate }, undefined, renewAction.timeoutMs)
+    );
+    setBusyId(null);
+    if (!result.ok) {
+      setRenewError(result.message ?? "Renewal failed. The date you picked is preserved.");
+      return;
     }
+    setNotice({ ok: true, text: `Rights for ${id} renewed until ${renewDate} - status is active again.` });
+    setRenewFor(null);
+    setRenewDate("");
+    // Renewal republishes the passport Knowledge Asset: same treatment.
+    await invalidateSnapshot();
+    invalidateDkgGraph();
   }
 
   const revokeWarning = revokeTarget
@@ -188,7 +222,7 @@ export default function ConsentsPage() {
         <PageHeader
           eyebrow="Creator permissions"
           title="Creator permissions"
-          description="Consent, territories, expiry, and permitted usage — who can appear, where, and for how long. Campaigns re-check automatically."
+          description="Consent, territories, expiry, and permitted usage - who can appear, where, and for how long. Campaigns re-check automatically."
           actions={
             <Button onClick={() => setInviteOpen((v) => !v)} aria-expanded={inviteOpen} className="rounded-full bg-emerald-700 font-medium text-emerald-50 hover:bg-emerald-600 dark:bg-emerald-500 dark:text-emerald-950 dark:hover:bg-emerald-400">
               {inviteOpen ? "Close form" : "New creator invite"}
@@ -205,7 +239,7 @@ export default function ConsentsPage() {
           <div className="rounded-2xl border border-border bg-card p-6">
             <h3 className="text-[15px] font-semibold tracking-tight">New creator invite</h3>
             <p className="mt-1 text-[12.5px] text-muted-foreground">
-              Send the link to the creator — they confirm or narrow platforms, territories and expiry, then attest. Only the attestation creates the permission.
+              Send the link to the creator - they confirm or narrow platforms, territories and expiry, then attest. Only the attestation creates the permission.
             </p>
             <div className="mt-5 grid gap-4 sm:grid-cols-2">
               <div className="space-y-1.5">
@@ -252,15 +286,32 @@ export default function ConsentsPage() {
                   })}
                 </div>
               </div>
-              <div className="space-y-1.5">
-                <Label htmlFor={`${uid}-invite-countries`} className="text-[12px] text-muted-foreground">Territories (comma-separated, 2-letter)</Label>
-                <Input
-                  id={`${uid}-invite-countries`}
-                  value={inviteForm.countries}
-                  onChange={(e) => setInvite("countries", e.target.value.toUpperCase())}
-                  placeholder="US, GR"
-                  className="rounded-xl"
-                />
+              <div className="space-y-1.5 sm:col-span-2">
+                <span id={`${uid}-invite-countries`} className="text-[12px] text-muted-foreground">
+                  Territories{inviteForm.countries.length > 0 && ` (${inviteForm.countries.length} selected)`}
+                </span>
+                <div className="flex max-h-44 flex-wrap gap-1.5 overflow-y-auto rounded-xl border border-border bg-muted/30 p-2.5" role="group" aria-labelledby={`${uid}-invite-countries`}>
+                  {COUNTRIES.map((c) => {
+                    const selected = inviteForm.countries.includes(c.code);
+                    return (
+                      <button
+                        key={c.code}
+                        type="button"
+                        onClick={() => toggleInviteCountry(c.code)}
+                        aria-pressed={selected}
+                        title={`${c.name} (${c.code})`}
+                        className={cn(
+                          "rounded-full px-2.5 py-1 text-[11.5px] font-medium ring-1 transition",
+                          selected
+                            ? "bg-foreground text-background ring-foreground dark:bg-white dark:text-black dark:ring-white"
+                            : "bg-card text-muted-foreground ring-border hover:text-foreground"
+                        )}
+                      >
+                        {c.code}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor={`${uid}-invite-expiry`} className="text-[12px] text-muted-foreground">Permission expiry</Label>
@@ -312,11 +363,16 @@ export default function ConsentsPage() {
           </p>
         </FadeIn>
       )}
+      {(revokeAction.busy || renewAction.busy) && (revokeAction.status ?? renewAction.status) && (
+        <p role="status" className="text-[13px] leading-relaxed text-muted-foreground">
+          {revokeAction.busy ? revokeAction.status : renewAction.status}
+        </p>
+      )}
       {loadError && <ErrorState message={loadError} onRetry={() => { void snapshot.refetch(); }} />}
       {invites !== null && passports !== null && invites.length === 0 && passports.length === 0 && !loadError && (
         <EmptyState
           title="No creator permissions yet"
-          body="Add approved material to unlock campaigns: invite a creator below, or start with brand rules and media. Then brief a campaign — the permission check runs automatically."
+          body="Add approved material to unlock campaigns: invite a creator below, or start with brand rules and media. Then brief a campaign - the permission check runs automatically."
           actions={
             <>
               <Button onClick={() => setInviteOpen(true)} className="rounded-full bg-emerald-700 font-medium text-emerald-50 hover:bg-emerald-600 dark:bg-emerald-500 dark:text-emerald-950 dark:hover:bg-emerald-400">
@@ -474,8 +530,8 @@ export default function ConsentsPage() {
         title={`Revoke ${revokeTarget?.creatorName ?? "this"}’s rights?`}
         consequence={
           revokeWarning !== null && revokeWarning > 0
-            ? `This updates the permission record for ${revokeTarget?.id}. ${revokeWarning} dependent campaign(s) will immediately block at the permission check. The rights record itself is kept for audit — nothing is deleted.`
-            : `This updates the permission record for ${revokeTarget?.id}. Dependent campaigns of this creator will be re-checked. The rights record itself is kept for audit — nothing is deleted.`
+            ? `This updates the permission record for ${revokeTarget?.id}. ${revokeWarning} dependent campaign(s) will immediately block at the permission check. The rights record itself is kept for audit - nothing is deleted.`
+            : `This updates the permission record for ${revokeTarget?.id}. Dependent campaigns of this creator will be re-checked. The rights record itself is kept for audit - nothing is deleted.`
         }
         confirmLabel="Yes, revoke it"
         pending={busyId !== null}

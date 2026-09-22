@@ -5,8 +5,9 @@ import { createCampaign, createCampaignIdempotent } from "@/server/campaigns";
 import { resolveCampaignSelection } from "@/server/campaign-selection";
 import { IDEMPOTENCY_KEY_PATTERN, IdempotencyMismatchError } from "@/server/idempotency";
 import { isDkgUnavailable } from "@/server/dkg/edge-node-adapter";
+import { logDkgError } from "@/server/dkg/public-errors";
 import { CampaignDeletedError } from "@/server/deletion";
-import type { CampaignRequest } from "@/server/types";
+import type { CampaignRequest, QualityProfile } from "@/server/types";
 
 export const dynamic = "force-dynamic";
 
@@ -29,6 +30,8 @@ export async function POST(request: NextRequest) {
     requestedClaims: string[];
     transformation: "image" | "video";
     creativeBrief: string;
+    /** Requested production quality profile - optional, defaults to balanced. */
+    qualityProfile?: string;
     creatorId?: string;
     passportId?: string;
     sourceMediaId?: string;
@@ -38,7 +41,7 @@ export async function POST(request: NextRequest) {
   };
   const rawKey = typeof body.idempotencyKey === "string" ? body.idempotencyKey.trim() : "";
   if (body.idempotencyKey !== undefined && !IDEMPOTENCY_KEY_PATTERN.test(rawKey)) {
-    return NextResponse.json({ error: "idempotencyKey must be 1–128 chars of letters, numbers, dash or underscore." }, { status: 400 });
+    return NextResponse.json({ error: "idempotencyKey must be 1-128 chars of letters, numbers, dash or underscore." }, { status: 400 });
   }
   let workspaceId: string;
   try {
@@ -76,8 +79,15 @@ export async function POST(request: NextRequest) {
     transformation: body.transformation ?? "image",
     creativeBrief: body.creativeBrief ?? ""
   };
+  if (body.qualityProfile !== undefined) {
+    const profile = String(body.qualityProfile).toLowerCase();
+    if (profile !== "draft" && profile !== "balanced" && profile !== "premium") {
+      return NextResponse.json({ error: "qualityProfile must be one of draft, balanced, premium." }, { status: 400 });
+    }
+    req.qualityProfile = profile as QualityProfile;
+  }
   const input = {
-    title: body.title || `${req.platform} campaign — ${req.country}`,
+    title: body.title || `${req.platform} campaign - ${req.country}`,
     brand: facts.brand,
     productName: facts.productName,
     creatorId: creator.id,
@@ -96,8 +106,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ campaign, deduplicated: false }, { status: 201 });
     } catch (error) {
       if (error instanceof Error && isDkgUnavailable(error.message)) {
+        logDkgError("campaign-create", error);
         return NextResponse.json(
-          { error: "Proof ledger unreachable — campaign not created. Nothing was saved; retry in a moment.", retryable: true },
+          { error: "Proof ledger unreachable - campaign not created. Nothing was saved; retry in a moment.", retryable: true },
           { status: 503 }
         );
       }
@@ -117,10 +128,11 @@ export async function POST(request: NextRequest) {
     }
     if (error instanceof Error && isDkgUnavailable(error.message)) {
       // Creation consults the live ledger (preflight rights/facts reads). A
-      // down ledger is a 503 with retry guidance — never a 500, and the
+      // down ledger is a 503 with retry guidance - never a 500, and the
       // idempotency slot is already marked failed so the retry takes over.
+      logDkgError("campaign-create", error);
       return NextResponse.json(
-        { error: "Proof ledger unreachable — campaign not created. Nothing was saved; retry in a moment.", retryable: true },
+        { error: "Proof ledger unreachable - campaign not created. Nothing was saved; retry in a moment.", retryable: true },
         { status: 503 }
       );
     }

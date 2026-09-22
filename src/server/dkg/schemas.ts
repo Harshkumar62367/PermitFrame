@@ -25,7 +25,7 @@ export interface KaEnvelope {
 
 /**
  * Knowledge Asset 1: Creator Permission Passport.
- * Privacy: minimized on purpose — no contact details, no contract text,
+ * Privacy: minimized on purpose - no contact details, no contract text,
  * no raw personal data. Only the enforceable policy surface.
  */
 export function passportKa(passport: PermissionPassport): KaEnvelope {
@@ -35,7 +35,7 @@ export function passportKa(passport: PermissionPassport): KaEnvelope {
       "@context": PF_CONTEXT,
       "@id": `urn:permitframe:passport:${passport.id}`,
       "@type": "PermitFramePermissionPassport",
-      "schema:name": `Permission Passport — ${passport.creatorName}`,
+      "schema:name": `Permission Passport - ${passport.creatorName}`,
       "pf:creatorId": passport.creatorId,
       "pf:creatorName": passport.creatorName,
       "pf:platform": passport.platforms,
@@ -61,7 +61,7 @@ export function productFactsKa(facts: ProductFacts): KaEnvelope {
       "@context": PF_CONTEXT,
       "@id": `urn:permitframe:product-facts:${facts.id}`,
       "@type": "PermitFrameProductFacts",
-      "schema:name": `Product Facts — ${facts.brand} ${facts.productName}`,
+      "schema:name": `Product Facts - ${facts.brand} ${facts.productName}`,
       "pf:brand": facts.brand,
       "pf:productName": facts.productName,
       "pf:approvedClaim": facts.approvedClaims,
@@ -85,7 +85,7 @@ export function sourceMediaKa(media: SourceMedia): KaEnvelope {
       "pf:creatorId": media.creatorId,
       "pf:mediaType": media.type,
       "pf:referenceUrl": media.url,
-      // Reference-URL fingerprint for registry correlation — not a byte hash
+      // Reference-URL fingerprint for registry correlation - not a byte hash
       // of the media (source bytes stay with the creator by design).
       "pf:referenceFingerprint": media.hash,
       "pf:visibility": "private"
@@ -117,7 +117,7 @@ export function campaignKa(campaign: Campaign): KaEnvelope {
   };
 }
 
-/** Knowledge Asset 5: Derivative Receipt — one per generated output. */
+/** Knowledge Asset 5: Derivative Receipt - one per generated output. */
 export function receiptKa(receipt: DerivativeReceipt): KaEnvelope {
   return {
     name: `permitframe-receipt-${receipt.id}`,
@@ -125,7 +125,7 @@ export function receiptKa(receipt: DerivativeReceipt): KaEnvelope {
       "@context": PF_CONTEXT,
       "@id": `urn:permitframe:receipt:${receipt.id}`,
       "@type": "PermitFrameDerivativeReceipt",
-      "schema:name": `Derivative Receipt — ${receipt.label}`,
+      "schema:name": `Derivative Receipt - ${receipt.label}`,
       "pf:campaign": { "@id": `urn:permitframe:campaign:${receipt.campaignId}` },
       "pf:jobId": receipt.jobId,
       "pf:mediaType": receipt.mediaType,
@@ -133,7 +133,7 @@ export function receiptKa(receipt: DerivativeReceipt): KaEnvelope {
       "pf:outputUrl": receipt.outputUrl,
       // Correlation only: fingerprints the provider URL string, never byte
       // content. Durable proof references are the delivery URL + storage
-      // identity below plus job provenance — fingerprints prove nothing
+      // identity below plus job provenance - fingerprints prove nothing
       // about the media bytes (a future byte-stream SHA-256 can add
       // cryptographic identity).
       ...(receipt.providerUrlFingerprint ?? receipt.outputHash
@@ -143,6 +143,10 @@ export function receiptKa(receipt: DerivativeReceipt): KaEnvelope {
       ...(receipt.storageUrl ? { "pf:deliveryUrl": receipt.storageUrl } : {}),
       "pf:generationCapability": receipt.capability,
       "pf:promptHash": receipt.promptHash,
+      ...(receipt.actualWidth !== undefined && receipt.actualHeight !== undefined
+        ? { "pf:actualWidth": receipt.actualWidth, "pf:actualHeight": receipt.actualHeight }
+        : {}),
+      ...(receipt.aspectVerdict ? { "pf:aspectVerdict": receipt.aspectVerdict } : {}),
       "pf:claimsUsed": receipt.claimsUsed,
       "pf:derivedFromSourceMedia": { "@id": `urn:permitframe:media:${receipt.derivedFrom.sourceMediaId}` },
       "pf:derivedFromPassport": { "@id": `urn:permitframe:passport:${receipt.derivedFrom.passportId}` },
@@ -165,7 +169,7 @@ export function amendmentKa(
       "@context": PF_CONTEXT,
       "@id": `urn:permitframe:amendment:${passport.id}:${change.at}`,
       "@type": "PermitFramePermissionAmendment",
-      "schema:name": `Permission ${change.kind} — ${passport.creatorName}`,
+      "schema:name": `Permission ${change.kind} - ${passport.creatorName}`,
       "pf:amendsPassport": { "@id": `urn:permitframe:passport:${passport.id}` },
       "pf:changeKind": change.kind,
       "pf:note": change.note,

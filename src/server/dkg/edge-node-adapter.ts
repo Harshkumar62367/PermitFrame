@@ -13,7 +13,7 @@ const ENDPOINT_LABEL = process.env.DKG_ENDPOINT_LABEL ?? "local daemon (127.0.0.
 
 /**
  * Strip secret-shaped material before an error is logged or returned.
- * CLI/transport failures can echo RPC URLs, tokens, or key material — none
+ * CLI/transport failures can echo RPC URLs, tokens, or key material - none
  * of that may reach server logs or API responses (cookies, Privy tokens,
  * DKG auth tokens, RPC keys).
  */
@@ -21,7 +21,9 @@ const SECRET_PATTERNS: Array<[RegExp, string]> = [
   [/0x[a-fA-F0-9]{64,}/g, "0x[redacted]"],
   [/alch_[A-Za-z0-9_-]+/g, "alch_[redacted]"],
   [/\bsk-[A-Za-z0-9_-]{8,}/g, "sk-[redacted]"],
-  [/Bearer\s+[A-Za-z0-9\-._~+/=]+/g, "Bearer [redacted]"]
+  [/Bearer\s+[A-Za-z0-9\-._~+/=]+/g, "Bearer [redacted]"],
+  [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, "[redacted-private-key]"],
+  [/\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_.-]+/g, "[redacted-jwt]"]
 ];
 
 export function redactSecrets(message: string): string {
@@ -105,14 +107,18 @@ export class EdgeNodeAdapter implements DkgAdapter {
         healthy: true,
         endpoint: ENDPOINT_LABEL,
         blockchain: process.env.DKG_BLOCKCHAIN ?? "base:84532 (V10 testnet)",
-        detail: `Edge Node running — ${peers} peer(s), context graph "${CG_ENV}". SWM shares are live DKG operations.`
+        detail: `Edge Node running - ${peers} peer(s), context graph "${CG_ENV}". SWM shares are live DKG operations.`
       };
     } catch (error) {
+      // Raw CLI/transport text never leaves the server: log it redacted and
+      // report a safe diagnostic. UI copy comes from the health route.
+      const raw = (error as Error).message;
+      console.error("[edge-node] health probe failed:", redactSecrets(raw).slice(0, 300));
       return {
         mode: this.mode,
         healthy: false,
         endpoint: ENDPOINT_LABEL,
-        detail: `Edge Node unreachable — check the DKG_CLI_BIN target (${process.env.DKG_CLI_BIN ?? "dkg"}). ${(error as Error).message.slice(0, 140)}`
+        detail: "Edge Node unreachable - check the DKG_CLI_BIN target and retry shortly."
       };
     }
   }
@@ -121,7 +127,7 @@ export class EdgeNodeAdapter implements DkgAdapter {
     const cg = await this.contextGraph();
     const ttl = jsonLdToTurtle(ka.content);
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pf-ka-"));
-    // KA names are immutable in the node — suffix every publish so re-seeds never collide
+    // KA names are immutable in the node - suffix every publish so re-seeds never collide
     const name = `${ka.name.slice(0, 64)}-${Date.now().toString(36)}`;
     const file = path.join(dir, `${ka.name.replace(/[^a-z0-9-_.]/gi, "-")}.ttl`);
     await fs.writeFile(file, ttl, "utf8");
@@ -355,14 +361,14 @@ export function parseCliTable(out: string): Array<Record<string, string>> {
     if (/^[-─-╰\s]+$/.test(line)) break;
     if (/^\d+\s+row\(s\)/i.test(line.trim())) continue; // trailing count summary, not data
     const cells = line.trim().split(/\s{2,}/);
-    if (cells.length < headers.length) continue; // wrapped value fragment — skipped for simplicity
+    if (cells.length < headers.length) continue; // wrapped value fragment - skipped for simplicity
     const row: Record<string, string> = {};
     headers.forEach((h, i) => (row[h] = cells[i]?.trim() ?? ""));
     rows.push(row);
   }
   const total = out.match(/(\d+)\s+row\(s\)/)?.[1];
   if (total && rows.length !== Number(total)) {
-    // keep what parsed; count mismatch indicates wrapped cells — surfaced to caller as partial
+    // keep what parsed; count mismatch indicates wrapped cells - surfaced to caller as partial
   }
   return rows;
 }
@@ -415,7 +421,7 @@ export function jsonLdToTurtle(content: Record<string, unknown>): string {
     for (const v of values) {
       if (typeof v === "string") {
         if (v.startsWith("urn:") || v.startsWith("http")) objects.push(`<${v}>`);
-        else objects.push(`${JSON.stringify(String(v).normalize("NFKD").replace(/[—–]/g, "-"))}`);
+        else objects.push(`${JSON.stringify(String(v).normalize("NFKD").replace(/[--]/g, "-"))}`);
       } else if (typeof v === "number" || typeof v === "boolean") {
         objects.push(String(v));
       } else if (typeof v === "object" && "@id" in (v as Record<string, unknown>)) {

@@ -1,36 +1,36 @@
 # PermitFrame
 
-**PermitFrame helps creative teams turn approved creator rights and brand rules into platform-ready AI campaign assets — with a reviewable proof trail.**
+**PermitFrame helps creative teams turn approved creator rights and brand rules into platform-ready AI campaign assets - with a reviewable proof trail.**
 
 ## User problem and target customer
 
-An agency creative producer or brand marketing manager needs AI campaign assets fast, but every asset carries rights risk: *may this creator appear here? Is this claim approved? Is this territory covered?* Today those checks live in spreadsheets, inboxes, and memory — a blocked-by-rights surprise arrives after money is spent, or worse, after publishing. PermitFrame moves the rights decision **before** generation spend and attaches reviewable proof to every output.
+An agency creative producer or brand marketing manager needs AI campaign assets fast, but every asset carries rights risk: *may this creator appear here? Is this claim approved? Is this territory covered?* Today those checks live in spreadsheets, inboxes, and memory - a blocked-by-rights surprise arrives after money is spent, or worse, after publishing. PermitFrame moves the rights decision **before** generation spend and attaches reviewable proof to every output.
 
 ## Product workflow
 
-1. **Creator permissions** — invite a creator; they attest platforms, territories, expiry, and usage on a consent link. Only attestation creates the permission.
-2. **Brand rules** — set approved claims, required disclosures, and prohibited language per product.
-3. **Campaigns** — brief a campaign. The permission check runs automatically:
-   - **Changes needed before creation** — precise reasons plus where to fix them; nothing can generate.
-   - **Approved to create** — the campaign opens in Campaign Studio.
-4. **Campaign Studio** — refine the brief, select deliverables (vertical 9:16, feed 1:1, landscape 16:9), generate with the production service, review outputs, approve the pack.
-5. **Verification** — every output links to a proof page: the asset, verified claims, creator permission, and brand rules behind it.
+1. **Creator permissions** - invite a creator; they attest platforms, territories, expiry, and usage on a consent link. Only attestation creates the permission.
+2. **Brand rules** - set approved claims, required disclosures, and prohibited language per product.
+3. **Campaigns** - brief a campaign. The permission check runs automatically:
+   - **Changes needed before creation** - precise reasons plus where to fix them; nothing can generate.
+   - **Approved to create** - the campaign opens in Campaign Studio.
+4. **Campaign Studio** - refine the brief, select deliverables (vertical 9:16, feed 1:1, landscape 16:9), generate with the production service, review outputs, approve the pack.
+5. **Verification** - every output links to a proof page: the asset, verified claims, creator permission, and brand rules behind it.
 
 ## Why Livepeer Agent is essential
 
-Generation is not a mock: the studio dispatches exact capabilities (`flux-schnell` text-to-image, `seedance-mini-i2v` image-to-video, chosen from **live MCP discovery**, never a hardcoded claim) through the Livepeer Agent Creative surface (`create_media` with deliberate `generate`/`animate` actions, per-call `max_cost_usd` ceilings, and live pricing where exactly mappable). The orchestrator runs only producer-selected stages, chains stage outputs, records the real capability served (including network-recommended auto-recovery), per-stage cost in USD, job ids, and output URLs. A failed provider call surfaces honestly with retry — outputs, receipts, and verification links only ever reference real results.
+Generation is not a mock: the studio dispatches exact capabilities (`flux-schnell` text-to-image, `seedance-mini-i2v` image-to-video, chosen from **live MCP discovery**, never a hardcoded claim) through the Livepeer Agent Creative surface (`create_media` with deliberate `generate`/`animate` actions, per-call `max_cost_usd` ceilings, and live pricing where exactly mappable). The orchestrator runs only producer-selected stages, chains stage outputs, records the real capability served (including network-recommended auto-recovery), per-stage cost in USD, job ids, and output URLs. A failed provider call surfaces honestly with retry - outputs, receipts, and verification links only ever reference real results.
 
 ## How OriginTrail DKG materially changes behaviour
 
-**Before generation:** the policy engine runs real SPARQL against the DKG — which permissions cover creator + platform + country + date, which claims facts support, which transformations are allowed. The compiled decision gates spend: blocked campaigns cannot start jobs, at the API layer, not just in the UI.
+**Before generation:** the policy engine runs real SPARQL against the DKG - which permissions cover creator + platform + country + date, which claims facts support, which transformations are allowed. The compiled decision gates spend: blocked campaigns cannot start jobs, at the API layer, not just in the UI.
 
-**After generation:** each output gets a Derivative Receipt; approval publishes a minimized campaign record. Routine records live in Shared Working Memory; only a finalized Verifiable Memory publish earns **Public verification ready** — the UI keys this off an explicit persisted publication state, never ID-shape guessing.
+**After generation:** each output gets a Derivative Receipt; approval publishes a minimized campaign record. Routine records live in Shared Working Memory; only a finalized Verifiable Memory publish earns **Public verification ready** - the UI keys this off an explicit persisted publication state, never ID-shape guessing.
 
 ## What stays private, what is shared, what is publicly verifiable
 
 - **Private:** contracts, contact details, full prompts (stored as SHA-256 hashes), source media bytes (only reference URL + content hash recorded).
 - **Shared:** minimized permission/claim references and receipts in Shared Working Memory for preflight and review.
-- **Publicly verifiable:** only records whose publisher job genuinely finalized — shown with explorer links inside Technical details. Attestations prove the declaration and its integrity, not legal ownership.
+- **Publicly verifiable:** only records whose publisher job genuinely finalized - shown with explorer links inside Technical details. Attestations prove the declaration and its integrity, not legal ownership.
 
 ## Setup and run
 
@@ -54,9 +54,9 @@ In-product example fillers are labeled **Guided scenario**. Health: `node --env-
 
 ## Known limitations
 
-- The DKG Edge Node daemon must be running; when it is down, preflight, publishing, and verification fail explicitly with retries — nothing is faked.
+- The DKG Edge Node daemon must be running; when it is down, preflight, publishing, and verification fail explicitly with retries - nothing is faked.
 - Anonymous (logged-out) `/share/*` client review links require the viewer to be signed in; `/verify/*` proof pages are fully public (signed-out safe, allowlisted fields only).
-- Creative MCP credit/quota is per-hacker and server-reported: the studio shows live prices where exactly mappable, "live pricing unavailable" otherwise, and every render carries a `max_cost_usd` ceiling. Actual returned costs only — no hardcoded balances.
+- Creative MCP credit/quota is per-hacker and server-reported: the studio shows live prices where exactly mappable, "live pricing unavailable" otherwise, and every render carries a `max_cost_usd` ceiling. Actual returned costs only - no hardcoded balances.
 - On-chain finalization needs a funded node wallet and takes minutes; statuses stay at “Campaign record saved” until it genuinely finalizes.
 
 Built for **Track 2 (Livepeer Agent + OriginTrail DKG)** of the Atumera Livepeer Agent Hackathon.

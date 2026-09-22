@@ -17,7 +17,7 @@ import { amendmentKa, passportKa, productFactsKa, sourceMediaKa } from "./dkg/sc
 import { preflight } from "./policy/engine";
 
 /**
- * Platform services around the core production workflow —
+ * Platform services around the core production workflow -
  * facts management, media registry, passport lifecycle (revoke/amend),
  * claims-safe captions, cost estimation, client share links, comments.
  */
@@ -120,7 +120,7 @@ const DEFAULT_TRANSFORMATIONS: Transformation[] = ["edit", "animate", "upscale",
 
 /**
  * Create a creator consent invite. The creator opens the link, confirms or
- * narrows the draft, and attests — only the attestation creates the passport.
+ * narrows the draft, and attests - only the attestation creates the passport.
  * No DKG write happens here, so this works fully offline.
  */
 export async function createConsentInvite(input: {
@@ -197,7 +197,7 @@ export async function revokePassport(passportId: string, note: string): Promise<
     });
   });
 
-  // Re-run preflight on every campaign of this creator — revocation takes effect immediately.
+  // Re-run preflight on every campaign of this creator - revocation takes effect immediately.
   const affected = (await campaigns()).filter((c) => c.creatorId === passport.creatorId && c.status !== "approved");
   const blocked: string[] = [];
   for (const c of affected) {
@@ -368,7 +368,7 @@ export function campaignCostRollup(campaign: Campaign): { spent: number; estimat
 /* ------------------------- share links + comments ------------------------- */
 // NOTE: public share reads/writes live in ./public-share (session-free,
 // whitelisted). The session-gated resolveShare/clientReview used to serve the
-// public routes and 500'd logged-out visitors — removed so no future caller
+// public routes and 500'd logged-out visitors - removed so no future caller
 // can reintroduce the session dependency on a public path.
 
 export async function createShareLink(campaignId: string): Promise<string> {
@@ -377,7 +377,7 @@ export async function createShareLink(campaignId: string): Promise<string> {
   const { throwIfArchived } = await import("./campaigns");
   throwIfArchived(campaign, "shared");
   if (!campaign.receipts.some((r) => hasSharableReceipt(r))) {
-    throw new Error("Share links need a ready-to-share output — previews and unsaved outputs stay private until durable storage confirms them.");
+    throw new Error("Share links need a ready-to-share output - previews and unsaved outputs stay private until durable storage confirms them.");
   }
   const token = newId("share");
   await updateDb((d) => {

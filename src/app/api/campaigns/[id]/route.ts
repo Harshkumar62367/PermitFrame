@@ -3,6 +3,7 @@ import { AuthenticationRequiredError, requireCurrentSession } from "@/server/aut
 import { effectiveCampaignStatus } from "@/server/campaign-status";
 import { loadCampaignDetailNormalized } from "@/server/campaign-store";
 import { deleteCampaign, updateCampaignBrief, type BriefPatch } from "@/server/campaigns";
+import { logDkgError, sanitizeDkgError, scrubStoredText } from "@/server/dkg/public-errors";
 import {
   CampaignDeletedError,
   CampaignNotFoundError,
@@ -48,13 +49,34 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   }
   // Hot path: indexed single-campaign + 3 single-row lookups, one RTT each
   // (parallel). No blob transfer, no DKG calls. Status drift is corrected
-  // in memory only — reads never write, so GETs stay fast and contention-free.
+  // in memory only - reads never write, so GETs stay fast and contention-free.
   // The normalized mirror is authoritative (backfilled + mirrored on every
   // write, deletes included): a miss is an immediate 404, never a slow
   // whole-blob fallback scan.
   const normalized = await loadCampaignDetailNormalized(workspaceId, id).catch(() => null);
   if (!normalized) return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
-  const campaign = { ...normalized.campaign, status: effectiveCampaignStatus(normalized.campaign) };
+  // Persisted job/run diagnostics predate write-time scrubbing in older
+  // rows: operational detail is scrubbed at read time so the queue never
+  // renders usernames, paths, hosts, or transport internals.
+  const campaign = {
+    ...normalized.campaign,
+    status: effectiveCampaignStatus(normalized.campaign),
+    jobs: (normalized.campaign.jobs ?? []).map((j) => ({
+      ...j,
+      ...(typeof j.error === "string"
+        ? { error: scrubStoredText(j.error, "This step failed — diagnostic detail was withheld. Retry the stage.") }
+        : {}),
+      ...(typeof j.lastTransientError === "string"
+        ? { lastTransientError: scrubStoredText(j.lastTransientError, "Submit hiccup — retrying automatically.") }
+        : {})
+    })),
+    runs: (normalized.campaign.runs ?? []).map((r) => ({
+      ...r,
+      ...(typeof r.note === "string"
+        ? { note: scrubStoredText(r.note, "Run finished — diagnostic detail was withheld.") }
+        : {})
+    }))
+  };
   return NextResponse.json({
     campaign,
     sourceMedia: normalized.sourceMedia,
@@ -92,7 +114,11 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     result = await updateCampaignBrief(id, patch);
   } catch (error) {
     if (error instanceof AuthenticationRequiredError) return authError();
-    throw error;
+    // Brief saves re-check rights inputs against live approvals: raw
+    // transport failures must never reach the studio banner.
+    logDkgError("brief-save", error);
+    const safe = sanitizeDkgError(error, "preflight");
+    return NextResponse.json({ error: safe.message, code: safe.code }, { status: safe.status });
   }
   if (!result.campaign) return NextResponse.json({ error: result.error ?? "Update failed." }, { status: 400 });
   return NextResponse.json({ campaign: result.campaign });
@@ -104,7 +130,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
  * error. Protected campaigns (assets, share link, anchored proof) get a 409
  * pointing at archive; unknown ids get a 404.
  *
- * Archived records are refused UNLESS `?force=true` is passed explicitly —
+ * Archived records are refused UNLESS `?force=true` is passed explicitly -
  * the hidden last-resort path (owner only, type-to-confirm UI). Even force
  * never deletes while jobs run.
  */

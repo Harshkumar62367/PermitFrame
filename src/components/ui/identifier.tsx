@@ -47,7 +47,7 @@ export function CopyableIdentifier({
       setCopied(true);
       setTimeout(() => setCopied(false), 1600);
     } catch {
-      // clipboard unavailable (permissions) — tooltip still exposes the value
+      // clipboard unavailable (permissions) - tooltip still exposes the value
     }
   }
   return (

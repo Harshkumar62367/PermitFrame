@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 
 /**
  * HackerEarth-style pinned bottom utilities: icon + label rows matching
- * the primary nav geometry. Theme is an instant toggle action —
+ * the primary nav geometry. Theme is an instant toggle action -
  * never a dead link. Mount-gated: the server and first client render
  * assume light theme so hydration matches, then sync to the real theme.
  */

@@ -13,7 +13,7 @@ function formatUsd(value: number): string {
 /**
  * Dense operational summary strip. Every value is computed server-side from
  * real campaign/preflight/job data; every metric navigates to the campaigns
- * it counts. No fabricated analytics — zeros render as zeros.
+ * it counts. No fabricated analytics - zeros render as zeros.
  */
 export function OperationalMetricsStrip({ metrics }: { metrics: OperationalMetrics }) {
   const items = [

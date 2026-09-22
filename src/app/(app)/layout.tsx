@@ -7,7 +7,7 @@ import { AppShell } from "@/components/app-shell";
 /**
  * Protected route group: the existing HttpOnly PermitFrame session is
  * checked on the server, so returning users get the app shell rendered
- * immediately — no full-screen client authentication waterfall.
+ * immediately - no full-screen client authentication waterfall.
  * Unauthenticated requests redirect safely to the landing page.
  */
 export default async function AppLayout({ children }: { children: React.ReactNode }) {

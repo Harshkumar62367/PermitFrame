@@ -7,13 +7,14 @@ import { PolicyDecisionSummary } from "./policy-decision-summary";
 import { EvidenceSummary } from "./evidence-summary";
 import { campaignOutcome, OutcomeBadge } from "@/components/campaign-outcome";
 import type { SnapshotCampaign } from "@/lib/use-workspace-snapshot";
+import { displayText } from "@/lib/utils";
 
 function formatUsd(value: number): string {
   return value.toLocaleString(undefined, { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 /**
- * The decision card: a blocked campaign presented as what it is — money not
+ * The decision card: a blocked campaign presented as what it is - money not
  * spent because rights or facts said no. All reasons come from the live
  * preflight blockers; nothing is hardcoded.
  */
@@ -35,7 +36,7 @@ export function NeedsAttentionPanel({
         </p>
       </div>
 
-      <CampaignThumbnail src={campaign.thumbnailUrl} title={campaign.title} brand={campaign.brand} />
+      <CampaignThumbnail src={campaign.thumbnailUrl} title={displayText(campaign.title)} brand={campaign.brand} />
 
       <div className="flex flex-1 flex-col p-5">
         <div className="flex flex-wrap items-center gap-2">
@@ -53,7 +54,7 @@ export function NeedsAttentionPanel({
           </span>
         </div>
         <h3 id={`blocked-${campaign.id}`} className="mt-2.5 text-[17px] font-semibold leading-snug tracking-tight">
-          {campaign.title}
+          {displayText(campaign.title)}
         </h3>
         <p className="mt-0.5 text-[12.5px] text-muted-foreground">
           {campaign.brand} · {campaign.creatorName}

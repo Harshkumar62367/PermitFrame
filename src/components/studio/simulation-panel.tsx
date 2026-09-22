@@ -6,8 +6,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { COUNTRIES } from "@/lib/countries";
 import { AnimatePresence, motion } from "framer-motion";
-import { apiPost } from "@/lib/api";
+import { apiPost, ApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 const PLATFORMS = ["instagram", "tiktok", "youtube", "linkedin"];
@@ -26,7 +27,7 @@ interface SimulationPanelProps {
 
 /**
  * Rights simulator + proof-query disclosure, shared by the blocked view and
- * the studio. What-if only — it never changes the campaign.
+ * the studio. What-if only - it never changes the campaign.
  */
 export function SimulationPanel({ campaignId, sparqlPreview }: SimulationPanelProps) {
   const [sim, setSim] = useState({ platform: "", country: "", claims: "" });
@@ -41,6 +42,9 @@ export function SimulationPanel({ campaignId, sparqlPreview }: SimulationPanelPr
     setSimError(null);
     setBusy(true);
     try {
+      // What-if only: persists nothing, so the default bounded timeout stays
+      // (never the 120s mutation policy). Only the timeout wording improves -
+      // a slow simulation implies nothing was saved.
       const j = await apiPost<{ decision: SimResult }>(`/api/campaigns/${campaignId}/simulate`, {
         platform: sim.platform || undefined,
         country: sim.country || undefined,
@@ -49,7 +53,11 @@ export function SimulationPanel({ campaignId, sparqlPreview }: SimulationPanelPr
       setSimResult(j.decision);
     } catch (e) {
       // Simulator inputs are preserved for retry.
-      setSimError(e instanceof Error ? e.message : "Simulation failed. Your inputs are preserved.");
+      setSimError(
+        e instanceof ApiError && e.status === 0
+          ? "The permission simulation is taking longer than expected. Try again in a moment."
+          : e instanceof Error ? e.message : "Simulation failed. Your inputs are preserved."
+      );
     } finally {
       setBusy(false);
     }
@@ -58,7 +66,7 @@ export function SimulationPanel({ campaignId, sparqlPreview }: SimulationPanelPr
   return (
     <div id="simulate" className="scroll-mt-24 rounded-xl border border-dashed border-border p-4">
       <p className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
-        <Gauge className="h-3.5 w-3.5" /> Permission simulator — what-if only, never changes this campaign
+        <Gauge className="h-3.5 w-3.5" /> Permission simulator - what-if only, never changes this campaign
       </p>
       <div className="mt-3 flex flex-wrap items-end gap-2">
         <div className="space-y-1">
@@ -71,8 +79,19 @@ export function SimulationPanel({ campaignId, sparqlPreview }: SimulationPanelPr
           </Select>
         </div>
         <div className="space-y-1">
-          <Label htmlFor="studio-sim-country" className="sr-only">Simulated country code</Label>
-          <Input id="studio-sim-country" placeholder="country (DE)" maxLength={2} value={sim.country} onChange={(e) => setSim((s) => ({ ...s, country: e.target.value.toUpperCase() }))} className="h-9 w-[110px] rounded-lg" />
+          <Label htmlFor="studio-sim-country" className="sr-only">Simulated country</Label>
+          <Select value={sim.country || undefined} onValueChange={(v) => setSim((s) => ({ ...s, country: v }))}>
+            <SelectTrigger id="studio-sim-country" className="h-9 w-[190px] rounded-lg">
+              <SelectValue placeholder="country" />
+            </SelectTrigger>
+            <SelectContent>
+              {COUNTRIES.map((c) => (
+                <SelectItem key={c.code} value={c.code}>
+                  {c.name} · {c.code}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
         <div className="min-w-[200px] flex-1 space-y-1">
           <Label htmlFor="studio-sim-claims" className="sr-only">Simulated claims, comma-separated</Label>

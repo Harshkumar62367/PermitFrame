@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 /**
  * Compact workspace row (~56px): icon, truncated name, chevron, wallet
  * secondary line. Opens a functional popover with membership detail,
- * full wallet address and copy — never a dead control.
+ * full wallet address and copy - never a dead control.
  */
 export function WorkspaceSwitcher({ collapsed = false }: { collapsed?: boolean }) {
   const { workspace, account } = useWorkspace();

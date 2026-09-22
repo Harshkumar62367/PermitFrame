@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { AuthenticationRequiredError, requireCurrentSession } from "@/server/auth";
 import { loadCampaignEventsNormalized } from "@/server/campaign-store";
 import { findCampaign, campaignTimeline } from "@/server/platform";
+import { scrubStoredText } from "@/server/dkg/public-errors";
 
 export const dynamic = "force-dynamic";
 
@@ -22,10 +23,24 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   if (normalized && normalized.length > 0) {
     const campaign = await findCampaign(id).catch(() => null);
     const comments = (campaign?.comments ?? []).map((c) => ({ kind: "comment", at: c.at, summary: `${c.author}: ${c.text}`, id: c.id }));
-    const evts = normalized.map((e) => ({ kind: e.kind, at: e.at, summary: e.summary, id: e.id }));
+    // System entries predate server-side sanitization in older rows: scrub
+    // operational detail at read time. User comments are never touched.
+    const evts = normalized.map((e) => ({
+      kind: e.kind,
+      at: e.at,
+      summary: scrubStoredText(e.summary, "Recorded entry unavailable — diagnostic detail was withheld."),
+      id: e.id
+    }));
     return NextResponse.json({ timeline: [...evts, ...comments].sort((a, b) => a.at.localeCompare(b.at)).reverse() });
   }
   const campaign = await findCampaign(id);
   if (!campaign) return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
-  return NextResponse.json({ timeline: await campaignTimeline(campaign) });
+  const entries = await campaignTimeline(campaign);
+  return NextResponse.json({
+    timeline: entries.map((entry) =>
+      entry.kind === "comment"
+        ? entry
+        : { ...entry, summary: scrubStoredText(entry.summary, "Recorded entry unavailable — diagnostic detail was withheld.") }
+    )
+  });
 }

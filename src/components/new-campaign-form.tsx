@@ -15,6 +15,8 @@ import {
   SelectValue
 } from "@/components/ui/select";
 import { apiPost } from "@/lib/api";
+import { countryName } from "@/lib/countries";
+import { useLongAction } from "@/lib/use-long-action";
 import { stableAttemptKey } from "@/lib/idempotency-key";
 import { useInvalidateWorkspaceSnapshot, useWorkspaceSnapshot } from "@/lib/use-workspace-snapshot";
 import { cn } from "@/lib/utils";
@@ -32,7 +34,6 @@ interface FieldErrors {
 export function NewCampaignForm({ onCreated }: { onCreated?: (id: string) => void }) {
   const router = useRouter();
   const uid = useId();
-  const countryRef = useRef<HTMLInputElement>(null);
   const briefRef = useRef<HTMLTextAreaElement>(null);
   const [form, setForm] = useState({
     title: "",
@@ -47,11 +48,23 @@ export function NewCampaignForm({ onCreated }: { onCreated?: (id: string) => voi
   });
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  // Creation consults the live ledger (rights + facts reads) before the
+  // permission check returns, so it legitimately takes longer than an
+  // ordinary write - budget two minutes with slow status and refresh-first
+  // recovery. A client abort after server-side persistence is safe: the
+  // stable attempt key below replays the original campaign instead of
+  // duplicating it, and retries stay manual (this button only).
+  const submitAction = useLongAction({
+    working: "Running permission check…",
+    slow: "Still checking approved rights and brand rules. Please keep this page open.",
+    timedOut:
+      "Creating the campaign is taking longer than expected. Refresh this page once before retrying - the campaign may already have been created. Retrying this same submission is safe and will not create a duplicate."
+  });
+  const busy = submitAction.busy;
   const invalidateSnapshot = useInvalidateWorkspaceSnapshot();
   const workspace = useWorkspaceSnapshot();
   const today = new Date().toISOString().slice(0, 10);
-  // Only active, unexpired permissions are offerable — expired or revoked
+  // Only active, unexpired permissions are offerable - expired or revoked
   // rows never reach the selector, so they cannot be submitted.
   const offerablePassports = (workspace.data?.passports ?? []).filter(
     (p) => p.status === "active" && p.validUntil >= today
@@ -59,7 +72,7 @@ export function NewCampaignForm({ onCreated }: { onCreated?: (id: string) => voi
   const creatorName = (id: string) =>
     workspace.data?.creators.find((c) => c.id === id)?.name ?? id;
   const chosenPassport = offerablePassports.find((p) => p.id === form.passportId) ?? null;
-  // Media is always scoped to the chosen permission's creator — other
+  // Media is always scoped to the chosen permission's creator - other
   // creators' items are excluded, never silently substituted.
   const mediaForCreator = (workspace.data?.sourceMedia ?? []).filter(
     (m) => chosenPassport && m.creatorId === chosenPassport.creatorId
@@ -78,29 +91,27 @@ export function NewCampaignForm({ onCreated }: { onCreated?: (id: string) => voi
     if (!form.passportId) errors.permission = "Choose a creator permission — campaigns never pick one automatically.";
     if (!form.sourceMediaId) errors.media = "Choose the source media for this campaign.";
     if (!form.productFactsId) errors.facts = "Choose a brand rule for this campaign.";
-    if (form.country.trim().length !== 2) errors.country = "Use a 2-letter country code (e.g. GR for Greece, DE for Germany).";
+    if (!form.country) errors.country = "Choose a country — only this permission's territories are listed.";
     if (!form.creativeBrief.trim()) errors.brief = "Describe the shot — the studio generates from this brief.";
     else if (form.creativeBrief.trim().length < 12) errors.brief = "Give the brief a little more to work with (12+ characters).";
     return errors;
   }
 
   async function submit() {
-    if (busy) return;
+    if (submitAction.busy) return;
     const errors = validate();
     setFieldErrors(errors);
     setSubmitError(null);
-    if (errors.country) {
-      countryRef.current?.focus();
+    if (errors.country || errors.permission) {
       return;
     }
     if (errors.brief) {
       briefRef.current?.focus();
       return;
     }
-    setBusy(true);
     try {
       const payload = {
-        title: form.title.trim() || `${form.platform} campaign — ${form.country.trim().toUpperCase()}`,
+        title: form.title.trim() || `${form.platform} campaign - ${form.country.trim().toUpperCase()}`,
         platform: form.platform,
         country: form.country.trim().toUpperCase(),
         requestedClaims: form.claims.split(",").map((c) => c.trim()).filter(Boolean),
@@ -112,19 +123,25 @@ export function NewCampaignForm({ onCreated }: { onCreated?: (id: string) => voi
         productFactsId: form.productFactsId
       };
       const serialized = JSON.stringify(payload);
-      attemptRef.current = stableAttemptKey(attemptRef.current, serialized, () => crypto.randomUUID());
-      // Creation consults the live ledger (rights + facts reads) before the
-      // permission check returns, so it legitimately takes longer than an
-      // ordinary write — budget two minutes, still abortable. A client abort
-      // after server-side persistence is safe: retrying with the same key
-      // replays the original campaign instead of duplicating it.
-      const json = await apiPost<{ campaign: { id: string }; deduplicated?: boolean }>(
-        "/api/campaigns",
-        { ...payload, idempotencyKey: attemptRef.current.key },
-        undefined,
-        120_000
+      const attempt = stableAttemptKey(attemptRef.current, serialized, () => crypto.randomUUID());
+      attemptRef.current = attempt;
+      const result = await submitAction.execute(() =>
+        apiPost<{ campaign: { id: string }; deduplicated?: boolean }>(
+          "/api/campaigns",
+          { ...payload, idempotencyKey: attempt.key },
+          undefined,
+          submitAction.timeoutMs
+        )
       );
-      // The new campaign changes visible workspace data — refresh the
+      if (!result.ok || !result.value) {
+        // Input is preserved; only the error is shown. The attempt key is
+        // retained, so retrying this unchanged submission replays rather
+        // than duplicating - a changed form mints a new key above.
+        if (result.message) setSubmitError(result.message);
+        return;
+      }
+      const json = result.value;
+      // The new campaign changes visible workspace data - refresh the
       // shared snapshot in the background before navigating.
       invalidateSnapshot();
       if (onCreated) onCreated(json.campaign.id);
@@ -132,7 +149,6 @@ export function NewCampaignForm({ onCreated }: { onCreated?: (id: string) => voi
     } catch (e) {
       // Input is preserved; only the error is shown.
       setSubmitError(e instanceof Error ? e.message : "Failed to create campaign.");
-      setBusy(false);
     }
   }
 
@@ -143,14 +159,14 @@ export function NewCampaignForm({ onCreated }: { onCreated?: (id: string) => voi
     <div className="rounded-2xl border border-border bg-card p-6">
       <h3 className="text-[15px] font-semibold tracking-tight">New campaign request</h3>
       <p className="mt-1 text-[12.5px] text-muted-foreground">
-        Every campaign is checked against approved rights and brand rules the moment you create it — cleared or blocked, with reasons.
+        Every campaign is checked against approved rights and brand rules the moment you create it - cleared or blocked, with reasons.
       </p>
       <div className="mt-5 grid gap-4 sm:grid-cols-2">
         <div className="space-y-1.5">
           <Label htmlFor={`${uid}-title`} className="text-[12px] text-muted-foreground">Title (optional)</Label>
           <Input
             id={`${uid}-title`}
-            placeholder="Summer launch — reels"
+            placeholder="Summer launch - reels"
             value={form.title}
             onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
             className="rounded-xl"
@@ -162,15 +178,23 @@ export function NewCampaignForm({ onCreated }: { onCreated?: (id: string) => voi
             value={form.passportId}
             disabled={workspaceLoading}
             onValueChange={(v) => {
-              setForm((f) => ({ ...f, passportId: v, sourceMediaId: "" }));
-              setFieldErrors((prev) => ({ ...prev, permission: undefined }));
+              const next = offerablePassports.find((p) => p.id === v) ?? null;
+              setForm((f) => ({
+                ...f,
+                passportId: v,
+                sourceMediaId: "",
+                // Stale territory belongs to the prior permission and can
+                // never pass the check — clear it unless still permitted.
+                country: next && next.countries.includes(f.country) ? f.country : ""
+              }));
+              setFieldErrors((prev) => ({ ...prev, permission: undefined, country: undefined }));
             }}
           >
             <SelectTrigger id={`${uid}-permission`} className="w-full rounded-xl"><SelectValue placeholder={workspaceLoading ? "Loading workspace…" : "Choose whose permission applies"} /></SelectTrigger>
             <SelectContent>
               {offerablePassports.map((p) => (
                 <SelectItem key={p.id} value={p.id}>
-                  {p.creatorName} — {p.platforms.join(", ")} · {p.countries.join(", ")} · until {p.validUntil}
+                  {p.creatorName} - {p.platforms.join(", ")} · {p.countries.join(", ")} · until {p.validUntil}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -232,7 +256,7 @@ export function NewCampaignForm({ onCreated }: { onCreated?: (id: string) => voi
             <SelectTrigger id={`${uid}-facts`} className="w-full rounded-xl"><SelectValue placeholder={workspaceLoading ? "Loading workspace…" : "Choose a brand rule"} /></SelectTrigger>
             <SelectContent>
               {brandRules.map((f) => (
-                <SelectItem key={f.id} value={f.id}>{f.brand} — {f.productName} ({f.approvedClaims.length} approved claims)</SelectItem>
+                <SelectItem key={f.id} value={f.id}>{f.brand} - {f.productName} ({f.approvedClaims.length} approved claims)</SelectItem>
               ))}
             </SelectContent>
           </Select>
@@ -257,21 +281,29 @@ export function NewCampaignForm({ onCreated }: { onCreated?: (id: string) => voi
           </Select>
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor={countryId} className="text-[12px] text-muted-foreground">Country (2-letter code)</Label>
-          <Input
-            ref={countryRef}
-            id={countryId}
-            placeholder="GR"
-            maxLength={2}
-            value={form.country}
-            aria-invalid={Boolean(fieldErrors.country)}
-            aria-describedby={fieldErrors.country ? `${countryId}-error` : undefined}
-            onChange={(e) => {
-              setForm((f) => ({ ...f, country: e.target.value.toUpperCase() }));
+          <Label htmlFor={countryId} className="text-[12px] text-muted-foreground">Country</Label>
+          <Select
+            value={form.country || undefined}
+            disabled={!chosenPassport}
+            onValueChange={(v) => {
+              setForm((f) => ({ ...f, country: v }));
               setFieldErrors((prev) => ({ ...prev, country: undefined }));
             }}
-            className={cn("rounded-xl", fieldErrors.country && "border-rose-500")}
-          />
+          >
+            <SelectTrigger id={countryId} className="w-full rounded-xl">
+              <SelectValue placeholder={chosenPassport ? "Choose a permitted territory" : "Pick a permission first"} />
+            </SelectTrigger>
+            <SelectContent>
+              {(chosenPassport?.countries ?? []).map((c) => (
+                <SelectItem key={c} value={c}>{countryName(c)} · {c}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {chosenPassport && (
+            <p className="text-[11.5px] text-muted-foreground">
+              Only {creatorName(chosenPassport.creatorId)}&apos;s permitted territories are listed — anything else would fail the permission check.
+            </p>
+          )}
           {fieldErrors.country && (
             <p id={`${countryId}-error`} role="alert" className="text-[12px] text-rose-600 dark:text-rose-300">
               {fieldErrors.country}
@@ -323,7 +355,7 @@ export function NewCampaignForm({ onCreated }: { onCreated?: (id: string) => voi
       </div>
       {submitError && (
         <p role="alert" className="mt-3 break-words text-[12.5px] text-rose-600 dark:text-rose-300">
-          {submitError} Your input is preserved — fix and retry.
+          {submitError} Your input is preserved - fix and retry.
         </p>
       )}
       <Button
@@ -337,7 +369,7 @@ export function NewCampaignForm({ onCreated }: { onCreated?: (id: string) => voi
         {busy ? "Running permission check…" : "Create & run permission check"}
       </Button>
       <p id={`${uid}-submit-hint`} className="mt-2 text-[11.5px] text-muted-foreground">
-        {busy ? "Permission check running — duplicate clicks are ignored, and a retry of this same submission reuses its result. Checking the ledger can take up to a minute." : "Country, creative brief, permission, media, and brand rule are required."}
+        {busy && submitAction.status ? submitAction.status : "Country, creative brief, permission, media, and brand rule are required."}
       </p>
     </div>
   );

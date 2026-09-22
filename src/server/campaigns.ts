@@ -28,7 +28,9 @@ import {
   reserveIdempotencySlot,
   withIdempotencyLock
 } from "./idempotency";
-import { createJobRecords, publishCampaignRecord, requestMetaFor, runProduction } from "./livepeer/pipeline";
+import { publishCampaignRecord, requestMetaFor } from "./livepeer/pipeline";
+import { getTemplate, validateTemplateSelection, type TemplateSelection } from "./livepeer/templates";
+import { checkProfileAccess, resolveEntitlements } from "./entitlements";
 
 export async function loadCampaign(id: string): Promise<Campaign | undefined> {
   return (await loadDb()).campaigns.find((c) => c.id === id);
@@ -54,7 +56,7 @@ export async function requireWorkspaceOwner(): Promise<{ userId: string; workspa
 /** Archived campaigns are read-only history: no edits, production, approval or variants. */
 export function throwIfArchived(campaign: Campaign, action: string): void {
   if (campaign.status === "archived") {
-    throw new Error(`Archived campaigns are read-only — “${campaign.title}” cannot be ${action}. It is kept for audit history.`);
+    throw new Error(`Archived campaigns are read-only - “${campaign.title}” cannot be ${action}. It is kept for audit history.`);
   }
 }
 
@@ -80,6 +82,7 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Campai
     status: "draft",
     jobs: [],
     receipts: [],
+    runs: [],
     comments: [],
     captions: [],
     creatorId: input.creatorId,
@@ -108,7 +111,7 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Campai
  * same-key requests into a single creation whose result is shared.
  *
  * - 201 created: first completion under this key.
- * - 200 replayed (`deduplicated: true`): retry of an already-completed key —
+ * - 200 replayed (`deduplicated: true`): retry of an already-completed key -
  *   returns the ORIGINAL campaign id, never a new row.
  * - "processing"/"failed" rows with no live holder (crashed or timed-out
  *   attempt) are taken over and run once more; failed attempts never replay.
@@ -131,7 +134,8 @@ export async function createCampaignIdempotent(
     country: input.request.country,
     requestedClaims: input.request.requestedClaims,
     transformation: input.request.transformation,
-    creativeBrief: input.request.creativeBrief
+    creativeBrief: input.request.creativeBrief,
+    qualityProfile: input.request.qualityProfile
   });
   return withIdempotencyLock(lockKey, async () => {
     const now = nowIso();
@@ -155,7 +159,7 @@ export async function createCampaignIdempotent(
     if (original) return { campaign: original, deduplicated: true };
     // Defensive only (campaigns have no delete path): the slot claims a
     // campaign that no longer exists, so create once under the same key
-    // rather than bricking the submission — UNLESS it was hard-deleted, in
+    // rather than bricking the submission - UNLESS it was hard-deleted, in
     // which case resurrecting it would violate the deletion. Answer 410.
     const db = await loadDb();
     if (isDeleted(db, reserved.campaignId)) {
@@ -187,6 +191,94 @@ export async function rePreflight(id: string): Promise<Campaign | undefined> {
   return loadCampaign(id);
 }
 
+/**
+ * Apply a template-driven production spec, then rebuild the plan through
+ * the normal preflight path (rights are re-checked; a re-block keeps
+ * generation locked). Only allow-verdict campaigns may apply a template -
+ * blocked campaigns never reach generation. Queued jobs for retired stages
+ * are dropped (they never ran - nothing was spent); delivered, failed, and
+ * preview history is kept.
+ */
+/**
+ * States where a job may already be handed to Livepeer (or about to be).
+ * Template apply never prunes or alters these - a `generating` row with no
+ * output URL can still be rendering remotely, and a `queued` row cannot be
+ * proven undispatched (dispatch is not separately persisted), so queued
+ * rows are never pruned either.
+ */
+export const ACTIVE_JOB_STATUSES: ProductionJob["status"][] = [
+  "queued",
+  "generating",
+  "preview_ready",
+  "storage_pending"
+];
+
+/**
+ * Pure readiness gate for template apply: refuse while any active job
+ * exists. Tested directly; applyTemplateSpec enforces it before touching
+ * anything.
+ */
+export function checkTemplateApplyReadiness(campaign: Pick<Campaign, "jobs">): string | null {
+  const active = campaign.jobs.filter((j) => (ACTIVE_JOB_STATUSES as string[]).includes(j.status));
+  if (active.length > 0) {
+    return "Wait for active generation to finish or fail before changing the production template.";
+  }
+  return null;
+}
+
+export async function applyTemplateSpec(id: string, raw: unknown): Promise<{ campaign?: Campaign; error?: string }> {
+  const campaign = await loadCampaign(id);
+  if (!campaign) return { error: "Campaign not found" };
+  try {
+    throwIfArchived(campaign, "re-planned");
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Archived campaigns are read-only." };
+  }
+  if (campaign.preflight?.decision !== "allow") {
+    return { error: "Resolve the rights block before choosing a production template - blocked campaigns never reach generation." };
+  }
+  const tier = resolveEntitlements();
+  const validated = validateTemplateSelection(raw, tier.maxCustomStages);
+  if (!validated.ok || !validated.spec) return { error: validated.error ?? "Invalid template selection." };
+  const spec: TemplateSelection = validated.spec;
+  const template = getTemplate(spec.templateId);
+  if (!template) return { error: `Unknown template "${spec.templateId}".` };
+  const profileGate = checkProfileAccess(spec.qualityProfile, tier);
+  if (profileGate) return { error: profileGate };
+  // Active jobs may already be rendering at Livepeer - refuse rather than
+  // orphan them. Delivered/failed/storage history is kept untouched.
+  const readiness = checkTemplateApplyReadiness(campaign);
+  if (readiness) return { error: readiness };
+
+  await updateDb((d) => {
+    const c = d.campaigns.find((x) => x.id === id);
+    if (!c) return;
+    c.request.productionSpec = spec;
+    c.request.qualityProfile = spec.qualityProfile;
+    c.updatedAt = nowIso();
+  });
+  const rebuilt = await rePreflight(id);
+  if (!rebuilt) return { error: "Campaign not found" };
+  if (rebuilt.preflight?.decision !== "allow") {
+    return { error: "Rights re-check blocked the campaign - fix the rights issue before producing." };
+  }
+  await updateDb((d) => {
+    const c = d.campaigns.find((x) => x.id === id);
+    if (!c) return;
+    c.updatedAt = nowIso();
+    d.events.push({
+      id: newId("evt"),
+      at: nowIso(),
+      kind: "template.apply",
+      summary: `Production template "${template.title}" applied (${spec.packSize} pack). Prior outputs stay as history.`,
+      refs: [id]
+    });
+  });
+  const final = await loadCampaign(id);
+  if (!final) return { error: "Campaign not found" };
+  return { campaign: final };
+}
+
 export interface BriefPatch {
   title?: string;
   creativeBrief?: string;
@@ -208,7 +300,7 @@ const PLATFORMS: Platform[] = ["instagram", "tiktok", "youtube", "linkedin"];
  * transformation) re-run preflight and can re-block the campaign, which
  * locks generation via the existing allow-gate. Structural inputs
  * (platform, country, transformation, source media) are locked once
- * production has started — use a platform variant instead.
+ * production has started - use a platform variant instead.
  */
 export async function updateCampaignBrief(
   id: string,
@@ -228,7 +320,7 @@ export async function updateCampaignBrief(
     patch.transformation !== undefined ||
     patch.sourceMediaId !== undefined;
   if (structural && campaign.jobs.length > 0) {
-    return { error: "Platform, country, format and source are locked once production has started — clone a platform variant instead." };
+    return { error: "Platform, country, format and source are locked once production has started - clone a platform variant instead." };
   }
 
   if (patch.platform !== undefined && !PLATFORMS.includes(patch.platform)) {
@@ -292,12 +384,13 @@ export async function updateCampaignBrief(
   return { campaign: final };
 }
 
-/** Kick off production: job records are created synchronously, execution runs in background. */
+/** Kick off production: durable records are created synchronously and the request returns fast with a run id; the dependency-aware pump executes in the background (bounded concurrency) and any later request resumes it. */
 export async function startProduction(
   id: string,
   capabilityOverride?: string,
-  stageIds?: string[]
-): Promise<{ started: boolean; error?: string }> {
+  stageIds?: string[],
+  idempotencyKey?: string
+): Promise<{ started: boolean; runId?: string; error?: string }> {
   const campaign = await loadCampaign(id);
   if (!campaign) return { started: false, error: "Campaign not found" };
   try {
@@ -305,81 +398,26 @@ export async function startProduction(
   } catch (e) {
     return { started: false, error: e instanceof Error ? e.message : "Archived campaigns are read-only." };
   }
-  if (campaign.preflight?.decision !== "allow") return { started: false, error: "Preflight has not approved this campaign" };
-
-  const planIds = (campaign.preflight?.plan ?? []).map((s) => s.id);
-  const wanted = stageIds && stageIds.length > 0 ? stageIds.filter((s) => planIds.includes(s)) : planIds;
-  if (wanted.length === 0) return { started: false, error: "No matching plan stages selected" };
-
-  if (campaign.jobs.length > 0) {
-    // resume: keep delivered stages, reset failed ones (and storage-retry
-    // stages being regenerated) and queue any selected stages that have no
-    // job record yet (generate-remaining).
-    const resetIds: string[] = [];
-    await updateDb((d) => {
-      const c = d.campaigns.find((x) => x.id === id);
-      if (!c) return;
-      for (const j of c.jobs) {
-        if ((j.status === "failed" || j.status === "storage_retry_needed") && wanted.includes(j.stageId)) {
-          if (capabilityOverride?.trim()) j.capability = capabilityOverride.trim();
-          j.status = "queued";
-          j.error = undefined;
-          resetIds.push(j.id);
-        }
-      }
-      const covered = new Set(c.jobs.map((j) => j.stageId));
-      for (const stageId of wanted) {
-        if (covered.has(stageId)) continue;
-        const stage = campaign.preflight?.plan.find((s) => s.id === stageId);
-        if (!stage) continue;
-        c.jobs.push({
-          id: newId("job"),
-          campaignId: id,
-          stageId: stage.id,
-          kind: stage.kind,
-          capability: capabilityOverride?.trim() || stage.capability,
-          prompt: composeStagePrompt(campaign, stage.id),
-          requestMeta: requestMetaFor(stage),
-          status: "queued",
-          startedAt: nowIso()
-        });
-      }
-      c.status = "generating";
-      c.updatedAt = nowIso();
-    });
-    // Regenerated outputs deserve a fresh storage budget: drop stale asset
-    // rows so the new generation persists under the same job id.
-    if (resetIds.length > 0) {
-      const { campaignAssets } = await import("./db/schema");
-      const { inArray } = await import("drizzle-orm");
-      await getDb().delete(campaignAssets).where(inArray(campaignAssets.jobId, resetIds)).catch(() => undefined);
-    }
-  } else {
-    const jobs = createJobRecords(campaign, wanted);
-    await updateDb((d) => {
-      const c = d.campaigns.find((x) => x.id === id);
-      if (c) {
-        c.jobs = jobs;
-        c.status = "generating";
-        c.updatedAt = nowIso();
-      }
-    });
+  // workspaceId is resolved here (request context) because the pump below outlives the response.
+  let workspaceId: string;
+  try {
+    workspaceId = (await requireCurrentSession()).workspaceId;
+  } catch {
+    return { started: false, error: "Authentication required" };
   }
-  // background execution of exactly the selected stages; UI polls GET /api/campaigns/[id] for progress
-  // workspaceId is resolved here (request context) because the worker below outlives the response.
-  const { workspaceId } = await requireCurrentSession();
-  void runProduction(id, wanted, workspaceId).catch(() => undefined);
-  await updateDb((d) => {
-    d.events.push({
-      id: newId("evt"),
-      at: nowIso(),
-      kind: "production.start",
-      summary: `Livepeer production started for "${campaign.title}" — only preflight-approved stages may run.`,
-      refs: [id]
-    });
+  const { submitRun, pumpRun } = await import("./livepeer/runner");
+  const submitted = await submitRun({
+    campaignId: id,
+    stageIds,
+    capabilityOverride,
+    idempotencyKey,
+    workspaceId
   });
-  return { started: true };
+  if (!submitted.run) return { started: false, error: submitted.error ?? "Run submission failed" };
+  void pumpRun(workspaceId, id, { runId: submitted.run.id, budgetMs: 8 * 60 * 1000 }).catch(() => undefined);
+  return { started: true, runId: submitted.run.id };
 }
+
 
 /** Reviewer refinement: regenerate one stage with new instructions. */
 export async function reviseStage(id: string, stageId: string, instructions: string): Promise<{ started: boolean; error?: string }> {
@@ -393,16 +431,31 @@ export async function reviseStage(id: string, stageId: string, instructions: str
   const stage = campaign.preflight?.plan.find((s) => s.id === stageId);
   if (!stage) return { started: false, error: "Unknown stage" };
 
+  // Refinements vary the latest usable output when one exists (controlled
+  // alternative via create_variations); otherwise they generate normally.
+  const priorOutput = [...campaign.jobs]
+    .reverse()
+    .find((j) => j.stageId === stageId && (j.providerOutputUrl ?? j.outputUrl));
+  const variationSourceUrl = priorOutput?.providerOutputUrl ?? priorOutput?.outputUrl;
+
   const revised: ProductionJob = {
     id: newId("job"),
     campaignId: id,
     stageId,
     kind: stage.kind,
     capability: stage.capability,
+    requestedCapability: stage.capability,
+    qualityProfile: stage.qualityProfile,
+    role: stage.role,
     prompt: `${composeStagePrompt(campaign, stageId)} Reviewer refinement: ${instructions.trim()}`,
     requestMeta: requestMetaFor(stage),
     status: "queued",
-    startedAt: nowIso()
+    startedAt: nowIso(),
+    // Explicit refinement: dispatch may vary the selected output via
+    // create_variations. Set only here (and the variations action) - never
+    // on initial production, so automatic variation is impossible.
+    variationExplicit: true,
+    ...(variationSourceUrl ? { variationSourceUrl } : {})
   };
   await updateDb((d) => {
     const c = d.campaigns.find((x) => x.id === id);
@@ -413,10 +466,87 @@ export async function reviseStage(id: string, stageId: string, instructions: str
   return { started: true };
 }
 
-async function runSingleJob(campaignId: string, jobId: string, workspaceId?: string): Promise<void> {
-  // Queue only the target job; the stage filter makes runProduction skip
-  // everything else without touching it (no more marking queued stages
-  // succeeded just to skip them).
+/**
+ * Explicit "Create variations" action: derive additional assets from one
+ * selected COMPLETED image output (ready_to_share only). The original stays
+ * intact; each variation is a separate derivative job with its own spend.
+ * Never runs automatically - this function is the only entry point besides
+ * reviseStage, and both require a user action on a finished asset.
+ */
+export async function createVariationRun(
+  id: string,
+  receiptId: string,
+  count = 2
+): Promise<{ started: boolean; jobIds?: string[]; runId?: string; error?: string }> {
+  const campaign = await loadCampaign(id);
+  if (!campaign) return { started: false, error: "Campaign not found" };
+  try {
+    throwIfArchived(campaign, "varied");
+  } catch (e) {
+    return { started: false, error: e instanceof Error ? e.message : "Archived campaigns are read-only." };
+  }
+  if (campaign.preflight?.decision !== "allow") {
+    return { started: false, error: "Rights are not currently allowed - variations are refused before any spend." };
+  }
+  const receipt = campaign.receipts.find((r) => r.id === receiptId);
+  if (!receipt) return { started: false, error: "Output not found" };
+  if (receipt.mediaType !== "image") return { started: false, error: "Variations are available for images only." };
+  const sourceJob = campaign.jobs.find((j) => j.id === receipt.jobId);
+  if (!sourceJob || sourceJob.status !== "ready_to_share") {
+    return { started: false, error: "Variations start from a completed stored output - this one is not ready yet." };
+  }
+  const stage = campaign.preflight?.plan.find((s) => s.id === sourceJob.stageId);
+  if (!stage) return { started: false, error: "Unknown stage" };
+  if (stage.kind !== "image-to-image" && stage.kind !== "text-to-image") {
+    return { started: false, error: "Variations are not supported for this stage kind." };
+  }
+  const variationSourceUrl = sourceJob.providerOutputUrl ?? sourceJob.outputUrl;
+  if (!variationSourceUrl || !/^https:\/\//i.test(variationSourceUrl)) {
+    return { started: false, error: "The selected output has no usable source URL - nothing was started." };
+  }
+  const safeCount = Math.min(Math.max(Math.trunc(count) || 1, 1), 4);
+  const jobs: ProductionJob[] = [];
+  for (let i = 0; i < safeCount; i++) {
+    jobs.push({
+      id: newId("job"),
+      campaignId: id,
+      stageId: stage.id,
+      kind: stage.kind,
+      capability: stage.capability,
+      requestedCapability: stage.capability,
+      qualityProfile: stage.qualityProfile,
+      role: stage.role,
+      prompt: `${composeStagePrompt(campaign, stage.id)} Explicit variation ${i + 1} of ${safeCount} from the selected completed output: keep the subject and product recognizable, vary composition and light.`,
+      requestMeta: {
+        ...requestMetaFor(stage),
+        preservationRequested: "variation"
+      },
+      status: "queued",
+      startedAt: nowIso(),
+      variationExplicit: true,
+      variationSourceUrl
+    });
+  }
+  await updateDb((d) => {
+    const c = d.campaigns.find((x) => x.id === id);
+    if (c) c.jobs.push(...jobs);
+  });
+  const { workspaceId } = await requireCurrentSession();
+  // One exact-job run for all derivatives: progress reads 2/2, the ledger
+  // carries one entry per derivative job, and cancellation addresses only
+  // these ids. The original stage is never re-run; each derivative keeps
+  // its own idempotency key and provider call.
+  const { submitRun, pumpRun } = await import("./livepeer/runner");
+  const submitted = await submitRun({ campaignId: id, jobIds: jobs.map((j) => j.id), workspaceId });
+  if (!submitted.run) return { started: false, error: submitted.error ?? "Variation run submission failed" };
+  void pumpRun(workspaceId, id, { runId: submitted.run.id, budgetMs: 8 * 60 * 1000 }).catch(() => undefined);
+  return { started: true, jobIds: jobs.map((j) => j.id), runId: submitted.run.id };
+}
+
+async function runSingleJob(campaignId: string, jobId: string, workspaceId?: string): Promise<string | undefined> {
+  // Exact-job run: only the target job dispatches, is polled, and settles -
+  // siblings sharing its stageId are never selected, reset, failed, or
+  // counted merely for sharing it (no more stage-filtered re-runs).
   await updateDb((d) => {
     const c = d.campaigns.find((x) => x.id === campaignId);
     if (!c) return;
@@ -424,8 +554,31 @@ async function runSingleJob(campaignId: string, jobId: string, workspaceId?: str
     if (target) target.status = "queued";
     c.status = "generating";
   });
-  const target = (await loadCampaign(campaignId))?.jobs.find((j) => j.id === jobId);
-  await runProduction(campaignId, target ? [target.stageId] : [], workspaceId);
+  const { submitRun, pumpRun } = await import("./livepeer/runner");
+  const submitted = await submitRun({ campaignId, jobIds: [jobId], workspaceId }).catch(
+    (): { run?: undefined; created: boolean; workspaceId?: string } => ({ created: false })
+  );
+  if (!submitted.run) return undefined;
+  void pumpRun(submitted.workspaceId ?? workspaceId ?? "", campaignId, { runId: submitted.run.id, budgetMs: 8 * 60 * 1000 }).catch(() => undefined);
+  return submitted.run.id;
+}
+
+/** Cancel queued/in-flight jobs. Provider confirmation gates provider-side claims. */
+export async function cancelCampaignJobs(
+  id: string,
+  jobIds?: string[]
+): Promise<{ results: import("./livepeer/runner").CancelResult[]; error?: string }> {
+  const campaign = await loadCampaign(id);
+  if (!campaign) return { results: [], error: "Campaign not found" };
+  try {
+    throwIfArchived(campaign, "cancelled in");
+  } catch (e) {
+    return { results: [], error: e instanceof Error ? e.message : "Archived campaigns are read-only." };
+  }
+  const { workspaceId } = await requireCurrentSession();
+  const { cancelRunJobs } = await import("./livepeer/runner");
+  const results = await cancelRunJobs(workspaceId, id, jobIds);
+  return { results };
 }
 
 export async function approveCampaign(id: string): Promise<{ approved: boolean; ual?: string; publicationStatus?: PublicationStatus; verificationRef?: string; verificationWarning?: string; error?: string }> {
@@ -440,12 +593,32 @@ export async function approveCampaign(id: string): Promise<{ approved: boolean; 
   // whose preflight denies must never be approvable.
   if (effectiveCampaignStatus(campaign) === "blocked") return { approved: false, error: "Blocked campaigns cannot be approved" };
   if (campaign.jobs.filter((j) => j.status === "ready_to_share").length === 0) {
-    return { approved: false, error: "Produce the campaign pack before approving — previews and unsaved outputs cannot be signed off yet" };
+    return { approved: false, error: "Produce the campaign pack before approving - previews and unsaved outputs cannot be signed off yet" };
   }
   // Proof needs durable identity: provider-hosted legacy outputs must be
   // stored securely first — approval publishes evidence, never previews.
   if (!campaign.receipts.some((r) => hasSharableReceipt(r))) {
     return { approved: false, error: "Store outputs securely before approving — provider-hosted legacy assets cannot be published as proof yet" };
+  }
+  // Aspect honesty: a stored output whose measured file differs from the
+  // requested placement is never Ready for that placement. Name the stages
+  // and point at the explicit regenerate action — nothing auto-retries.
+  const mismatched = campaign.receipts.filter((r) => hasSharableReceipt(r) && r.aspectVerdict === "mismatch");
+  if (mismatched.length > 0) {
+    const names = mismatched
+      .map((r) => {
+        const actual =
+          r.actualWidth !== undefined && r.actualHeight !== undefined
+            ? `${r.actualWidth}×${r.actualHeight}`
+            : "unknown size";
+        return `“${r.label}” (requested ${r.format}, received ${actual})`;
+      })
+      .join("; ")
+      .slice(0, 220);
+    return {
+      approved: false,
+      error: `Aspect check failed — ${names}. Regenerate the listed stage${mismatched.length === 1 ? "" : "s"} for the planned placement, then approve.`
+    };
   }
   await updateDb((d) => {
     const c = d.campaigns.find((x) => x.id === id);
@@ -504,10 +677,10 @@ export async function approveCampaign(id: string): Promise<{ approved: boolean; 
  * Hard-delete a campaign. Owner-only. Allowed solely for workspace-local
  * drafts (see deletionEligibility): the row, jobs, receipts and plan are
  * removed, a tombstone is recorded (idempotent retries succeed), activity
- * events stay, and DKG state is never touched — deletable campaigns have no
+ * events stay, and DKG state is never touched - deletable campaigns have no
  * public proof by construction.
  *
- * Archived records are refused UNLESS `force: true` is passed explicitly —
+ * Archived records are refused UNLESS `force: true` is passed explicitly -
  * the hidden last-resort path. Even force never deletes while jobs run, and
  * force on a non-archived campaign is rejected (use the normal flows).
  */
@@ -534,7 +707,7 @@ export async function deleteCampaign(
     }
   } else {
     if (opts?.force) {
-      throw new CampaignProtectedError(["Force delete applies only to archived records — use the normal delete or archive flow."], true);
+      throw new CampaignProtectedError(["Force delete applies only to archived records - use the normal delete or archive flow."], true);
     }
     const eligibility = deletionEligibility(campaign);
     if (!eligibility.deletable) {
@@ -555,7 +728,7 @@ export async function deleteCampaign(
  * Owner-only "Refresh verification link" for pre-snapshot approvals: builds a
  * NEW opaque snapshot from the campaign's REAL current data (honest
  * publication status included) and attaches its reference. Never marks
- * anything verified, never rewrites status or proof — a record whose publish
+ * anything verified, never rewrites status or proof - a record whose publish
  * never anchored still reads "Campaign record saved", not public.
  */
 export async function refreshVerificationSnapshot(id: string): Promise<{ verificationRef: string; created: boolean }> {

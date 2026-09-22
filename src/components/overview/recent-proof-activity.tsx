@@ -62,7 +62,7 @@ function formatTime(at: string): { title: string; short: string } {
 
 /**
  * Compact proof feed: real application events with evidence links.
- * Honest empty state when nothing has happened yet — never synthetic rows.
+ * Honest empty state when nothing has happened yet - never synthetic rows.
  */
 export function RecentProofActivity({ activity }: { activity: SnapshotActivityItem[] }) {
   const [open, setOpen] = useState(true);
@@ -91,7 +91,7 @@ export function RecentProofActivity({ activity }: { activity: SnapshotActivityIt
           <div className="mt-3">
             <EmptyState
               title="No workspace activity yet"
-              body="Brief a campaign — its permission-check decision is recorded here with the evidence behind it."
+              body="Brief a campaign - its permission-check decision is recorded here with the evidence behind it."
             />
           </div>
         ) : (

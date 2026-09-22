@@ -18,7 +18,7 @@ const execFileAsync = promisify(execFile);
  *
  * Selection is env-driven (see createTransportFromEnv): setting
  * DKG_SSH_HOST switches the app to the remote node. No code changes,
- * no secrets in the repo — hosts, users and key *paths* live in env,
+ * no secrets in the repo - hosts, users and key *paths* live in env,
  * key *content* arrives via DKG_SSH_KEY_INLINE on hosted platforms.
  */
 export interface CliTransport {
@@ -26,7 +26,7 @@ export interface CliTransport {
   run(args: string[], timeoutMs?: number): Promise<string>;
 }
 
-/** Local daemon transport — the historical default. */
+/** Local daemon transport - the historical default. */
 export class LocalCliTransport implements CliTransport {
   constructor(private readonly bin: string = process.env.DKG_CLI_BIN ?? "dkg") {}
 
@@ -52,7 +52,7 @@ export interface SshTransportConfig {
 }
 
 /**
- * Null when DKG_SSH_HOST is unset — the caller then uses LocalCliTransport.
+ * Null when DKG_SSH_HOST is unset - the caller then uses LocalCliTransport.
  * When a host IS set, every other value is required and a missing one
  * throws naming exactly what to add. Server details live in env, never
  * in code, so a future instance only changes env vars.

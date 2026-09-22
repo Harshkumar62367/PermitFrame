@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { appendShareReview, lookupShare, ShareNotFoundError } from "@/server/public-share";
+import { logDkgError, sanitizeDkgError } from "@/server/dkg/public-errors";
 
 export const dynamic = "force-dynamic";
 
 /**
  * Public share API. Session-free by design: both reads and review submits
- * work logged out. Responses carry ONLY the whitelisted public view — the
+ * work logged out. Responses carry ONLY the whitelisted public view - the
  * legacy shape (full campaign fields, receipt-id verify links) is gone.
  */
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ token: string }> }) {
@@ -34,6 +35,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     if (e instanceof ShareNotFoundError) {
       return NextResponse.json({ error: e.message }, { status: 404 });
     }
-    return NextResponse.json({ error: (e as Error).message }, { status: 400 });
+    logDkgError("share-review", e);
+    const safe = sanitizeDkgError(e, "workspace");
+    return NextResponse.json({ error: safe.message, code: safe.code }, { status: safe.status });
   }
 }

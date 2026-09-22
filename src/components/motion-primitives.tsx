@@ -33,7 +33,7 @@ export function FadeIn({
   delay?: number;
   y?: number;
   className?: string;
-  /** Subtle 150–250ms entrance for above-the-fold dashboard content. */
+  /** Subtle 150-250ms entrance for above-the-fold dashboard content. */
   subtle?: boolean;
 }) {
   const reduce = useReducedMotion();

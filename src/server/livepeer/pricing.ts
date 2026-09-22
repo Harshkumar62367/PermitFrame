@@ -64,6 +64,17 @@ export async function fetchLivePriceMap(): Promise<Map<string, LivePrice> | null
   return pending;
 }
 
+/**
+ * Cached prices only - never fetches. The status route uses this so a cold
+ * pricing cache cannot block the response: estimates come back null (shown
+ * as unquotable) and the run's stored estimate stands in. Missing live
+ * pricing is never a generation failure.
+ */
+export function peekLivePriceMap(): Map<string, LivePrice> | null {
+  if (cached && cached.expiresAt > Date.now()) return cached.prices;
+  return null;
+}
+
 export interface StageQuote {
   usd: number;
   /** True only when derived from a live per-image/per-second price. */
@@ -74,7 +85,7 @@ export interface StageQuote {
  * Expected cost for one plan stage. Live per-image and per-second prices map
  * accurately (video uses the stage duration, defaulting to 5s); per-megapixel
  * and exotic units (tokens, tracks, calls) cannot be quoted exactly, so the
- * historical static map fills in and the quote is marked inexact — callers
+ * historical static map fills in and the quote is marked inexact - callers
  * must label it an estimate, never a live price.
  */
 export function quoteStage(
@@ -96,7 +107,7 @@ export function quoteStage(
  * Server-side spend ceiling for one `create_media` call: 3x the expected
  * cost (live when exactly mappable, else historical), floored at $0.25 and
  * defaulting to $5 when nothing is mappable. Bounds runaway renders; it is
- * not a price quote — the user confirms the estimate separately.
+ * not a price quote - the user confirms the estimate separately.
  */
 export function stageSpendingCeiling(
   stage: { capability: string; kind: string },

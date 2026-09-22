@@ -13,6 +13,8 @@ import { ErrorState } from "@/components/ui/error-state";
 import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
 import { CopyableIdentifier } from "@/components/ui/identifier";
 import { apiGet, apiPost, describeRecord } from "@/lib/api";
+import { COUNTRIES, countryName } from "@/lib/countries";
+import { useLongAction } from "@/lib/use-long-action";
 import { cn } from "@/lib/utils";
 
 interface ConsentData {
@@ -25,9 +27,11 @@ interface ConsentData {
   };
   creator: { name: string; handle: string } | null;
 }
-
 const ALL_PLATFORMS = ["instagram", "tiktok", "youtube", "linkedin"];
-const ALL_COUNTRIES = ["US", "GR", "DE", "IN", "GB"];
+
+// Full ISO territory list (values stay 2-letter codes — the server contract
+// is unchanged); the five-country shortlist used to hide valid options.
+const ALL_COUNTRIES = COUNTRIES.map((c) => c.code);
 const ALL_TRANSFORMS = ["edit", "animate", "crop", "upscale"];
 
 export default function ConsentPage() {
@@ -36,7 +40,17 @@ export default function ConsentPage() {
   const [data, setData] = useState<ConsentData | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [result, setResult] = useState<{ passportId: string; ual?: string; explorerUrl?: string } | null>(null);
-  const [busy, setBusy] = useState(false);
+  // Attestation creates the passport and publishes it, so it can
+  // legitimately outlast the default 30s browser budget - 120s with slow
+  // status and refresh-first recovery. Selections are preserved either way,
+  // and the server rejects a second attestation of the same link.
+  const attestAction = useLongAction({
+    working: "Recording your permission…",
+    slow: "Still recording your permission. Please keep this page open - proof services can take a little longer.",
+    timedOut:
+      "Recording is taking longer than expected. Refresh this page once before retrying - your permission may already have been recorded."
+  });
+  const busy = attestAction.busy;
   const [form, setForm] = useState({ platforms: [] as string[], countries: [] as string[], transforms: [] as string[], validUntil: "" });
   const [fieldErrors, setFieldErrors] = useState<{ platforms?: string; countries?: string; validUntil?: string }>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -86,9 +100,9 @@ export default function ConsentPage() {
   }
 
   async function attest() {
-    if (busy) return;
+    if (attestAction.busy) return;
     const errors: typeof fieldErrors = {};
-    if (form.platforms.length === 0) errors.platforms = "Choose at least one platform — otherwise the passport permits nothing.";
+    if (form.platforms.length === 0) errors.platforms = "Choose at least one platform - otherwise the passport permits nothing.";
     if (form.countries.length === 0) errors.countries = "Choose at least one territory.";
     if (!/^\d{4}-\d{2}-\d{2}$/.test(form.validUntil)) errors.validUntil = "Pick an expiry date from the calendar.";
     else if (form.validUntil <= new Date().toISOString().slice(0, 10)) errors.validUntil = "Expiry must be in the future.";
@@ -96,21 +110,20 @@ export default function ConsentPage() {
     setSubmitError(null);
     if (errors.platforms || errors.countries || errors.validUntil) return;
 
-    setBusy(true);
-    try {
-      const j = await apiPost<{ passportId: string; ual?: string; explorerUrl?: string }>(`/api/consent/${params.token}`, {
+    const result = await attestAction.execute(() =>
+      apiPost<{ passportId: string; ual?: string; explorerUrl?: string }>(`/api/consent/${params.token}`, {
         platforms: form.platforms,
         countries: form.countries,
         allowedTransformations: form.transforms,
         validUntil: form.validUntil
-      });
-      setResult({ passportId: j.passportId, ual: j.ual, explorerUrl: j.explorerUrl });
-    } catch (e) {
+      }, undefined, attestAction.timeoutMs)
+    );
+    if (!result.ok || !result.value) {
       // Selections are preserved for retry.
-      setSubmitError(e instanceof Error ? e.message : "Attestation failed. Your selections are preserved.");
-    } finally {
-      setBusy(false);
+      if (result.message) setSubmitError(result.message);
+      return;
     }
+    setResult({ passportId: result.value.passportId, ual: result.value.ual, explorerUrl: result.value.explorerUrl });
   }
 
   if (loadError && !data) {
@@ -143,7 +156,7 @@ export default function ConsentPage() {
             <h1 className="font-display mt-5 text-2xl font-semibold tracking-tight">Permission attested</h1>
             <p className="mx-auto mt-2 max-w-sm text-[13.5px] leading-relaxed text-white/55">
               Your Permission Passport is live. Agencies can now produce campaigns inside
-              exactly the rights you granted — nothing more.
+              exactly the rights you granted - nothing more.
             </p>
             <p role="status" className="mx-auto mt-4 max-w-sm text-[12px] leading-relaxed text-white/70">
               {record.headline}. {record.detail}
@@ -158,13 +171,13 @@ export default function ConsentPage() {
                 {result.explorerUrl ? (
                   <a href={result.explorerUrl} target="_blank" rel="noreferrer" className="underline underline-offset-2">view in explorer</a>
                 ) : (
-                  <span title={result.ual}>Working Memory record — no explorer anchor yet</span>
+                  <span title={result.ual}>Working Memory record - no explorer anchor yet</span>
                 )}
               </p>
             )}
             {data.status === "completed" && !result && (
               <p className="mx-auto mt-4 max-w-sm text-[12px] text-white/55">
-                This link was already used — the passport is recorded in the evidence layer.
+                This link was already used - the passport is recorded in the evidence layer.
               </p>
             )}
           </div>
@@ -190,7 +203,7 @@ export default function ConsentPage() {
           </h1>
           <p className="mt-2.5 text-[13.5px] leading-relaxed text-muted-foreground">
             Choose exactly what the agency may do with your content. This attests your
-            declaration and its integrity — minimized data is published, never your personal
+            declaration and its integrity - minimized data is published, never your personal
             details.
           </p>
         </FadeIn>
@@ -212,10 +225,11 @@ export default function ConsentPage() {
               selected={form.countries}
               error={fieldErrors.countries}
               onToggle={(v) => toggle("countries", v)}
+              optionLabel={(v) => `${countryName(v)} · ${v}`}
             />
             <ChoiceGroup
               label="Allowed transformations"
-              hint="What the agency may do to your content. Optional — empty means display only."
+              hint="What the agency may do to your content. Optional - empty means display only."
               options={ALL_TRANSFORMS}
               selected={form.transforms}
               onToggle={(v) => toggle("transforms", v)}
@@ -253,8 +267,8 @@ export default function ConsentPage() {
               <p id={`${uid}-attest-hint`} className="mt-2 text-[11.5px] text-muted-foreground">
                 {!canSubmit
                   ? "Attestation is disabled until at least one platform and one territory are chosen."
-                  : busy
-                    ? "Attesting — duplicate clicks are ignored and your selections are preserved on failure."
+                  : busy && attestAction.status
+                    ? attestAction.status
                     : "One click, one passport. Re-attesting the same link is rejected by the server."}
               </p>
             </div>
@@ -275,7 +289,8 @@ function ChoiceGroup({
   options,
   selected,
   error,
-  onToggle
+  onToggle,
+  optionLabel
 }: {
   label: string;
   hint: string;
@@ -283,13 +298,14 @@ function ChoiceGroup({
   selected: string[];
   error?: string;
   onToggle: (value: string) => void;
+  optionLabel?: (value: string) => string;
 }) {
   const groupId = useId();
   return (
     <fieldset>
       <legend className="text-[12px] text-muted-foreground">{label}</legend>
       <p id={`${groupId}-hint`} className="mt-0.5 text-[11px] text-muted-foreground/80">{hint}</p>
-      <div className="mt-2 flex flex-wrap gap-2" role="group" aria-describedby={`${groupId}-hint${error ? ` ${groupId}-error` : ""}`}>
+      <div className="mt-2 flex max-h-64 flex-wrap gap-2 overflow-y-auto pr-1" role="group" aria-describedby={`${groupId}-hint${error ? ` ${groupId}-error` : ""}`}>
         {options.map((option) => {
           const active = selected.includes(option);
           return (
@@ -305,7 +321,7 @@ function ChoiceGroup({
                   : "bg-muted/60 text-muted-foreground ring-border hover:text-foreground"
               )}
             >
-              {option}
+              {optionLabel ? optionLabel(option) : option}
             </button>
           );
         })}

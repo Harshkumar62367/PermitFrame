@@ -12,7 +12,7 @@ const OK_DKG: DkgHealth = {
   mode: "edge-node",
   healthy: true,
   endpoint: "local daemon (127.0.0.1:9200)",
-  detail: "Edge Node running — 3 peer(s)."
+  detail: "Edge Node running - 3 peer(s)."
 };
 
 function okProbes(): HealthProbes {
@@ -50,7 +50,7 @@ describe("getIntegrationHealth", () => {
     const during = await getIntegrationHealth(probes);
     assert.equal(during.dkg.state, "checking");
     assert.equal(dkgCalls, 1);
-    // Once the slow probe settles, the ledger is healthy — proven by the
+    // Once the slow probe settles, the ledger is healthy - proven by the
     // completed check, not assumed.
     await settleIntegrationHealth();
     const after = await getIntegrationHealth(probes);
@@ -83,7 +83,7 @@ describe("getIntegrationHealth", () => {
 
   it("a probe that always fails is unavailable, never healthy", async () => {
     const probes: HealthProbes = {
-      dkg: async () => ({ ...OK_DKG, healthy: false, detail: "Edge Node unreachable — run \"dkg start\"." }),
+      dkg: async () => ({ ...OK_DKG, healthy: false, detail: "Edge Node unreachable - run \"dkg start\"." }),
       livepeer: async () => {
         throw new Error("connection refused");
       }
@@ -111,7 +111,7 @@ describe("getIntegrationHealth", () => {
     const healthy = await getIntegrationHealth(probes, config);
     assert.equal(healthy.dkg.state, "healthy");
     // Expire the healthy entry, then fail the revalidation: the answer must
-    // stay on the last good result (marked stale) and settle to degraded —
+    // stay on the last good result (marked stale) and settle to degraded -
     // a transient failure never reads as "never known".
     await delay(70);
     fail = true;

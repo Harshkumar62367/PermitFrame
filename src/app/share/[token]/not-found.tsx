@@ -2,7 +2,7 @@ import Link from "next/link";
 import { PermitFrameMark } from "@/components/logo";
 
 /**
- * Branded recovery state for invalid share links. Static copy only — no
+ * Branded recovery state for invalid share links. Static copy only - no
  * workspace data is ever read here, so a guessed token reveals nothing.
  */
 export default function ShareNotFound() {

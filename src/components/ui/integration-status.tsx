@@ -2,7 +2,7 @@ import { cn } from "@/lib/utils";
 
 /**
  * Small health row: colored dot + label + optional detail.
- * Presentational — callers pass already-fetched health values.
+ * Presentational - callers pass already-fetched health values.
  */
 export function IntegrationStatus({
   label,

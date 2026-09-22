@@ -4,11 +4,12 @@ import { Badge } from "@/components/ui/badge";
 import { ClientReviewForm } from "@/components/client-review-form";
 import { PermitFrameMark } from "@/components/logo";
 import { lookupShare } from "@/server/public-share";
+import { displayText } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
 /**
- * Public client-review page. Reads ONLY the whitelisted PublicShareView —
+ * Public client-review page. Reads ONLY the whitelisted PublicShareView -
  * no session, no workspace data, no internal fields. Unknown tokens hit the
  * branded recovery state, never a 500. Works logged out by design.
  */
@@ -27,7 +28,7 @@ export default async function SharePage({ params }: { params: Promise<{ token: s
           <Badge variant="outline" className="ml-auto rounded-full font-mono text-[10px] uppercase tracking-[0.12em]">client review</Badge>
         </div>
 
-        <h1 className="font-display mt-8 text-3xl font-semibold tracking-tight">{view.title}</h1>
+        <h1 className="font-display mt-8 text-3xl font-semibold tracking-tight">{displayText(view.title)}</h1>
         <p className="mt-1.5 font-mono text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
           {view.brand} {view.productName} · {view.platform} · {view.country}
         </p>

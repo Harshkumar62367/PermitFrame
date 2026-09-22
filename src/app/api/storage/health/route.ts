@@ -14,9 +14,9 @@ export async function GET() {
     configured: health.configured,
     reachable: health.reachable,
     detail: !health.configured
-      ? "Durable storage is not configured — outputs stay provider-hosted."
+      ? "Durable storage is not configured - outputs stay provider-hosted."
       : health.reachable
-        ? "Durable storage reachable — completed outputs persist to PermitFrame storage."
-        : "Durable storage unreachable — completed outputs wait as storage-pending with provider results intact."
+        ? "Durable storage reachable - completed outputs persist to PermitFrame storage."
+        : "Durable storage unreachable - completed outputs wait as storage-pending with provider results intact."
   });
 }

@@ -75,7 +75,7 @@ function writePersisted(client: QueryClient): void {
     };
     window.localStorage.setItem(SNAPSHOT_STORAGE_KEY, JSON.stringify(payload));
   } catch {
-    // quota / private mode — memory cache is unaffected
+    // quota / private mode - memory cache is unaffected
   }
 }
 
@@ -104,7 +104,7 @@ function writeOwner(workspaceName: string): void {
   try {
     window.localStorage.setItem(SNAPSHOT_OWNER_KEY, workspaceName);
   } catch {
-    // private mode etc. — memory cache still works, persistence just skips
+    // private mode etc. - memory cache still works, persistence just skips
   }
 }
 
@@ -122,8 +122,8 @@ export function purgePersistedWorkspaceSnapshot(client?: QueryClient): void {
  * Owner-gated restore, called once the server session proves which workspace
  * is signed in. When the persisted bytes belong to that same workspace they
  * are hydrated (fresh rows render instantly with no fetch; stale rows render
- * instantly and background-refetch). On any mismatch — or a blank/unknown
- * owner — the previous owner's bytes are purged and the caller cold-fetches.
+ * instantly and background-refetch). On any mismatch - or a blank/unknown
+ * owner - the previous owner's bytes are purged and the caller cold-fetches.
  * Returns true when cached rows were restored.
  */
 export function establishSnapshotOwner(client: QueryClient, workspaceName: string): boolean {
@@ -154,7 +154,7 @@ export function QueryProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     // Persist only the workspace snapshot (never health checks or other
-    // queries). Restore is deliberately NOT done here — it happens in
+    // queries). Restore is deliberately NOT done here - it happens in
     // establishSnapshotOwner after the session proves the workspace owner.
     if (!storageAvailable()) return;
     return queryClient.getQueryCache().subscribe(() => {

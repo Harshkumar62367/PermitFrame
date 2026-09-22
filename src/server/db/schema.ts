@@ -45,7 +45,7 @@ export const workspaceState = pgTable("workspace_state", {
  * is verified, but all campaign/event writes mirror here and all hot reads
  * prefer here:
  * - campaigns: one row per campaign. `data` holds the full campaign document
- *   (jobs/receipts/comments/captions travel with it — they are only ever
+ *   (jobs/receipts/comments/captions travel with it - they are only ever
  *   read/written with their campaign). List/detail reads are single-row or
  *   single-workspace indexed scans instead of whole-blob transfers.
  * - workspace_events: one row per audit event. Activity/timeline reads are
@@ -134,7 +134,7 @@ export const productFactsRows = pgTable(
 /**
  * Durable asset store (Cloudinary). One row per generation job output:
  * Livepeer provider provenance plus Cloudinary delivery identity. All
- * storage columns are nullable/backward-compatible — legacy outputs simply
+ * storage columns are nullable/backward-compatible - legacy outputs simply
  * have no row here and render provider-hosted. Never stores bytes or
  * credentials, only identifiers, URLs, and safe diagnostics.
  */
@@ -186,7 +186,7 @@ export const sessions = pgTable("sessions", {
 
 /**
  * Immutable-by-contract public verification snapshots. Written once per
- * campaign approval from sanitized fields only — anonymous reads query this
+ * campaign approval from sanitized fields only - anonymous reads query this
  * table directly, never session workspace state.
  */
 export const verificationSnapshots = pgTable("verification_snapshots", {

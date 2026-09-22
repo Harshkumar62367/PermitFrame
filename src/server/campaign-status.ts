@@ -21,7 +21,7 @@ export const PRODUCTION_STAGES: { stage: ProductionStage; label: string }[] = [
  * reused the "blocked" label, revocation races). The preflight decision is the
  * authority: it is what actually gates Livepeer spend in startProduction and
  * what the campaign detail verdict renders. Every KPI, badge, cost rollup and
- * overview row must derive from this function — never from `status` alone.
+ * overview row must derive from this function - never from `status` alone.
  */
 export function effectiveCampaignStatus(
   campaign: Pick<Campaign, "status" | "preflight">
@@ -38,7 +38,7 @@ export function effectiveCampaignStatus(
 
 /**
  * Operational production stage derived from real workflow fields
- * (preflight, jobs, receipts, status). Read-only summary — the pipeline UI
+ * (preflight, jobs, receipts, status). Read-only summary - the pipeline UI
  * must never imply drag-and-drop state movement.
  */
 export function productionStage(campaign: Campaign): ProductionStage {
@@ -59,7 +59,7 @@ export function productionStage(campaign: Campaign): ProductionStage {
  * true only when a write actually happened.
  */
 export async function reconcileCampaignStatus(campaign: Campaign): Promise<boolean> {
-  // Archived rows are history, not drift — never rewrite them.
+  // Archived rows are history, not drift - never rewrite them.
   if (campaign.status === "archived") return false;
   const effective = effectiveCampaignStatus(campaign);
   if (effective === campaign.status) return false;
@@ -75,7 +75,7 @@ export async function reconcileCampaignStatus(campaign: Campaign): Promise<boole
   return true;
 }
 
-/** Audit event for a preflight verdict — the defensibility record. Real data only. */
+/** Audit event for a preflight verdict - the defensibility record. Real data only. */
 export function preflightEvent(
   campaign: Pick<Campaign, "id" | "title">,
   decision: Pick<NonNullable<Campaign["preflight"]>, "decision" | "blockers">
@@ -85,7 +85,7 @@ export function preflightEvent(
       id: newId("evt"),
       at: nowIso(),
       kind: "preflight.block",
-      summary: `Changes needed before creation: "${campaign.title}" — ${decision.blockers.length} reason${decision.blockers.length === 1 ? "" : "s"}, no production spend.`,
+      summary: `Changes needed before creation: "${campaign.title}" - ${decision.blockers.length} reason${decision.blockers.length === 1 ? "" : "s"}, no production spend.`,
       refs: [campaign.id]
     };
   }
@@ -93,7 +93,7 @@ export function preflightEvent(
     id: newId("evt"),
     at: nowIso(),
     kind: "preflight.allow",
-    summary: `Approved to create: "${campaign.title}" — creator permissions and brand rules allow this campaign.`,
+    summary: `Approved to create: "${campaign.title}" - creator permissions and brand rules allow this campaign.`,
     refs: [campaign.id]
   };
 }

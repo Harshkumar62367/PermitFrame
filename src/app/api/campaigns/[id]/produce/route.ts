@@ -8,9 +8,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const { id } = await params;
   const body = await request.json().catch(() => ({}));
   const stageIds = Array.isArray(body.stageIds) ? body.stageIds.filter((s: unknown) => typeof s === "string") : undefined;
+  const idempotencyKey = typeof body.idempotencyKey === "string" ? body.idempotencyKey : undefined;
   let result;
   try {
-    result = await startProduction(id, body.capabilityOverride, stageIds);
+    result = await startProduction(id, body.capabilityOverride, stageIds, idempotencyKey);
   } catch (error) {
     if (error instanceof AuthenticationRequiredError) {
       return NextResponse.json({ error: "Authentication required" }, { status: 401 });
@@ -18,5 +19,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     throw error;
   }
   if (!result.started) return NextResponse.json({ error: result.error }, { status: 400 });
-  return NextResponse.json({ started: true });
+  // Fast submit: records + run id return now; the pump executes detached and
+  // the client follows progress on the run endpoint (or reloads anytime).
+  return NextResponse.json({ started: true, runId: result.runId });
 }

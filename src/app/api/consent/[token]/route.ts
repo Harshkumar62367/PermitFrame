@@ -4,6 +4,7 @@ import { loadInviteContext, newId, nowIso, updateWorkspaceDb } from "@/server/st
 import { validateAttestation } from "@/server/consent-validation";
 import { withIdempotencyLock } from "@/server/idempotency";
 import { getDkg } from "@/server/dkg";
+import { logDkgError, sanitizeDkgError } from "@/server/dkg/public-errors";
 import { passportKa } from "@/server/dkg/schemas";
 
 export const dynamic = "force-dynamic";
@@ -48,7 +49,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   // One-time attestation, race-safe: concurrent double-submits serialize on
   // the token lock and the second sees "completed" instead of minting a
   // second passport. Validation above runs lock-free (no writes involved).
-  return withIdempotencyLock(`consent:${token}`, async () => {
+  try {
+    return await withIdempotencyLock(`consent:${token}`, async () => {
     const fresh = await loadInviteContext(token);
     const live = fresh?.db.consentInvites.find((i) => i.token === token) ?? null;
     if (!fresh || !live) return NextResponse.json({ error: "Consent link not found" }, { status: 404 });
@@ -101,5 +103,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   });
 
   return NextResponse.json({ attested: true, passportId: passport.id, ual, explorerUrl });
-  });
+    });
+  } catch (error) {
+    logDkgError("consent-attest", error);
+    const safe = sanitizeDkgError(error, "mutation");
+    return NextResponse.json({ error: safe.message, code: safe.code }, { status: safe.status });
+  }
 }

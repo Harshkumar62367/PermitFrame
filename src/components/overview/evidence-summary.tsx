@@ -4,7 +4,7 @@ import { Database } from "lucide-react";
 
 /**
  * Provenance line: which proof records the verdict was checked against.
- * Rights + facts references made visible — not labels.
+ * Rights + facts references made visible - not labels.
  */
 export function EvidenceSummary({
   knowledgeAssetsConsulted,

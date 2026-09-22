@@ -2,7 +2,7 @@
 
 import { createContext, useContext } from "react";
 
-/** Future Privy data injects through here — sidebar never imports Privy directly. */
+/** Future Privy data injects through here - sidebar never imports Privy directly. */
 export interface WorkspaceIdentity {
   id: string;
   name: string;

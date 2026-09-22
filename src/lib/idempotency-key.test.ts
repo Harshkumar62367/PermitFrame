@@ -22,4 +22,17 @@ describe("stableAttemptKey", () => {
     const edited = stableAttemptKey(first, '{"a":2}', () => "key-2");
     assert.equal(edited.key, "key-2");
   });
+
+  it("a retry after a client timeout reuses the same key without minting (no duplicate campaign)", () => {
+    // The form keeps attemptRef across submits: the timed-out attempt's key
+    // survives, so retrying the unchanged payload replays the original
+    // campaign server-side instead of submitting a second one.
+    const timedOut = stableAttemptKey(null, '{"a":1}', () => "key-1");
+    let minted = 0;
+    const retry = stableAttemptKey(timedOut, '{"a":1}', () => `key-${++minted}`);
+    const retryAgain = stableAttemptKey(retry, '{"a":1}', () => `key-${++minted}`);
+    assert.equal(retry.key, "key-1");
+    assert.equal(retryAgain.key, "key-1");
+    assert.equal(minted, 0);
+  });
 });

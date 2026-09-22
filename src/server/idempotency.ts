@@ -11,7 +11,7 @@ import type { Database, IdempotencyRecord } from "./types";
 
 export const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 
-/** Same key reused with a different payload — a client bug, never a second campaign. */
+/** Same key reused with a different payload - a client bug, never a second campaign. */
 export class IdempotencyMismatchError extends Error {
   constructor() {
     super("This submission key was already used with different campaign details. Start a fresh submission to create a new campaign.");
@@ -32,9 +32,11 @@ export interface CreationIntent {
   requestedClaims: string[];
   transformation: string;
   creativeBrief: string;
+  /** Requested quality profile - different profiles are different intents. */
+  qualityProfile?: string;
 }
 
-/** Stable fingerprint of the normalized intent — key reuse with different intent is a client bug. */
+/** Stable fingerprint of the normalized intent - key reuse with different intent is a client bug. */
 export function fingerprintCreationIntent(intent: CreationIntent): string {
   const canonical = JSON.stringify({
     title: intent.title.trim(),
@@ -48,13 +50,14 @@ export function fingerprintCreationIntent(intent: CreationIntent): string {
     country: intent.country.toUpperCase(),
     requestedClaims: [...intent.requestedClaims].map((c) => c.trim().toLowerCase()).sort(),
     transformation: intent.transformation.toLowerCase(),
-    creativeBrief: intent.creativeBrief.trim()
+    creativeBrief: intent.creativeBrief.trim(),
+    qualityProfile: (intent.qualityProfile ?? "balanced").toLowerCase()
   });
   return crypto.createHash("sha256").update(canonical).digest("hex");
 }
 
 function slots(db: Database): Record<string, IdempotencyRecord> {
-  // Legacy workspace rows predate the map — treat as empty, never crash.
+  // Legacy workspace rows predate the map - treat as empty, never crash.
   if (!db.idempotencyKeys) db.idempotencyKeys = {};
   return db.idempotencyKeys;
 }
@@ -74,7 +77,7 @@ export type ReserveOutcome =
  * (updateDb) so the reservation survives a crash between reserve and create.
  * - completed + fingerprint match → replay the original campaign id.
  * - completed + fingerprint mismatch → client error, never a second campaign.
- * - processing/failed (no live holder — the in-process lock guarantees that)
+ * - processing/failed (no live holder - the in-process lock guarantees that)
  *   → take over and run creation again.
  */
 export function reserveIdempotencySlot(db: Database, key: string, fingerprint: string, now: string): ReserveOutcome {
@@ -128,7 +131,7 @@ const inflight = new Map<string, Promise<unknown>>();
  * Serialize concurrent work under one lock key within this server instance.
  * Concurrent duplicates (double-click, double tab, retried-while-running)
  * await the live holder and share its result instead of creating twice.
- * Entries are always removed — a crashed holder settles (rejects) and every
+ * Entries are always removed - a crashed holder settles (rejects) and every
  * waiter observes the settlement, so the lock can never stick.
  */
 export async function withIdempotencyLock<T>(lockKey: string, work: () => Promise<T>): Promise<T> {

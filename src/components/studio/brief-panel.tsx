@@ -8,8 +8,8 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { apiPatch } from "@/lib/api";
+import { countryName } from "@/lib/countries";
 import { useWorkspaceSnapshot } from "@/lib/use-workspace-snapshot";
-import { cn } from "@/lib/utils";
 import type { Campaign, PermissionPassport, ProductFacts } from "@/server/types";
 
 const PLATFORMS = ["instagram", "tiktok", "youtube", "linkedin"];
@@ -54,7 +54,7 @@ function draftFrom(campaign: Campaign): Draft {
  * Left panel: the approved brief plus editable production controls.
  * Editorial fields (title, objective, message, direction, brief) save
  * directly. Rights inputs (platform, country, claims, format) re-run the
- * rights check on save and can re-block the campaign — the studio then
+ * rights check on save and can re-block the campaign - the studio then
  * locks generation via the existing allow-gate. Structural inputs lock
  * once production has started; platform expansion moves to variants.
  */
@@ -86,8 +86,8 @@ export function BriefPanel({ campaign, passport, productFacts, onChanged }: Brie
 
   async function save() {
     if (busy || !dirty) return;
-    if (draft.country.trim().length !== 2) {
-      setError("Use a 2-letter country code (e.g. GR for Greece, DE for Germany).");
+    if (!draft.country) {
+      setError("Choose a territory — only this permission's territories are listed.");
       return;
     }
     if (draft.creativeBrief.trim().length < 12) {
@@ -114,7 +114,7 @@ export function BriefPanel({ campaign, passport, productFacts, onChanged }: Brie
       const blocked = j.campaign.preflight?.decision === "block";
       setNotice(
         blocked
-          ? "Saved — but the rights re-check now blocks this campaign. Generation is locked until the rights issue is fixed."
+          ? "Saved - but the rights re-check now blocks this campaign. Generation is locked until the rights issue is fixed."
           : "Saved. Rights inputs were re-checked against current approvals."
       );
       await onChanged();
@@ -167,7 +167,7 @@ export function BriefPanel({ campaign, passport, productFacts, onChanged }: Brie
           </div>
           <div>
             <dt className={label}>Primary message</dt>
-            <dd className="mt-0.5 leading-relaxed text-foreground/85">{campaign.request.primaryMessage?.trim() || "—"}</dd>
+            <dd className="mt-0.5 leading-relaxed text-foreground/85">{campaign.request.primaryMessage?.trim() || "-"}</dd>
           </div>
           <div>
             <dt className={label}>Approved claims</dt>
@@ -179,13 +179,13 @@ export function BriefPanel({ campaign, passport, productFacts, onChanged }: Brie
                   </span>
                 ))
               ) : (
-                <span className="text-muted-foreground">No verified claims — permission check passed on rights alone</span>
+                <span className="text-muted-foreground">No verified claims - permission check passed on rights alone</span>
               )}
             </dd>
           </div>
           <div>
             <dt className={label}>Visual direction</dt>
-            <dd className="mt-0.5 leading-relaxed text-foreground/85">{campaign.request.visualDirection?.trim() || "—"}</dd>
+            <dd className="mt-0.5 leading-relaxed text-foreground/85">{campaign.request.visualDirection?.trim() || "-"}</dd>
           </div>
           <div>
             <dt className={label}>Creative brief</dt>
@@ -206,13 +206,13 @@ export function BriefPanel({ campaign, passport, productFacts, onChanged }: Brie
             </div>
             <div>
               <dt className={label}>Rights window</dt>
-              <dd className="mt-0.5 font-mono text-[12px]">{passport ? `to ${passport.validUntil}` : "—"}</dd>
+              <dd className="mt-0.5 font-mono text-[12px]">{passport ? `to ${passport.validUntil}` : "-"}</dd>
             </div>
           </div>
           {productFacts && (
             <p className="text-[11.5px] leading-relaxed text-muted-foreground">
               Brand rules: {productFacts.brand} {productFacts.productName}
-              {productFacts.prohibitedClaims.length > 0 && ` — never claim: ${productFacts.prohibitedClaims.join(", ")}`}
+              {productFacts.prohibitedClaims.length > 0 && ` - never claim: ${productFacts.prohibitedClaims.join(", ")}`}
             </p>
           )}
         </dl>
@@ -233,7 +233,7 @@ export function BriefPanel({ campaign, passport, productFacts, onChanged }: Brie
           <div className={field}>
             <Label htmlFor="studio-claims" className={label}>Advertised claims (comma-separated)</Label>
             <Input id="studio-claims" value={draft.claims} onChange={(e) => set("claims", e.target.value)} placeholder="made with recycled materials" className={input} />
-            <p className="text-[11px] text-muted-foreground">Claims re-run the permission check on save — unverified claims block generation.</p>
+            <p className="text-[11px] text-muted-foreground">Claims re-run the permission check on save - unverified claims block generation.</p>
           </div>
           <div className={field}>
             <Label htmlFor="studio-direction" className={label}>Visual direction</Label>
@@ -255,7 +255,14 @@ export function BriefPanel({ campaign, passport, productFacts, onChanged }: Brie
             </div>
             <div className={field}>
               <Label htmlFor="studio-country" className={label}>Territory</Label>
-              <Input id="studio-country" value={draft.country} maxLength={2} disabled={locked} onChange={(e) => set("country", e.target.value.toUpperCase())} className={cn(input, "uppercase")} />
+              <Select value={draft.country || undefined} onValueChange={(v) => set("country", v)} disabled={locked || !passport}>
+                <SelectTrigger id="studio-country" className="w-full rounded-xl"><SelectValue placeholder={passport ? "Choose a permitted territory" : "No permission"} /></SelectTrigger>
+                <SelectContent>
+                  {(passport?.countries ?? []).map((c) => (
+                    <SelectItem key={c} value={c}>{countryName(c)} · {c}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div className={field}>
               <Label htmlFor="studio-format" className={label}>Format</Label>
@@ -280,7 +287,7 @@ export function BriefPanel({ campaign, passport, productFacts, onChanged }: Brie
           {locked && (
             <p className="flex items-start gap-1.5 text-[11.5px] leading-relaxed text-muted-foreground">
               <Lock className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
-              Platform, territory, format and source lock once production starts — clone a platform variant below for other platforms.
+              Platform, territory, format and source lock once production starts - clone a platform variant below for other platforms.
             </p>
           )}
         </div>

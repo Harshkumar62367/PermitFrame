@@ -4,6 +4,7 @@ import { getDb } from "./db/client";
 import { campaignAssets } from "./db/schema";
 import { isCloudinaryConfigured, uploadRemoteAsset, type StoredAsset } from "./cloudinary";
 import { redactSecrets } from "./dkg/edge-node-adapter";
+import { maskOperationalDetail } from "./dkg/public-errors";
 import type { ProductionJob } from "./types";
 
 /** Max Cloudinary import attempts per job output (bounded retries). */
@@ -19,7 +20,7 @@ function sanitizeSegment(value: string): string {
 }
 
 /**
- * Deterministic, workspace-safe identity: ids only — never emails, wallets,
+ * Deterministic, workspace-safe identity: ids only - never emails, wallets,
  * creator names, or prompt text. Same output always maps to one asset.
  */
 export function assetIdentity(workspaceId: string, campaignId: string, jobId: string): { folder: string; publicId: string } {
@@ -33,12 +34,12 @@ export function assetResourceType(kind: ProductionJob["kind"]): "image" | "video
 
 function safeDiagnostic(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error);
-  return redactSecrets(raw).slice(0, 200);
+  return maskOperationalDetail(redactSecrets(raw)).slice(0, 200);
 }
 
 /**
  * Persist one completed Livepeer output to Cloudinary. Idempotent: a stored
- * row short-circuits (no re-upload); attempts are bounded. Never throws —
+ * row short-circuits (no re-upload); attempts are bounded. Never throws -
  * failures return honestly for the caller to mark storage_pending.
  */
 export async function persistJobAsset(input: {

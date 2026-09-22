@@ -2,11 +2,12 @@ import { Check } from "lucide-react";
 import { notFound } from "next/navigation";
 import { lookupVerification } from "@/server/verify";
 import { blockExplorerNftUrl } from "@/lib/proof-links";
+import { displayText } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
 /**
- * Public verification page. Reads ONLY the immutable public snapshot —
+ * Public verification page. Reads ONLY the immutable public snapshot -
  * no session, no workspace data. Unknown refs hit Next's 404, never a 500.
  * Raw record identifiers appear solely inside Technical details, and only
  * when the snapshot genuinely carries an anchored record.
@@ -23,7 +24,7 @@ export default async function VerifyPage({ params }: { params: Promise<{ ref: st
   return (
     <div className="pf-page min-h-screen bg-background">
       <div className="mx-auto w-full max-w-3xl px-4 py-14 sm:px-6">
-        {/* Certificate header — explicitly scoped dark surface */}
+        {/* Certificate header - explicitly scoped dark surface */}
         <div className="pf-dark-scope grain relative overflow-hidden rounded-3xl bg-[#0c110f] p-6 text-center text-white sm:p-10">
           <div
             className="pointer-events-none absolute inset-0"
@@ -31,9 +32,9 @@ export default async function VerifyPage({ params }: { params: Promise<{ ref: st
           />
           <div className="relative">
             <MotionCheck />
-            <h1 className="font-display mt-4 text-3xl font-semibold tracking-tight">{s.title}</h1>
+            <h1 className="font-display mt-4 text-3xl font-semibold tracking-tight">{displayText(s.title)}</h1>
             <p className="mx-auto mt-2 max-w-lg text-[13.5px] leading-relaxed text-white/55">
-              Approved campaign pack — {s.brand} {s.productName} · {s.platform} · {s.country}.
+              Approved campaign pack - {s.brand} {s.productName} · {s.platform} · {s.country}.
               Every claim below was verified before production.
             </p>
             <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
@@ -88,7 +89,7 @@ export default async function VerifyPage({ params }: { params: Promise<{ ref: st
           </p>
           <p className="mt-1 text-[12.5px] text-muted-foreground">
             {s.brandRules.brand} {s.brandRules.productName}
-            {s.brandRules.approvedClaims.length > 0 && ` — approved language: ${s.brandRules.approvedClaims.join("; ")}`}
+            {s.brandRules.approvedClaims.length > 0 && ` - approved language: ${s.brandRules.approvedClaims.join("; ")}`}
           </p>
         </div>
 
@@ -107,7 +108,7 @@ export default async function VerifyPage({ params }: { params: Promise<{ ref: st
           </div>
         )}
 
-        {/* Technical record identifiers — only when genuinely anchored. */}
+        {/* Technical record identifiers - only when genuinely anchored. */}
         {anchored && (
           <details className="mt-6 rounded-3xl border border-border bg-card p-7">
             <summary className="cursor-pointer text-[13px] font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline">

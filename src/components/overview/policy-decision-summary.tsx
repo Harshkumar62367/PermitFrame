@@ -5,7 +5,7 @@ import type { SnapshotPreflight } from "@/lib/use-workspace-snapshot";
 
 /**
  * One-line rights-check verdict for cards: the live check result in plain
- * language. Driven entirely by API data — no hardcoded reasons.
+ * language. Driven entirely by API data - no hardcoded reasons.
  */
 export function PolicyResultLine({ preflight, className }: { preflight: SnapshotPreflight; className?: string }) {
   if (preflight.decision === "pending") {
@@ -71,7 +71,7 @@ export function PolicyDecisionSummary({ preflight }: { preflight: SnapshotPrefli
       {preflight.allowedClaims.length === 0 && (
         <li className="flex items-start gap-2 text-[13px] leading-snug text-emerald-950/85 dark:text-emerald-100/90">
           <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" aria-hidden />
-          <span>No claims requested — permission check passed</span>
+          <span>No claims requested - permission check passed</span>
         </li>
       )}
     </ul>

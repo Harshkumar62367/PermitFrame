@@ -3,7 +3,7 @@ import { PermitFrameMark } from "@/components/logo";
 
 /**
  * Branded recovery state for unknown or legacy verification links. Static
- * copy only — no campaign or workspace data is ever read here, so a
+ * copy only - no campaign or workspace data is ever read here, so a
  * guessable legacy receipt/campaign ID reveals nothing.
  */
 export default function VerifyNotFound() {

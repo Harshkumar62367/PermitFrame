@@ -13,7 +13,7 @@ export type VerificationLookup =
 
 /**
  * Anonymous verification read: queries ONLY the public snapshots table in
- * Neon. Never touches session workspace state, cookies, or auth — safe to
+ * Neon. Never touches session workspace state, cookies, or auth - safe to
  * call from the public route without a Privy session.
  */
 export async function lookupVerification(ref: string): Promise<VerificationLookup> {

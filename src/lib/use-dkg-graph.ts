@@ -38,7 +38,7 @@ export function fetchDkgGraph(signal?: AbortSignal): Promise<DkgGraph> {
  * Cached graph view with quiet background refresh. Cached rows render
  * immediately; refetches never replace them with skeletons. SPARQL console
  * queries and all policy actions (preflight, publish, renew, revoke,
- * approve) always hit the live adapter at action time — cached graph data
+ * approve) always hit the live adapter at action time - cached graph data
  * is never presented as live policy truth.
  * Window-focus refetch stays off: DKG reads can be slow and must never fire
  * just because the tab regained focus.

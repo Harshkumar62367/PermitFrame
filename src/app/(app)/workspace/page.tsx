@@ -70,7 +70,7 @@ export default function WorkspaceOverviewPage() {
                   </span>
                   <span>
                     {w.creatorName} · passport valid to {w.validUntil}. Renew it on the{" "}
-                    <Link href="/consents" className="underline underline-offset-2">Creator permissions page</Link> — expired rights block new permission checks.
+                    <Link href="/consents" className="underline underline-offset-2">Creator permissions page</Link> - expired rights block new permission checks.
                   </span>
                 </div>
               ))}

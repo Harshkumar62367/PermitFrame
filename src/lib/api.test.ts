@@ -2,7 +2,7 @@ import { describe, it, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { ApiError, apiGet } from "./api";
 
-/** api() error classification. No network — fetch is stubbed per test. */
+/** api() error classification. No network - fetch is stubbed per test. */
 
 const realFetch = globalThis.fetch;
 
@@ -34,6 +34,24 @@ describe("api error classification", () => {
     assert.ok(err instanceof ApiError);
     assert.match(err.message, /timed out/);
     assert.ok(!err.message.includes("Network request failed"));
+  });
+
+  it("keeps the generic timeout message free of DKG/ledger/proof wording", async () => {
+    // Database-only actions share this path, so it must never imply a
+    // ledger interaction. Long DKG/permission actions layer their own
+    // recovery copy on top via useLongAction.
+    stubFetch(async () => {
+      await new Promise((r) => setTimeout(r, 60));
+      throw timeoutError();
+    });
+    const err = await apiGet("/api/x", undefined, 50).then(
+      () => assert.fail("must throw"),
+      (e: Error) => e
+    );
+    assert.ok(err instanceof ApiError);
+    for (const word of ["dkg", "DKG", "ledger", "proof", "publish"]) {
+      assert.ok(!err.message.includes(word), `generic timeout must not mention "${word}"`);
+    }
   });
 
   it("reports genuine network failures as network failures", async () => {

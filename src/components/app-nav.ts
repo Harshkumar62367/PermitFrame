@@ -25,7 +25,7 @@ export interface NavGroup {
  * Task-based IA: Overview first, Campaigns as the working home, then the
  * three libraries (creator permissions, brand rules, media), Verification,
  * and Settings. Brand rules reuses the existing /products route, API, data,
- * and policy-engine integration — renamed, not rebuilt.
+ * and policy-engine integration - renamed, not rebuilt.
  */
 export const APP_NAV: NavGroup[] = [
   {

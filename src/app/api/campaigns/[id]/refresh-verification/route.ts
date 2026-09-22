@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
 
 /**
  * Owner-only "Refresh verification link" for pre-snapshot approvals. Builds a
- * new opaque snapshot from the campaign's real current data — never marks old
+ * new opaque snapshot from the campaign's real current data - never marks old
  * campaigns as verified, never rewrites status or proof.
  */
 export async function POST(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {

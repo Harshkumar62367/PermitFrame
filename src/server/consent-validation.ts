@@ -25,7 +25,7 @@ export type AttestationValidation =
 
 /**
  * Server-side attestation rules. The creator may only *narrow* the agency's
- * offered draft — never widen it — and the expiry must be a future date.
+ * offered draft - never widen it - and the expiry must be a future date.
  * Pure (no session, no I/O) so every branch is unit-testable; the route
  * enforces the verdict before any passport or DKG write.
  */
@@ -37,7 +37,7 @@ export function validateAttestation(
   const fail = (error: string): AttestationValidation => ({ ok: false, error });
 
   if (!Array.isArray(body.platforms) || body.platforms.length === 0) {
-    return fail("Choose at least one platform — otherwise the passport permits nothing.");
+    return fail("Choose at least one platform - otherwise the passport permits nothing.");
   }
   const platforms: Platform[] = [];
   for (const p of body.platforms) {

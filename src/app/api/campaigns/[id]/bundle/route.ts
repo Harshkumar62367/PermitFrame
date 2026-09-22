@@ -12,7 +12,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   if (!campaign) return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
   // Final delivery only: previews and unsaved outputs have no bundle yet.
   if (!campaign.receipts.some((r) => hasSharableReceipt(r))) {
-    return NextResponse.json({ error: "No ready-to-share outputs yet — the proof bundle unlocks once durable storage confirms an output." }, { status: 409 });
+    return NextResponse.json({ error: "No ready-to-share outputs yet - the proof bundle unlocks once durable storage confirms an output." }, { status: 409 });
   }
   const db = await loadDb();
 
@@ -20,7 +20,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
     product: "PermitFrame proof bundle",
     generatedAt: nowIso(),
     disclaimer:
-      "Proves what PermitFrame recorded (declarations, permissions, evidence, lineage). URL fingerprints correlate records only — they prove nothing about the media bytes. Not a legal ownership certificate.",
+      "Proves what PermitFrame recorded (declarations, permissions, evidence, lineage). URL fingerprints correlate records only - they prove nothing about the media bytes. Not a legal ownership certificate.",
     campaign: {
       id: campaign.id,
       title: campaign.title,
@@ -46,7 +46,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
       capability: j.capability,
       status: j.status,
       outputUrl: j.outputUrl,
-      // Fingerprint of the provider URL string for correlation only — it
+      // Fingerprint of the provider URL string for correlation only - it
       // proves nothing about the media bytes. Durable identity, when stored,
       // is the receipt's Cloudinary public ID / delivery URL below.
       providerUrlFingerprint: j.providerUrlFingerprint ?? j.outputHash ?? null,

@@ -10,7 +10,7 @@ export function ThemeToggle({ subtle = false }: { subtle?: boolean }) {
   // Mount-gated so the server HTML and the first client render are
   // identical (placeholder). Reading `resolvedTheme` immediately would
   // hydrate "Switch to dark theme" on the server but "Switch to light
-  // theme" on a dark-mode client — a hydration mismatch that forces a
+  // theme" on a dark-mode client - a hydration mismatch that forces a
   // full client re-render.
   const [mounted, setMounted] = useState(false);
   useEffect(() => {

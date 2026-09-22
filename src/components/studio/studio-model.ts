@@ -1,7 +1,7 @@
 import { CAPABILITY_PRICE_MAP, type Campaign, type DerivativeReceipt, type ProductionJob, type ProductionStagePlan } from "@/server/types";
 
 export interface Deliverable {
-  id: "vertical" | "feed" | "landscape";
+  id: "vertical" | "portrait" | "feed" | "landscape";
   title: string;
   spec: string;
   platforms: string;
@@ -43,6 +43,16 @@ export function planDeliverables(campaign: Campaign): Deliverable[] {
       stages: feed
     });
   }
+  const portrait = byFormat.get("4:5") ?? [];
+  if (portrait.length > 0) {
+    out.push({
+      id: "portrait",
+      title: "Portrait creative",
+      spec: "4:5",
+      platforms: "Instagram / Stories",
+      stages: portrait
+    });
+  }
   const landscape = byFormat.get("16:9") ?? [];
   if (landscape.length > 0) {
     out.push({
@@ -72,8 +82,8 @@ export function deliverableState(jobs: ProductionJob[], stageIds: string[]): Del
   const states = new Set(mine.map((j) => j.status));
   if (states.has("generating") || states.has("preview_ready") || states.has("storage_pending")) return "running";
   if (states.has("queued")) return states.size === 1 ? "queued" : "partial";
-  if (states.has("failed") || states.has("storage_retry_needed")) {
-    const settled = mine.every((j) => j.status === "failed" || j.status === "storage_retry_needed" || j.status === "ready_to_share");
+  if (states.has("failed") || states.has("cancelled") || states.has("storage_retry_needed")) {
+    const settled = mine.every((j) => j.status === "failed" || j.status === "cancelled" || j.status === "storage_retry_needed" || j.status === "ready_to_share");
     return settled && mine.some((j) => j.status !== "ready_to_share") ? "failed" : "partial";
   }
   if (mine.every((j) => j.status === "ready_to_share")) return "done";
@@ -103,7 +113,7 @@ export interface LiveEstimate {
 /**
  * Live Creative MCP estimate for the selected stages. Per-image prices map
  * directly; per-second prices use the 5s motion default. Anything else
- * (per-megapixel, per-token, unlisted) is not quotable live — the result is
+ * (per-megapixel, per-token, unlisted) is not quotable live - the result is
  * marked inexact and the UI must say live pricing is unavailable rather
  * than present a number as a live quote.
  */
@@ -131,6 +141,20 @@ export function formatUsd(value: number): string {
   return value.toLocaleString(undefined, { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 4 });
 }
 
+/**
+ * Human-friendly capability label derived from structured fields only.
+ * Substituted renders show "requested → actual"; legacy rows that baked an
+ * arrow string into capability render as-is (displayed, never parsed).
+ */
+export function displayCapability(
+  job: Pick<ProductionJob, "capability" | "requestedCapability" | "actualCapability">
+): string {
+  const actual = job.actualCapability;
+  const requested = job.requestedCapability;
+  if (actual && requested && actual !== requested) return `${requested} → ${actual}`;
+  return actual ?? job.capability;
+}
+
 const STAGE_PLAIN: Record<string, string> = {
   keyframe: "campaign keyframe",
   "square-variation": "feed variation",
@@ -139,33 +163,49 @@ const STAGE_PLAIN: Record<string, string> = {
 };
 
 /**
- * Plain-language activity for a job — "Creating vertical motion creative"
+ * Plain-language activity for a job - "Creating vertical motion creative"
  * instead of MCP jargon. Falls back to the plan label for unknown stages.
  */
 export function plainActivity(stageId: string, label: string, status: ProductionJob["status"]): string {
   const what = STAGE_PLAIN[stageId] ?? label.toLowerCase();
   if (status === "generating") return `Creating ${what}…`;
-  if (status === "queued") return `Queued — ${what}`;
-  if (status === "storage_pending") return `Generated — saving ${what} securely…`;
+  if (status === "queued") return `Queued - ${what}`;
+  if (status === "storage_pending") return `Generated - saving ${what} securely…`;
+  if (status === "preview_ready") return `Checking ${what} quality…`;
   if (status === "ready_to_share") return `${what.charAt(0).toUpperCase() + what.slice(1)} ready`;
+  if (status === "cancelled") return `${what.charAt(0).toUpperCase() + what.slice(1)} cancelled`;
   return `${what.charAt(0).toUpperCase() + what.slice(1)} failed`;
 }
 
-/** Image vs video makeup of a stage list — drives kind badges and cost notes. */
+/**
+ * Honest motion summary for pack review: separate short clips, never a
+ * stitched film. Counts resolved clip lengths when they agree.
+ */
+export function describeMotionOutputs(durations: Array<number | null>): string {
+  if (durations.length === 0) return "Images";
+  if (durations.length === 1) return "Images + one short video clip";
+  const known = durations.filter((d): d is number => typeof d === "number");
+  if (known.length === durations.length && new Set(known).size === 1) {
+    return `Images + ${durations.length} separate short clips · ${known[0]}s each`;
+  }
+  return `Images + ${durations.length} separate short clips`;
+}
+
+/** Image vs video makeup of a stage list - drives kind badges and cost notes. */
 export function deliverableKind(stages: ProductionStagePlan[]): "image" | "video" | "mixed" {
   const kinds = new Set(stages.map((s) => (s.kind === "image-to-video" ? "video" : "image")));
   if (kinds.size > 1) return "mixed";
   return kinds.has("video") ? "video" : "image";
 }
 
-/** True when any stage has no catalogue price — estimates are then lower bounds. */
+/** True when any stage has no catalogue price - estimates are then lower bounds. */
 export function hasUnknownPrice(stages: ProductionStagePlan[]): boolean {
   return stages.some((s) => !CAPABILITY_PRICE_MAP[s.capability]);
 }
 
 /**
  * The one recommended starting point: the platform-matched deliverable's
- * image stages only. Video (motion) is never preselected — it is slower,
+ * image stages only. Video (motion) is never preselected - it is slower,
  * costlier, and a separate deliberate choice. Returns stage ids; empty
  * when there is nothing sensible to preselect (all done, or motion-only).
  */

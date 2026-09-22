@@ -15,7 +15,7 @@ services:
       - key: DKG_ENDPOINT_LABEL
         value: EC2 edge node via SSH
       - key: DKG_SSH_HOST
-        value: 52.58.167.195
+        value: 3.77.202.228
       - key: DKG_SSH_USER
         value: harsh
       # Key *content* (Render secret). Local dev uses DKG_SSH_KEY (file path) instead.

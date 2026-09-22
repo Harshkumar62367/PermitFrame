@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 
 /**
  * Cohesive workspace overview: campaigns (+creator names), expiry warnings,
- * spend and output rollups in one request. No DKG health or Livepeer checks —
+ * spend and output rollups in one request. No DKG health or Livepeer checks -
  * those load independently via /api/health and must never block the dashboard.
  */
 export async function GET() {

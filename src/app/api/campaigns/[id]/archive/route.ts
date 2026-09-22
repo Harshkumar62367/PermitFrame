@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
 /**
  * Archive a campaign in place (owner only): it leaves Campaigns/Overview and
  * metrics but stays readable (detail page, share link, timeline) so audit
- * history remains intact. Idempotent — re-archiving succeeds with
+ * history remains intact. Idempotent - re-archiving succeeds with
  * alreadyArchived. Blocked only while production jobs are running.
  */
 export async function POST(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {

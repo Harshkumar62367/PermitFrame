@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import type { QualityProfile } from "../types";
 
 /**
  * Minimal MCP (streamable HTTP) client for the Livepeer Agent Creative
@@ -7,7 +8,7 @@ import crypto from "node:crypto";
  *
  * Renders dispatch through `create_media` (the Creative surface does not
  * expose `run_capability`); async jobs are polled with `get_create_media`.
- * Bearer tokens travel only in the Authorization header — never in errors,
+ * Bearer tokens travel only in the Authorization header - never in errors,
  * logs, or persisted records (see redactSecrets).
  */
 
@@ -33,6 +34,42 @@ export interface CapabilityRunResult {
   jobId?: string;
   costUsd?: number;
   status: string;
+}
+
+export interface AsyncSubmitResult {
+  /** Provider job id - absent when the call completed inline with an output. */
+  jobId?: string;
+  /** Inline terminal output (fast models completing synchronously). */
+  outputUrl?: string;
+  status: string;
+  costUsd?: number;
+  capability?: string;
+  raw: Record<string, unknown>;
+}
+
+export interface MediaStatusResult {
+  status: string;
+  terminal: boolean;
+  outputUrl?: string;
+  jobId?: string;
+  costUsd?: number;
+  capability?: string;
+  raw: Record<string, unknown>;
+}
+
+  export interface VariationResult {
+  outputUrls: string[];
+  /** Async provider handle when the tool backgrounds the job (no inline output). */
+  jobId?: string;
+  costUsd?: number;
+  capability?: string;
+  raw: Record<string, unknown>;
+}
+
+export interface QualityCritique {
+  score: number | null;
+  passed: boolean;
+  note: string;
 }
 
 export class LivepeerMcpClient {
@@ -120,9 +157,26 @@ export class LivepeerMcpClient {
   }
 
   /**
+   * Live MCP tool names (protocol-level tools/list). Read-only discovery -
+   * no spend, no side effects. Used to resolve tool-backed roles (critic).
+   * Returns [] when the surface does not answer.
+   */
+  async listTools(): Promise<string[]> {
+    await this.ensureInitialized();
+    const payload = await this.callJsonRpc("tools/list", {});
+    if (payload.error) return [];
+    const tools = (payload.result as { tools?: unknown })?.tools;
+    if (!Array.isArray(tools)) return [];
+    return tools
+      .filter((t): t is Record<string, unknown> => typeof t === "object" && t !== null)
+      .map((t) => t.name)
+      .filter((n): n is string => typeof n === "string" && n.length > 0);
+  }
+
+  /**
    * Run a capability through the Creative surface (`create_media`).
    * Stable internal contract kept for the pipeline: capability/prompt/
-   * source/ids in, parsed outcome out. Action selection is deliberate —
+   * source/ids in, parsed outcome out. Action selection is deliberate -
    * image-to-video (and upscale) need a source image (`animate`/`upscale`
    * with `source_url`); everything else renders via `generate` with the
    * selected capability as `model_override`. Jobs render inline
@@ -140,6 +194,12 @@ export class LivepeerMcpClient {
     sessionId?: string;
     idempotencyKey?: string;
     maxCostUsd?: number;
+    /**
+     * Requested quality profile. Fast-path rendering (prefer_fast) is a
+     * Draft-preview tradeoff: sent ONLY for draft. Balanced and premium
+     * omit it entirely so the surface renders at full quality.
+     */
+    qualityProfile?: QualityProfile;
   }): Promise<CapabilityRunResult> {
     const action = actionFor(input.kind, input.sourceUrl);
     const timeout = Math.min(Math.max(input.timeoutSeconds ?? 60, 10), 900);
@@ -162,8 +222,9 @@ export class LivepeerMcpClient {
         async: false,
         persist: false,
         ...(input.maxCostUsd !== undefined ? { max_cost_usd: input.maxCostUsd } : {}),
-        // Fast path for stills; motion quality matters more than speed.
-        ...(action === "generate" ? { prefer_fast: true } : {}),
+        // Draft previews trade quality for speed; final-quality profiles
+        // must never fast-path. The flag is omitted (not false) otherwise.
+        ...(action === "generate" && input.qualityProfile === "draft" ? { prefer_fast: true } : {}),
         session_id: input.sessionId ? `permitframe_${sanitize(input.sessionId)}` : "permitframe",
         ...(input.idempotencyKey ? { idempotency_key: input.idempotencyKey } : {})
       },
@@ -195,11 +256,251 @@ export class LivepeerMcpClient {
     }
     throw new Error(`Livepeer job timed out after ${timeout}s`);
   }
+
+  /**
+   * Async submit: create_media with async:true returns a provider job id
+   * immediately (mjob_*) without holding the call open. The id is persisted
+   * before any polling so retries poll instead of re-submitting (no
+   * duplicate paid jobs). Same idempotency_key contract as the sync path.
+   */
+  async submitMedia(input: {
+    capability: string;
+    kind?: "text-to-image" | "image-to-image" | "image-to-video" | "upscale" | "audio-to-text";
+    prompt?: string;
+    sourceUrl?: string;
+    inputs?: Record<string, unknown>;
+    maxCostUsd?: number;
+    qualityProfile?: QualityProfile;
+    sessionId?: string;
+    idempotencyKey?: string;
+  }): Promise<AsyncSubmitResult> {
+    const action = actionFor(input.kind, input.sourceUrl);
+    const aspectRatio = typeof input.inputs?.aspect_ratio === "string" ? (input.inputs.aspect_ratio as string) : undefined;
+    const duration = typeof input.inputs?.duration === "number" ? (input.inputs.duration as number) : action === "animate" ? 5 : undefined;
+    const payload = await this.callTool(
+      "create_media",
+      {
+        action,
+        ...(input.prompt ? { prompt: input.prompt } : {}),
+        model_override: input.capability,
+        ...(input.sourceUrl ? { source_url: input.sourceUrl } : {}),
+        ...(aspectRatio ? { aspect_ratio: aspectRatio } : {}),
+        ...(duration !== undefined ? { duration } : {}),
+        async: true,
+        persist: false,
+        ...(input.maxCostUsd !== undefined ? { max_cost_usd: input.maxCostUsd } : {}),
+        ...(action === "generate" && input.qualityProfile === "draft" ? { prefer_fast: true } : {}),
+        session_id: input.sessionId ? `permitframe_${sanitize(input.sessionId)}` : "permitframe",
+        ...(input.idempotencyKey ? { idempotency_key: input.idempotencyKey } : {})
+      },
+      120_000
+    );
+    assertToolOk(payload, `create_media(${action}, ${input.capability})`);
+    if (isFailed(extractStatus(payload))) {
+      throw new Error(`Livepeer job failed: ${resultText(payload).slice(0, 300)}`);
+    }
+    // Fast models may complete inline: carry the terminal output (plus any
+    // reported cost/model) so callers finalize without a provider id.
+    const s = structured(payload) as Record<string, unknown>;
+    const inline = extractReference(payload);
+    const jobId = extractJobId(payload);
+    if (!jobId && !inline) {
+      throw new Error(`Livepeer returned no output and no job id: ${resultText(payload).slice(0, 300)}`);
+    }
+    return {
+      ...(jobId ? { jobId } : {}),
+      ...(inline ? { outputUrl: inline } : {}),
+      status: extractStatus(payload) || "unknown",
+      costUsd: num(s.cost_paid_usd ?? s.cost_usd_estimated ?? s.cost_usd ?? s.total_cost_usd),
+      capability: str(s.capability ?? s.capability_used ?? s.model ?? s.model_used),
+      raw: s
+    };
+  }
+
+  /** Poll the status endpoint for one async job (resume-safe, no side effects). */
+  async getMediaStatus(jobId: string): Promise<MediaStatusResult> {
+    const payload = await this.callTool("get_create_media", { job_id: jobId });
+    assertToolOk(payload, "get_create_media");
+    const status = extractStatus(payload) || "unknown";
+    const s = structured(payload) as Record<string, unknown>;
+    return {
+      status,
+      terminal: isTerminal(status),
+      outputUrl: extractReference(payload),
+      jobId: extractJobId(payload) ?? jobId,
+      costUsd: num(s.cost_paid_usd ?? s.cost_usd_estimated ?? s.cost_usd ?? s.total_cost_usd),
+      capability: str(s.capability ?? s.capability_used ?? s.model ?? s.model_used),
+      raw: s
+    };
+  }
+
+  /**
+   * Hold one call open up to budgetSeconds for provider-side progress
+   * (mjob_* ids). Returns the latest status snapshot; non-terminal means
+   * "still running, poll again". Failures of the progress call itself
+   * throw so callers fall back to a direct status poll.
+   */
+  async waitForProgress(jobId: string, budgetSeconds = 25): Promise<MediaStatusResult> {
+    const payload = await this.callTool(
+      "subscribe_progress",
+      { job_id: jobId, budget_seconds: Math.min(Math.max(budgetSeconds, 1), 25) },
+      budgetSeconds * 1000 + 10_000
+    );
+    assertToolOk(payload, "subscribe_progress");
+    const status = extractStatus(payload) || "unknown";
+    const s = structured(payload) as Record<string, unknown>;
+    return {
+      status,
+      terminal: isTerminal(status),
+      outputUrl: extractReference(payload),
+      jobId: extractJobId(payload) ?? jobId,
+      costUsd: num(s.cost_paid_usd ?? s.cost_usd_estimated ?? s.cost_usd ?? s.total_cost_usd),
+      capability: str(s.capability ?? s.capability_used ?? s.model ?? s.model_used),
+      raw: s
+    };
+  }
+
+  /**
+   * Subject-preserving multi-scene render (place_subject). Schema validated
+   * read-only against tools/list. Returns the first output URL; callers
+   * fall back to create_media when the call fails or yields nothing usable.
+   */
+  async placeSubject(input: {
+    sourceUrl: string;
+    scenes: string[];
+    subjectHint?: string;
+    modelOverride?: string;
+    maxCostUsd?: number;
+    sessionId?: string;
+    idempotencyKey?: string;
+  }): Promise<{ outputUrls: string[]; jobId?: string; costUsd?: number; capability?: string; raw: Record<string, unknown> }> {
+    const payload = await this.callTool(
+      "place_subject",
+      {
+        source_url: input.sourceUrl,
+        scenes: input.scenes,
+        count: input.scenes.length,
+        ...(input.subjectHint ? { subject_hint: input.subjectHint } : {}),
+        ...(input.modelOverride ? { model_override: input.modelOverride } : {}),
+        ...(input.maxCostUsd !== undefined ? { max_cost_usd: input.maxCostUsd } : {}),
+        session_id: input.sessionId ? `permitframe_${sanitize(input.sessionId)}` : "permitframe",
+        ...(input.idempotencyKey ? { idempotency_key: input.idempotencyKey } : {})
+      },
+      300_000
+    );
+    assertToolOk(payload, "place_subject");
+    const s = structured(payload) as Record<string, unknown>;
+    const placeJobId = extractJobId(payload);
+    return {
+      outputUrls: extractReferences(payload),
+      ...(placeJobId ? { jobId: placeJobId } : {}),
+      costUsd: num(s.cost_paid_usd ?? s.cost_usd_estimated ?? s.cost_usd ?? s.total_cost_usd),
+      capability: str(s.capability ?? s.capability_used ?? s.model ?? s.model_used),
+      raw: structured(payload)
+    };
+  }
+
+  /**
+   * Controlled alternatives of an existing image (revise flow): seed/prompt/
+   * model variations without re-typing the brief. Requires source_url.
+   */
+  async createVariations(input: {
+    sourceUrl: string;
+    prompt?: string;
+    mode?: "seed" | "prompt" | "model";
+    count?: number;
+    modelOverrides?: string[];
+    maxCostUsd?: number;
+    sessionId?: string;
+    idempotencyKey?: string;
+  }): Promise<VariationResult> {
+    const payload = await this.callTool(
+      "create_variations",
+      {
+        source_url: input.sourceUrl,
+        ...(input.prompt ? { prompt: input.prompt } : {}),
+        ...(input.mode ? { mode: input.mode } : {}),
+        ...(input.count !== undefined ? { count: input.count } : {}),
+        ...(input.modelOverrides ? { model_overrides: input.modelOverrides } : {}),
+        ...(input.maxCostUsd !== undefined ? { max_cost_usd: input.maxCostUsd } : {}),
+        session_id: input.sessionId ? `permitframe_${sanitize(input.sessionId)}` : "permitframe",
+        ...(input.idempotencyKey ? { idempotency_key: input.idempotencyKey } : {})
+      },
+      300_000
+    );
+    assertToolOk(payload, "create_variations");
+    const s = structured(payload) as Record<string, unknown>;
+    const varyJobId = extractJobId(payload);
+    return {
+      outputUrls: extractReferences(payload),
+      ...(varyJobId ? { jobId: varyJobId } : {}),
+      costUsd: num(s.cost_paid_usd ?? s.cost_usd_estimated ?? s.cost_usd ?? s.total_cost_usd),
+      capability: str(s.capability ?? s.capability_used ?? s.model ?? s.model_used),
+      raw: structured(payload)
+    };
+  }
+
+  /**
+   * Best-effort provider cancellation for async media and creative jobs.
+   * Returns whether the provider confirmed it - callers must not claim
+   * success otherwise.
+   */
+  async cancelProviderJob(jobId: string): Promise<{ cancelled: boolean; note: string }> {
+    let payload: Record<string, unknown>;
+    try {
+      payload = await this.callTool("cancel_job", { job_id: jobId });
+    } catch (e) {
+      return { cancelled: false, note: `Provider cancel call failed: ${(e as Error).message.slice(0, 200)}` };
+    }
+    const text = resultText(payload).toLowerCase();
+    const status = extractStatus(payload);
+    const confirmed =
+      !payload.error &&
+      !(payload.result as { isError?: boolean } | undefined)?.isError &&
+      (status === "cancelled" || text.includes("cancelled") || text.includes("canceled"));
+    return {
+      cancelled: confirmed,
+      note: confirmed ? "Provider confirmed cancellation." : `Provider did not confirm cancellation: ${resultText(payload).slice(0, 200) || status || "no confirmation"}`
+    };
+  }
+
+  /**
+   * Advisory vision grade of a generated scene vs a reference (approved
+   * source). Never throws for scoring issues - unparseable responses yield
+   * score null, and callers must never fail a stage on critique alone.
+   */
+  async critiqueShot(input: {
+    generatedUrl: string;
+    referenceUrl: string;
+    entityName?: string;
+    threshold?: number;
+  }): Promise<QualityCritique> {
+    const threshold = input.threshold ?? 0.7;
+    const payload = await this.callTool("critique_shot", {
+      generated_url: input.generatedUrl,
+      reference_url: input.referenceUrl,
+      ...(input.entityName ? { entity_name: input.entityName } : {}),
+      threshold
+    });
+    assertToolOk(payload, "critique_shot");
+    const s = structured(payload) as Record<string, unknown>;
+    const score =
+      num(s.weighted_total ?? s.total ?? s.score) ??
+      num((s.sub_scores as Record<string, unknown> | undefined)?.weighted_total) ??
+      null;
+    return {
+      score,
+      passed: score === null ? true : score >= threshold,
+      note:
+        str(s.pass_fail ?? s.verdict) ??
+        (score === null ? "Critique returned no parseable score - treated as advisory pass." : `Vision score ${score.toFixed(2)} vs threshold ${threshold}.`)
+    };
+  }
 }
 
 /**
  * Deliberate action selection for `create_media`. Animate/upscale transform
- * an existing image, so they require a source URL — without one the call
+ * an existing image, so they require a source URL - without one the call
  * would fail server-side after spending, so we refuse locally instead.
  */
 export function actionFor(
@@ -207,11 +508,11 @@ export function actionFor(
   sourceUrl: string | undefined
 ): "generate" | "animate" | "upscale" {
   if (kind === "image-to-video") {
-    if (!sourceUrl) throw new Error("Image-to-video needs a source image — nothing to animate without one.");
+    if (!sourceUrl) throw new Error("Image-to-video needs a source image - nothing to animate without one.");
     return "animate";
   }
   if (kind === "upscale") {
-    if (!sourceUrl) throw new Error("Upscale needs a source image — nothing to upscale without one.");
+    if (!sourceUrl) throw new Error("Upscale needs a source image - nothing to upscale without one.");
     return "upscale";
   }
   if (kind === "audio-to-text") {
@@ -305,27 +606,44 @@ function isFailed(status: string): boolean {
   return ["failed", "cancelled", "canceled", "error"].includes(status);
 }
 
+/** Terminal provider states: nothing further will arrive for the job. */
+function isTerminal(status: string): boolean {
+  return ["completed", "complete", "succeeded", "success", "failed", "cancelled", "canceled", "error", "timeout", "timed_out"].includes(status);
+}
+
 function extractReference(payload: Record<string, unknown>): string | undefined {
+  return extractReferences(payload)[0];
+}
+
+/** All output-candidate URLs in trust order (structured fields, then media extensions). */
+function extractReferences(payload: Record<string, unknown>): string[] {
   const s = structured(payload) as Record<string, unknown>;
   const excluded = [s?.source_url, s?.source_upstream_url].filter(
     (v): v is string => typeof v === "string" && v.startsWith("http")
   );
   const isOutput = (url: string) =>
     url.startsWith("http") && !excluded.includes(url);
+  const found: string[] = [];
   // structured output fields, in trust order
   for (const candidate of [s?.url, s?.output_url, s?.video_url, s?.image_url, s?.audio_url]) {
-    if (typeof candidate === "string" && isOutput(candidate)) return candidate;
+    if (typeof candidate === "string" && isOutput(candidate) && !found.includes(candidate)) found.push(candidate);
   }
   const haystack = `${resultText(payload)}\n${JSON.stringify(payload.result ?? {})}`;
   const urls = (haystack.match(/https?:\/\/[^"'\s)\\]+/g) ?? []).map((u) => u.replace(/[.,]+$/, "")).filter(isOutput);
-  const video = urls.find((url) => /\.(?:mp4|webm|mov|m4v)(?:\?|$)/i.test(url));
-  if (video) return video;
-  const image = urls.find((url) => /\.(?:png|jpe?g|webp|gif)(?:\?|$)/i.test(url));
-  return image ?? urls.at(-1);
+  for (const url of urls) {
+    if (!found.includes(url)) found.push(url);
+  }
+  // Prefer obvious media extensions first, then fall back to discovery order.
+  const media = found.filter((url) => /\.(?:mp4|webm|mov|m4v|png|jpe?g|webp|gif)(?:\?|$)/i.test(url));
+  return [...media, ...found.filter((url) => !media.includes(url))];
 }
 
 function str(value: unknown): string | undefined {
   return typeof value === "string" && value ? value : undefined;
+}
+
+function num(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function sanitize(value: string): string {

@@ -20,7 +20,7 @@ export interface StoredAsset {
   createdAt?: string;
 }
 
-/** Missing env names — values never appear in messages. */
+/** Missing env names - values never appear in messages. */
 export function missingCloudinaryEnv(): string[] {
   const missing: string[] = [];
   if (!process.env.CLOUDINARY_CLOUD_NAME?.trim()) missing.push("CLOUDINARY_CLOUD_NAME");

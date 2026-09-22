@@ -147,7 +147,7 @@ function CampaignsContent() {
               body={active === "all"
                 ? "Get started in four steps: add approved material, brief a campaign, run the permission check, then produce the assets."
                 : active === "archived"
-                  ? "Archived campaigns leave the normal lists but stay readable — archive one from its detail page to see it here."
+                  ? "Archived campaigns leave the normal lists but stay readable - archive one from its detail page to see it here."
                   : "No campaigns currently match this stage. Clear the filter to see everything."}
               actions={active === "all" ? (
                 <>
@@ -164,7 +164,7 @@ function CampaignsContent() {
               ) : undefined}
             />
           ) : (
-            <div className="grid items-stretch gap-4 md:grid-cols-2 min-[1500px]:grid-cols-3">
+            <div className="grid items-stretch gap-4 md:grid-cols-2 xl:grid-cols-3">
               {visible.map((c) => (
                 <CampaignCard key={c.id} campaign={c} />
               ))}

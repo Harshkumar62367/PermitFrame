@@ -34,7 +34,7 @@ describe("loadSshConfigFromEnv", () => {
     assert.equal(cfg.keyInline, undefined);
   });
 
-  it("throws naming every missing value — no server details defaulted in code", () => {
+  it("throws naming every missing value - no server details defaulted in code", () => {
     assert.throws(
       () => loadSshConfigFromEnv({ DKG_SSH_HOST: "h" }),
       /DKG_SSH_USER.*DKG_SSH_KEY or DKG_SSH_KEY_INLINE.*DKG_REMOTE_DKG_BIN/

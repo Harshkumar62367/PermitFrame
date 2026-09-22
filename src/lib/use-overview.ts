@@ -52,7 +52,7 @@ export interface OverviewState {
 /**
  * Workspace overview backed by the shared ["workspace-snapshot"] TanStack
  * Query cache. Cached rows stay visible during background refetches, so this
- * only reports "loading" when no cached data exists — never a full-page
+ * only reports "loading" when no cached data exists - never a full-page
  * skeleton on navigation between cached workspace views.
  */
 export function useWorkspaceOverview(): OverviewState {

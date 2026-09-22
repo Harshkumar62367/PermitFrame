@@ -22,7 +22,7 @@ function dotClass(state: DotState): string {
 
 /**
  * Slim services strip in producer language: Proof ledger and Asset
- * production. Opens an explanatory popover — a red dot is never left
+ * production. Opens an explanatory popover - a red dot is never left
  * unexplained, and production is never shown healthy without a real
  * reachability signal.
  */
@@ -52,7 +52,7 @@ export function IntegrationStatusStrip({
 
   function shortFor(state: ServiceState | undefined, ok: boolean): string {
     if (!state) return ok ? "healthy" : "checking";
-    return state === "healthy" ? "healthy" : state === "checking" ? "checking" : "degraded — open for why";
+    return state === "healthy" ? "healthy" : state === "checking" ? "checking" : "degraded - open for why";
   }
   const dkgShort = !health ? "checking" : shortFor(health.dkg.state, health.dkg.healthy);
   const livepeerShort = !health ? "checking" : shortFor(health.livepeer.state, health.livepeer.reachable === true);

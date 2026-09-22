@@ -27,7 +27,7 @@ function lastEvidenceLabel(activity: { kind: string; at: string }[] | undefined)
 
 /**
  * What each network actually does for the agency, with honest health detail.
- * Missing data is labelled as missing — never a green dot on an unknown state.
+ * Missing data is labelled as missing - never a green dot on an unknown state.
  */
 export function IntegrationStatusPopover({
   open,
@@ -58,12 +58,12 @@ export function IntegrationStatusPopover({
   const dkgState = dkgPending ? "Checking…" : dkg.healthy ? "Healthy" : "Degraded";
   const livepeerState = livepeerPending ? "Checking…" : livepeer.reachable ? "Healthy" : "Degraded";
   const dkgCopy = dkgPending
-    ? "Checking service health — permission-check evidence will cite the exact proof records it used."
+    ? "Checking service health - permission-check evidence will cite the exact proof records it used."
     : dkg.mode === "edge-node" && dkg.healthy
-      ? "Shared proof ledger connected — approvals can publish public verification."
+      ? "Shared proof ledger connected - approvals can publish public verification."
       : dkg.mode === "edge-node"
-        ? "Shared proof ledger unreachable — campaigns keep working with workspace records."
-        : "Workspace proof records — public verification needs the shared ledger (Settings › Advanced).";
+        ? "Shared proof ledger unreachable - campaigns keep working with workspace records."
+        : "Workspace proof records - public verification needs the shared ledger (Settings › Advanced).";
 
   return (
     <SidebarPopover
@@ -125,7 +125,7 @@ export function IntegrationStatusPopover({
           </p>
           <p className="mt-0.5 font-mono text-[10.5px] text-muted-foreground dark:text-white/50">Production service</p>
           <p className="mt-1.5 text-[12px] leading-relaxed text-muted-foreground dark:text-white/65">
-            {livepeer?.detail ?? "Checking service health — only approved campaigns may start production jobs."}
+            {livepeer?.detail ?? "Checking service health - only approved campaigns may start production jobs."}
           </p>
           {livepeer?.endpoint && (
             <p className="mt-1 truncate font-mono text-[10.5px] text-muted-foreground dark:text-white/50" title={livepeer.endpoint}>

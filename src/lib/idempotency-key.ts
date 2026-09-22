@@ -19,3 +19,13 @@ export function stableAttemptKey(
   if (prev && prev.payload === payload) return prev;
   return { payload, key: mintKey() };
 }
+
+/**
+ * Fresh client-generated run key (one per deliberate submit action).
+ * Repeats of the same key replay the existing run server-side instead of
+ * dispatching duplicate paid jobs. Impure by design - call only from event
+ * handlers, never during render.
+ */
+export function newRunKey(prefix = "studio"): string {
+  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}

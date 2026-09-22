@@ -17,7 +17,7 @@ export interface OutcomeInput {
   hasOutputs: boolean;
   /**
    * Explicit persisted publication state of the campaign record.
-   * Missing (legacy rows) means non-public — never inferred from ID shape.
+   * Missing (legacy rows) means non-public - never inferred from ID shape.
    */
   publicationStatus?: PublicationStatus | null;
   /** Evidence record id, when approval published one. */
@@ -36,7 +36,7 @@ export function isPublicRecord(input: Pick<OutcomeInput, "publicationStatus" | "
 
 /**
  * Plain, outcome-based campaign status. Works for full Campaign rows and
- * snapshot rows alike — callers pass primitives, never raw domain labels.
+ * snapshot rows alike - callers pass primitives, never raw domain labels.
  * Technical identifiers never appear here; they belong in the optional
  * "Technical details for verification" section, and only when the record
  * genuinely exists.
@@ -79,7 +79,7 @@ export function campaignOutcome(input: OutcomeInput): CampaignOutcome {
   };
 }
 
-/** Theme-safe outcome pill. Visual only — the label comes from campaignOutcome. */
+/** Theme-safe outcome pill. Visual only - the label comes from campaignOutcome. */
 export function OutcomeBadge({ outcome, className }: { outcome: CampaignOutcome; className?: string }) {
   const tone = statusToneFor(outcome.tone);
   return (

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { loadDb } from "@/server/store";
 import { createConsentInvite } from "@/server/platform";
+import { logDkgError, sanitizeDkgError } from "@/server/dkg/public-errors";
 import type { Platform } from "@/server/types";
 
 export const dynamic = "force-dynamic";
@@ -36,6 +37,8 @@ export async function POST(request: NextRequest) {
     });
     return NextResponse.json({ token: result.token, url: `/consent/${result.token}` });
   } catch (e) {
-    return NextResponse.json({ error: e instanceof Error ? e.message : "Invite creation failed." }, { status: 400 });
+    logDkgError("consent-invite", e);
+    const safe = sanitizeDkgError(e, "workspace");
+    return NextResponse.json({ error: safe.message, code: safe.code }, { status: safe.status });
   }
 }

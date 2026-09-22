@@ -11,7 +11,7 @@ import { isActiveJobStatus } from "./types";
  *   It removes the campaign row, its jobs/receipts/plan and its
  *   verification reference, and records a tombstone. Workspace activity
  *   entries that mention it stay (audit history); nothing on the DKG is
- *   ever touched — deletable campaigns by definition have no public proof.
+ *   ever touched - deletable campaigns by definition have no public proof.
  * - Anything with generated assets, a share link, or an anchored record is
  *   archive-only: the row stays readable (detail page, share link, history)
  *   but leaves Campaigns/Overview/metrics.
@@ -38,7 +38,7 @@ export function deletionEligibility(campaign: Campaign): DeletionEligibility {
     return {
       deletable: false,
       archiveAvailable: false,
-      reasons: [`Production is still running (${activeJobs.length} active job${activeJobs.length === 1 ? "" : "s"}) — wait until it finishes, then delete or archive.`],
+      reasons: [`Production is still running (${activeJobs.length} active job${activeJobs.length === 1 ? "" : "s"}) - wait until it finishes, then delete or archive.`],
       busy: true
     };
   }
@@ -51,23 +51,23 @@ export function deletionEligibility(campaign: Campaign): DeletionEligibility {
     };
   }
   // NOTE: permanent removal of an archived record exists as an explicit,
-  // flag-gated last resort (forceDeleteEligibility below) — never here, so
+  // flag-gated last resort (forceDeleteEligibility below) - never here, so
   // ordinary delete flows and UIs can never stumble into destroying history.
   const hasAssets = campaign.receipts.length > 0 || campaign.jobs.some((j) => j.status === "ready_to_share");
   if (hasAssets) {
     reasons.push(
-      `It has generated assets (${campaign.receipts.length} output${campaign.receipts.length === 1 ? "" : "s"}) — archive it so the audit history stays intact.`
+      `It has generated assets (${campaign.receipts.length} output${campaign.receipts.length === 1 ? "" : "s"}) - archive it so the audit history stays intact.`
     );
   }
   if (campaign.shareToken) {
-    reasons.push("It has an active client-review link — archive it instead so the link keeps resolving to the audit record.");
+    reasons.push("It has an active client-review link - archive it instead so the link keeps resolving to the audit record.");
   }
   if (
     campaign.publicationStatus === "anchored" ||
     (campaign.campaignUAL ?? "").length > 0 ||
     (campaign.verificationRef ?? "").length > 0
   ) {
-    reasons.push("It has a finalized public proof record — archive it so verification history stays intact.");
+    reasons.push("It has a finalized public proof record - archive it so verification history stays intact.");
   }
   return { deletable: reasons.length === 0, archiveAvailable: true, reasons, busy: false };
 }
@@ -78,7 +78,7 @@ export function deletionEligibility(campaign: Campaign): DeletionEligibility {
  * only, hidden UI, type-to-confirm) precisely because it destroys audit
  * history: the workspace row, its jobs/receipts/plan and its share link go
  * away. What survives: workspace activity events, verification snapshots
- * (public proof stays verifiable — it was the point of publishing), and
+ * (public proof stays verifiable - it was the point of publishing), and
  * ledger data (never touched). Active jobs block even force: a background
  * worker must never write into a removed row mid-flight.
  */
@@ -91,7 +91,7 @@ export interface ForceDeleteEligibility {
 
 export function forceDeleteWarnings(campaign: Campaign): string[] {
   const warnings: string[] = [
-    "The workspace record is removed permanently — brief, jobs, generated outputs and plan."
+    "The workspace record is removed permanently - brief, jobs, generated outputs and plan."
   ];
   if (campaign.receipts.length > 0) {
     warnings.push(
@@ -103,7 +103,7 @@ export function forceDeleteWarnings(campaign: Campaign): string[] {
   }
   if ((campaign.verificationRef ?? "").length > 0 || (campaign.campaignUAL ?? "").length > 0) {
     warnings.push(
-      "Public verification snapshots stay published and verifiable — archiving's proof purpose survives, only this workspace's copy goes."
+      "Public verification snapshots stay published and verifiable - archiving's proof purpose survives, only this workspace's copy goes."
     );
   }
   warnings.push("Workspace activity entries that mention it stay. This cannot be undone.");
@@ -116,7 +116,7 @@ export function forceDeleteEligibility(campaign: Campaign): ForceDeleteEligibili
     return {
       allowed: false,
       busy: true,
-      reasons: [`Production is still running (${activeJobs.length} active job${activeJobs.length === 1 ? "" : "s"}) — force delete is blocked until it settles.`],
+      reasons: [`Production is still running (${activeJobs.length} active job${activeJobs.length === 1 ? "" : "s"}) - force delete is blocked until it settles.`],
       warnings: []
     };
   }
@@ -124,7 +124,7 @@ export function forceDeleteEligibility(campaign: Campaign): ForceDeleteEligibili
     return {
       allowed: false,
       busy: false,
-      reasons: ["Force delete applies only to archived records — use the normal delete or archive flow."],
+      reasons: ["Force delete applies only to archived records - use the normal delete or archive flow."],
       warnings: []
     };
   }
@@ -138,7 +138,7 @@ export class CampaignNotFoundError extends Error {
   }
 }
 
-/** Retry of a DELETE for an already-deleted campaign — success, not an error. */
+/** Retry of a DELETE for an already-deleted campaign - success, not an error. */
 export interface AlreadyDeleted {
   deleted: true;
   alreadyDeleted: true;
@@ -170,7 +170,7 @@ export class CampaignProtectedError extends Error {
 }
 
 function tombstones(db: Database): Database["deletedCampaigns"] {
-  // Legacy workspace rows predate the list — treat as empty, never crash.
+  // Legacy workspace rows predate the list - treat as empty, never crash.
   if (!db.deletedCampaigns) db.deletedCampaigns = [];
   return db.deletedCampaigns;
 }
@@ -205,7 +205,7 @@ export function applyDeleteToDb(
     id: eventId,
     at: now,
     kind: "campaign.deleted",
-    summary: `Campaign “${removed.title}” was deleted (workspace-local draft data removed; shared proof untouched — none existed).`,
+    summary: `Campaign “${removed.title}” was deleted (workspace-local draft data removed; shared proof untouched - none existed).`,
     refs: [id]
   });
   return { deleted: true, alreadyDeleted: false, title: removed.title };

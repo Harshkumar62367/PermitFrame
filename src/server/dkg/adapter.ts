@@ -11,9 +11,9 @@ export interface KaRecord {
   txHash?: string;
   explorerUrl: string;
   /**
-   * Explicit state from the real adapter result — never inferred from ID shape.
+   * Explicit state from the real adapter result - never inferred from ID shape.
    * "local" (workspace store), "shared" (SWM), "anchored" (VM finalize
-   * succeeded), "failed" (attempted and failed — retryable).
+   * succeeded), "failed" (attempted and failed - retryable).
    */
   publicationStatus: PublicationStatus;
   name: string;
@@ -50,7 +50,7 @@ export interface DkgAdapter {
     country: string;
     onDate: string;
   }): Promise<PermissionPassport[]>;
-  /** All passports for a creator regardless of platform/country/validity — used to explain blocks. */
+  /** All passports for a creator regardless of platform/country/validity - used to explain blocks. */
   listPassports(creatorId: string): Promise<PermissionPassport[]>;
   findProductFacts(brand: string, productName: string): Promise<ProductFacts | null>;
   listAssets(): Promise<KaRecord[]>;

@@ -9,7 +9,7 @@ function isVideoUrl(url: string): boolean {
 
 /**
  * First-class campaign imagery: source media when registered, else the latest
- * generated output. Monogram fallback when neither exists — never an empty box.
+ * generated output. Monogram fallback when neither exists - never an empty box.
  */
 export function CampaignThumbnail({
   src,

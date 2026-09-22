@@ -18,7 +18,7 @@ const PLATFORMS = ["instagram", "tiktok", "youtube", "linkedin"];
 /**
  * Asset pack: platform expansion as one coherent workflow. Each added
  * platform clones this brief into its own campaign through the existing
- * variants endpoint — rights-checked independently for that platform, with
+ * variants endpoint - rights-checked independently for that platform, with
  * its own studio. Nothing generates here; this section only organizes.
  */
 export function PackSection({ campaign, onChanged }: PackSectionProps) {
@@ -28,7 +28,7 @@ export function PackSection({ campaign, onChanged }: PackSectionProps) {
   const [variants, setVariants] = useState<{ id: string; title: string }[] | null>(null);
   // Which platform button is mid-creation. Buttons share the `busy` lock so
   // two variants can never be created concurrently, but only the clicked one
-  // reads "Creating…" — the others keep their labels.
+  // reads "Creating…" - the others keep their labels.
   const [pendingPlatform, setPendingPlatform] = useState<string | null>(null);
   const invalidateSnapshot = useInvalidateWorkspaceSnapshot();
 
@@ -42,7 +42,7 @@ export function PackSection({ campaign, onChanged }: PackSectionProps) {
     setError(null);
     try {
       // Variant creation runs a full permission check (DKG reads), which can
-      // take well over the default 30s budget — allow two minutes.
+      // take well over the default 30s budget - allow two minutes.
       const j = await apiPost<{ campaigns: { id: string; title: string }[] }>(
         `/api/campaigns/${campaign.id}/variants`,
         { platforms },
@@ -52,8 +52,8 @@ export function PackSection({ campaign, onChanged }: PackSectionProps) {
       setVariants(j.campaigns);
       setMessage(
         j.campaigns.length > 0
-          ? `${j.campaigns.length} variant${j.campaigns.length === 1 ? "" : "s"} created — each is permission-checked independently for its platform before it can generate.`
-          : "No variants created — that platform matches this campaign."
+          ? `${j.campaigns.length} variant${j.campaigns.length === 1 ? "" : "s"} created - each is permission-checked independently for its platform before it can generate.`
+          : "No variants created - that platform matches this campaign."
       );
       if (j.campaigns.length > 0) invalidateSnapshot();
       await onChanged();
@@ -68,7 +68,7 @@ export function PackSection({ campaign, onChanged }: PackSectionProps) {
   return (
     <section aria-label="Asset pack" className="rounded-2xl border border-dashed border-border bg-card p-5 sm:p-6">
       <p className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
-        <Layers className="h-3.5 w-3.5" aria-hidden /> Asset pack — one brief, every platform
+        <Layers className="h-3.5 w-3.5" aria-hidden /> Asset pack - one brief, every platform
       </p>
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <span className="rounded-full bg-secondary px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.08em] text-secondary-foreground">
@@ -82,7 +82,7 @@ export function PackSection({ campaign, onChanged }: PackSectionProps) {
             onClick={() => void addPlatforms([p])}
             disabled={busy}
             aria-busy={pendingPlatform === p}
-            title={pendingPlatform === p ? `Creating the ${p} variant — permission check runs first` : `Clone this brief for ${p}`}
+            title={pendingPlatform === p ? `Creating the ${p} variant - permission check runs first` : `Clone this brief for ${p}`}
             className="rounded-full capitalize"
           >
             {pendingPlatform === p ? "Creating…" : `+ ${p}`}

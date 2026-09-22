@@ -12,14 +12,14 @@ import { ErrorState } from "@/components/ui/error-state";
 import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { HealthDot } from "@/components/ui/integration-status";
-import { apiPost } from "@/lib/api";
+import { apiPost, ApiError } from "@/lib/api";
 import { blockExplorerNftUrl } from "@/lib/proof-links";
 import { useDkgGraph, type DkgAsset, type DkgHealth } from "@/lib/use-dkg-graph";
 
 const EXAMPLE_QUERY = `PREFIX pf: <https://permitframe.app/ns#>
 SELECT ?passport ?status ?validUntil WHERE { ?passport a pf:PermitFramePermissionPassport ; pf:status ?status ; pf:validUntil ?validUntil . }`;
 
-/** Binding values may be RDF term objects like { value: "..." } — unwrap them. */
+/** Binding values may be RDF term objects like { value: "..." } - unwrap them. */
 function cellValue(v: unknown): string {
   if (v !== null && typeof v === "object" && "value" in (v as Record<string, unknown>)) {
     const inner = (v as Record<string, unknown>).value;
@@ -41,7 +41,7 @@ type QueryState =
 
 export default function GraphPage() {
   const uid = useId();
-  // Slow DKG reads live under the separate ["dkg-graph"] key — never in the
+  // Slow DKG reads live under the separate ["dkg-graph"] key - never in the
   // workspace snapshot, never blocking app navigation. The last known health
   // and asset list render immediately from cache and refresh in the
   // background; the shell, explanation, and query editor below always render.
@@ -62,6 +62,9 @@ export default function GraphPage() {
     setCopied(false);
     const started = performance.now();
     try {
+      // Read-only proof query: keep the default bounded timeout (never the
+      // 120s mutation policy) and only improve the timeout wording - a slow
+      // query implies nothing was saved and nothing may have succeeded.
       const data = await apiPost<{ bindings?: Array<Record<string, unknown>> }>("/api/dkg", { query });
       const bindings = data.bindings ?? [];
       const columns = Array.from(new Set(bindings.flatMap((b) => Object.keys(b)))).filter((k) => k !== "raw");
@@ -69,7 +72,10 @@ export default function GraphPage() {
     } catch (e) {
       setQueryState({
         status: "failed",
-        error: e instanceof Error ? e.message : "Query failed.",
+        error:
+          e instanceof ApiError && e.status === 0
+            ? "The proof query is taking longer than expected. Try again in a moment."
+            : e instanceof Error ? e.message : "Query failed.",
         ms: Math.round(performance.now() - started)
       });
     }
@@ -97,7 +103,7 @@ export default function GraphPage() {
       <PageHeader
         eyebrow="Verification · Advanced"
         title="Proof inspector"
-        description="A technical view of the underlying proof records behind campaigns, permissions, and brand rules. Most producers never need this — Verification covers day-to-day review."
+        description="A technical view of the underlying proof records behind campaigns, permissions, and brand rules. Most producers never need this - Verification covers day-to-day review."
       />
 
       {loadError && <ErrorState message={loadError} onRetry={() => { void graph.refetch(); }} />}
@@ -116,7 +122,7 @@ export default function GraphPage() {
               {health.mode === "local-evidence" && (
                 <p className="mt-1.5 break-words text-xs leading-relaxed text-muted-foreground">
                   Honest note: this table lists what the local evidence store can read back. Passport or
-                  fact identifiers shown on other screens are stored references — if this list is empty while
+                  fact identifiers shown on other screens are stored references - if this list is empty while
                   references exist elsewhere, the store file was cleared or a different data directory is in
                   use. Nothing here is fabricated.
                 </p>
@@ -124,7 +130,7 @@ export default function GraphPage() {
               {health.mode === "edge-node" && (
                 <p className="mt-1.5 break-words text-xs leading-relaxed text-muted-foreground">
                   Honest note: results come from live Shared Working Memory. An empty list means the context
-                  graph holds no matching assets yet — identifiers elsewhere are stored references, not live
+                  graph holds no matching assets yet - identifiers elsewhere are stored references, not live
                   graph proof.
                 </p>
               )}
@@ -155,7 +161,7 @@ export default function GraphPage() {
         {graph.data && (
           <p className="mb-3 text-[11.5px] text-muted-foreground">
             Cached view · last synced {new Date(graph.dataUpdatedAt).toLocaleTimeString()} · Refresh for a live read.
-            Cached records are never decision truth — permission checks, publishing, renewal, revocation, and approval always query live.
+            Cached records are never decision truth - permission checks, publishing, renewal, revocation, and approval always query live.
           </p>
         )}
         <div className="grid gap-4 md:grid-cols-2">
@@ -184,7 +190,7 @@ export default function GraphPage() {
                 {(() => {
                   const nftLink = a.ual ? blockExplorerNftUrl(a.ual) : null;
                   if (!a.explorerUrl && !nftLink) {
-                    return <p className="mt-3 text-[11px] text-muted-foreground">Working Memory only — no explorer anchor yet.</p>;
+                    return <p className="mt-3 text-[11px] text-muted-foreground">Working Memory only - no explorer anchor yet.</p>;
                   }
                   return (
                     <p className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs font-medium">
@@ -203,7 +209,7 @@ export default function GraphPage() {
                           href={nftLink.href}
                           target="_blank"
                           rel="noreferrer"
-                          title="Testnet tokens are not indexed by the OriginTrail explorer — view the token contract directly"
+                          title="Testnet tokens are not indexed by the OriginTrail explorer - view the token contract directly"
                           className="text-emerald-700 hover:text-emerald-600 dark:text-emerald-300 dark:hover:text-emerald-200"
                         >
                           {nftLink.label} →
@@ -216,7 +222,7 @@ export default function GraphPage() {
             );
           })}
           {health && assets.length === 0 && !loadError && (
-            <EmptyState title="No proof records readable" body="Either nothing has been recorded yet, or the proof store differs from the workspace database. Identifiers on other screens are stored references — this list only shows live reads." />
+            <EmptyState title="No proof records readable" body="Either nothing has been recorded yet, or the proof store differs from the workspace database. Identifiers on other screens are stored references - this list only shows live reads." />
           )}
         </div>
       </section>
@@ -225,7 +231,7 @@ export default function GraphPage() {
         title="SPARQL console"
         description={
           health?.mode === "local-evidence"
-            ? "Local evidence mode answers the passport/facts query shapes; anything else returns zero rows — that is a stated limit, not a failure."
+            ? "Local evidence mode answers the passport/facts query shapes; anything else returns zero rows - that is a stated limit, not a failure."
             : "Queries run live against the DKG. Slow or empty answers are reported as-is."
         }
       >
@@ -271,7 +277,7 @@ export default function GraphPage() {
         {queryState.status === "ready" && (
           <div className="mt-5 overflow-x-auto rounded-xl border border-border bg-muted/40">
             {queryState.columns.length === 0 ? (
-              <p className="p-4 text-sm text-muted-foreground">0 bindings returned — the query ran fine, it just matched nothing.</p>
+              <p className="p-4 text-sm text-muted-foreground">0 bindings returned - the query ran fine, it just matched nothing.</p>
             ) : (
               <table className="w-full text-left text-sm">
                 <caption className="sr-only">SPARQL query results</caption>

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cloneForPlatforms } from "@/server/platform";
+import { logDkgError, sanitizeDkgError } from "@/server/dkg/public-errors";
 import type { Platform } from "@/server/types";
 
 export const dynamic = "force-dynamic";
@@ -15,6 +16,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const campaigns = await cloneForPlatforms(id, platforms);
     return NextResponse.json({ campaigns });
   } catch (e) {
-    return NextResponse.json({ error: (e as Error).message }, { status: 400 });
+    // Variant creation runs permission checks against the ledger: raw
+    // transport failures must never reach the UI (see public-errors).
+    logDkgError("variants", e);
+    const safe = sanitizeDkgError(e, "preflight");
+    return NextResponse.json({ error: safe.message, code: safe.code }, { status: safe.status });
   }
 }

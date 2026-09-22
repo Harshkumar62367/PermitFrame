@@ -1,7 +1,7 @@
 /**
  * Tiny typed client for PermitFrame JSON routes. Centralizes response and
  * error parsing so pages and hooks never hand-roll `fetch` handling.
- * Visual primitives must not import this — only hooks and pages.
+ * Visual primitives must not import this - only hooks and pages.
  */
 
 export class ApiError extends Error {
@@ -20,7 +20,7 @@ function friendlyMessage(status: number, serverMessage: string | null, endpoint:
   if (status === 401) return "Your session expired. Sign in again to continue.";
   if (status === 404) return "The requested record was not found. It may have been removed or the link is wrong.";
   if (status === 502) return "A connected service did not answer. Retry in a moment.";
-  if (status >= 500) return "The server hit an unexpected error. Retry — your input is preserved.";
+  if (status >= 500) return "The server hit an unexpected error. Retry - your input is preserved.";
   return `Request to ${endpoint} failed (status ${status}).`;
 }
 
@@ -38,7 +38,7 @@ export async function api<T>(
   options?: { method?: string; body?: unknown; signal?: AbortSignal; timeoutMs?: number }
 ): Promise<T> {
   // Default 30s guard: a hung server (e.g. DKG CLI timeouts) must surface as
-  // an honest, retryable error — never an infinite spinner.
+  // an honest, retryable error - never an infinite spinner.
   const budgetMs = options?.timeoutMs ?? 30000;
   const timeout = AbortSignal.timeout(budgetMs);
   const signal = options?.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
@@ -52,18 +52,18 @@ export async function api<T>(
     });
   } catch (cause) {
     // AbortSignal.timeout() aborts with TimeoutError (not AbortError) in
-    // modern browsers — both mean our own budget expired, never the network.
+    // modern browsers - both mean our own budget expired, never the network.
     if (cause instanceof DOMException && (cause.name === "AbortError" || cause.name === "TimeoutError")) {
       if (timeout.aborted && !options?.signal?.aborted) {
         throw new ApiError(
           endpoint,
           0,
-          `Request timed out after ${Math.round(budgetMs / 1000)}s — the server may still be working (first-time setup talks to the DKG). Your input is safe; retry in a moment.`
+          `Request timed out after ${Math.round(budgetMs / 1000)}s - the server may still be working. Refresh once before retrying.`
         );
       }
       throw cause;
     }
-    throw new ApiError(endpoint, 0, "Network request failed — check your connection and retry.");
+    throw new ApiError(endpoint, 0, "Network request failed - check your connection and retry.");
   }
   let payload: unknown = null;
   try {
@@ -92,7 +92,7 @@ export function describeRecord(ual: string | null | undefined): { recorded: bool
     return {
       recorded: false,
       headline: "Saved to this workspace",
-      detail: "No shared proof record exists yet — the data lives only in this workspace."
+      detail: "No shared proof record exists yet - the data lives only in this workspace."
     };
   }
   if (ual.startsWith("did:dkg:local/")) {
@@ -105,6 +105,6 @@ export function describeRecord(ual: string | null | undefined): { recorded: bool
   return {
     recorded: true,
     headline: "Recorded in the proof ledger",
-    detail: "Held in the ledger's working memory — not yet publicly verifiable. Public verification is available in Settings › Advanced."
+    detail: "Held in the ledger's working memory - not yet publicly verifiable. Public verification is available in Settings › Advanced."
   };
 }

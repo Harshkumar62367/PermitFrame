@@ -15,7 +15,7 @@ export function newVerificationRef(): string {
 /**
  * Pure builder: sanitized public snapshot from already-approved workspace
  * data. Contains ONLY intentional public fields. UAL/explorer are set only
- * when the campaign record genuinely anchored — never from ID shape.
+ * when the campaign record genuinely anchored - never from ID shape.
  * Throws for non-approved campaigns so no future caller can publish a
  * "verified" snapshot of a draft, blocked, or archived pack.
  * Unit-tested for field leakage and anchored honesty. No I/O, no session.
@@ -66,8 +66,12 @@ export function buildPublicSnapshot(input: {
       mediaType: r.mediaType,
       format: r.format,
       outputUrl: r.outputUrl,
+      ...(r.actualWidth !== undefined && r.actualHeight !== undefined
+        ? { actualWidth: r.actualWidth, actualHeight: r.actualHeight }
+        : {}),
+      ...(r.aspectVerdict ? { aspectVerdict: r.aspectVerdict } : {}),
       // Correlation-only URL fingerprint (legacy rows carry outputHash of the
-      // same meaning). Never content evidence — see types.
+      // same meaning). Never content evidence - see types.
       providerUrlFingerprint: r.providerUrlFingerprint ?? r.outputHash,
       capability: r.capability,
       promptHash: r.promptHash,

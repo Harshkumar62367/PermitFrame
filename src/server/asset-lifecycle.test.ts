@@ -13,7 +13,7 @@ import { deliverableState } from "@/components/studio/studio-model";
 import type { ProductionJob } from "./types";
 
 /**
- * Async-delivery lifecycle tests (pure state machine — no network, no spend):
+ * Async-delivery lifecycle tests (pure state machine - no network, no spend):
  * queued → generating → preview_ready → storage_pending → ready_to_share,
  * with storage_retry_needed as the honest failure branch.
  */
@@ -55,7 +55,7 @@ describe("lifecycle transitions", () => {
 
 describe("delivery gates", () => {
   it("previews never share; only stored receipts do", () => {
-    // No receipt exists at preview — nothing to gate on.
+    // No receipt exists at preview - nothing to gate on.
     assert.equal([].some(hasSharableReceipt), false);
     assert.equal(hasSharableReceipt({ storageStatus: "stored" }), true);
     assert.equal(hasSharableReceipt({}), false, "legacy provider-hosted outputs stay private until stored");

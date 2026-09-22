@@ -19,7 +19,7 @@ export const STATUS_TONE_STYLES: Record<StatusTone, string> = {
   neutral: "bg-secondary text-secondary-foreground ring-border"
 };
 
-/** Map raw domain statuses to a visual tone. Visual only — no domain logic. */
+/** Map raw domain statuses to a visual tone. Visual only - no domain logic. */
 export function statusToneFor(status: string): StatusTone {
   const s = status.toLowerCase();
   if (s in STATUS_TONE_STYLES) return s as StatusTone;

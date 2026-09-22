@@ -20,7 +20,7 @@ import { campaignAssets, workspaces } from "./db/schema";
 
 dotenv.config({ path: ".env.local" });
 
-/** Mocked Cloudinary transport everywhere — no real assets in tests. */
+/** Mocked Cloudinary transport everywhere - no real assets in tests. */
 
 const SAVED_ENV = {
   CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME,
@@ -109,7 +109,7 @@ describe("cloudinary upload mapping (mocked transport)", () => {
 });
 
 describe("asset identity hygiene", () => {
-  it("uses ids only — never emails, wallets, or prompt text", () => {
+  it("uses ids only - never emails, wallets, or prompt text", () => {
     const { folder, publicId } = assetIdentity("ws_1", "cmp_2", "job_3");
     assert.equal(folder, "permitframe/ws_1/cmp_2");
     assert.equal(publicId, "job_3");

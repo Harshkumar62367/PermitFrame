@@ -1,14 +1,15 @@
-import type { Campaign, DerivativeReceipt, ProductionJob, PublicationStatus } from "../types";
+import type { Campaign, Database, DerivativeReceipt, ProductionJob, PublicationStatus, QualityProfile, StageInputSource, StageRole } from "../types";
 import { loadDb, newId, nowIso, sha256, updateDb } from "../store";
+import { readWorkspace, writeWorkspace } from "./run-store";
 import { getDb } from "../db/client";
 import { campaignAssets } from "../db/schema";
 import { eq } from "drizzle-orm";
 import { getDkg } from "../dkg";
 import { receiptKa, campaignKa } from "../dkg/schemas";
+import { aspectVerdict } from "./aspect";
 import { composeStagePrompt } from "../policy/engine";
-import { LivepeerMcpClient, livepeerConfig } from "./mcp-client";
-import { assertCapabilityAvailable } from "./catalogue";
-import { fetchLivePriceMap, stageSpendingCeiling } from "./pricing";
+import { requestedPreservationMode } from "./preservation-policy";
+import { normalizeQualityProfile, normalizeStagePlan } from "./plan-dag";
 import { getCampaignAssets, persistJobAsset } from "../asset-store";
 import { isCloudinaryConfigured } from "../cloudinary";
 
@@ -28,7 +29,8 @@ export interface StageOutcome {
 }
 
 export function createJobRecords(campaign: Campaign, stageIds?: string[]): ProductionJob[] {
-  const plan = campaign.preflight?.plan ?? [];
+  const profile = normalizeQualityProfile(campaign.request.qualityProfile ?? process.env.LIVEPEER_QUALITY_PROFILE);
+  const plan = normalizeStagePlan(campaign.preflight?.plan ?? [], profile);
   const wanted = stageIds && stageIds.length > 0 ? new Set(stageIds) : null;
   return plan
     .filter((stage) => !wanted || wanted.has(stage.id))
@@ -38,6 +40,9 @@ export function createJobRecords(campaign: Campaign, stageIds?: string[]): Produ
       stageId: stage.id,
       kind: stage.kind,
       capability: stage.capability,
+      requestedCapability: stage.capability,
+      qualityProfile: stage.qualityProfile,
+      role: stage.role,
       prompt: composeStagePrompt(campaign, stage.id),
       requestMeta: requestMetaFor(stage),
       status: "queued",
@@ -46,16 +51,71 @@ export function createJobRecords(campaign: Campaign, stageIds?: string[]): Produ
 }
 
 /** Storage-safe description of what a stage asks the provider for. */
-export function requestMetaFor(stage: { kind: string; format: string }): NonNullable<ProductionJob["requestMeta"]> {
+export function requestMetaFor(stage: {
+  kind: string;
+  format: string;
+  durationSeconds?: number;
+  requestedDurationSeconds?: number;
+  durationNote?: string;
+  durationSource?: "provider-metadata" | "documented-model-policy" | "product-range-unverified";
+  inputSource?: StageInputSource;
+  qualityProfile?: QualityProfile;
+  role?: StageRole;
+  fallbackFrom?: string;
+}): NonNullable<ProductionJob["requestMeta"]> {
   return {
     aspectRatio: stage.format,
-    ...(stage.kind === "image-to-video" ? { durationSeconds: 5 } : {})
+    ...((stage.kind === "image-to-video" || stage.durationSeconds !== undefined)
+      ? { durationSeconds: stage.durationSeconds ?? 5 }
+      : {}),
+    ...(stage.kind === "image-to-video" && stage.requestedDurationSeconds !== undefined
+      ? { requestedDurationSeconds: stage.requestedDurationSeconds }
+      : {}),
+    ...(stage.durationNote ? { durationNote: stage.durationNote } : {}),
+    ...(stage.durationSource ? { durationSource: stage.durationSource } : {}),
+    ...(stage.inputSource ? { inputSource: stage.inputSource } : {}),
+    ...(stage.qualityProfile ? { qualityProfile: stage.qualityProfile } : {}),
+    ...(stage.role ? { role: stage.role } : {}),
+    ...(stage.fallbackFrom ? { fallbackFrom: stage.fallbackFrom } : {}),
+    // Plan-time preservation request (role-derived, refinement-agnostic):
+    // dispatch re-validates and records the resolved outcome. Structured
+    // from the start so plan → job → receipt carries one vocabulary.
+    ...(stage.role
+      ? {
+          preservationRequested: requestedPreservationMode({ role: stage.role, variationExplicit: false, variationSourceUrl: undefined })
+        }
+      : {})
   };
+}
+
+/** Mark a stage's queued jobs failed with an honest cause (DAG propagation).
+ * Pass onlyJobIds to fail just those jobs (exact-job runs): siblings
+ * sharing the stageId are never failed merely for sharing it. */
+export async function failStageJobs(campaignId: string, stageId: string, message: string, scope?: string, onlyJobIds?: string[]): Promise<void> {
+  const write = (mutator: (db: Database) => void): Promise<unknown> =>
+    scope ? writeWorkspace(scope, mutator) : updateDb(mutator);
+  const owned = onlyJobIds && onlyJobIds.length > 0 ? new Set(onlyJobIds) : null;
+  await write((d) => {
+    const c = d.campaigns.find((x) => x.id === campaignId);
+    if (c) {
+      let touched = false;
+      for (const j of c.jobs) {
+        if (j.stageId === stageId && (j.status === "queued" || j.status === "generating")) {
+          if (owned && !owned.has(j.id)) continue;
+          j.status = "failed";
+          j.error = message.slice(0, 400);
+          j.finishedAt = nowIso();
+          touched = true;
+        }
+      }
+      if (touched) c.status = "review";
+    }
+  });
 }
 
 /** Storage worker for one previewed job. Compare-and-set on preview_ready
  * makes double polls harmless: only the first worker proceeds. */
-async function persistPreviewInBackground(input: {
+export async function persistPreviewInBackground(input: {
   workspaceId: string;
   campaignId: string;
   jobId: string;
@@ -66,20 +126,21 @@ async function persistPreviewInBackground(input: {
   costUsd?: number;
   kind: ProductionJob["kind"];
 }): Promise<void> {
+  const scope = input.workspaceId;
   if (!isCloudinaryConfigured()) {
     // Legacy delivery: durable storage unavailable, so the preview itself
     // delivers (labeled provider-hosted downstream).
-    const delivered = await transitionJob(input.campaignId, input.jobId, "preview_ready", "ready_to_share");
+    const delivered = await transitionJob(input.campaignId, input.jobId, "preview_ready", "ready_to_share", scope);
     if (delivered) {
-      await updateDb((d) => {
+      await writeWorkspace(scope, (d) => {
         const j = d.campaigns.find((x) => x.id === input.campaignId)?.jobs.find((x) => x.id === input.jobId);
         if (j) j.finishedAt = nowIso();
       });
-      await publishReceipt(input.campaignId, input.jobId, input.providerUrl, input.providerModel, null);
+      await publishReceipt(input.campaignId, input.jobId, input.providerUrl, input.providerModel, null, scope);
     }
     return;
   }
-  const claimed = await transitionJob(input.campaignId, input.jobId, "preview_ready", "storage_pending");
+  const claimed = await transitionJob(input.campaignId, input.jobId, "preview_ready", "storage_pending", scope);
   if (!claimed) return;
   const outcome = await persistJobAsset({
     workspaceId: input.workspaceId,
@@ -97,7 +158,7 @@ async function persistPreviewInBackground(input: {
   });
   if (outcome.outcome === "stored") {
     const canonicalUrl = outcome.asset.secureUrl;
-    await updateDb((d) => {
+    await writeWorkspace(scope, (d) => {
       const j = d.campaigns.find((x) => x.id === input.campaignId)?.jobs.find((x) => x.id === input.jobId);
       if (j) {
         j.status = "ready_to_share";
@@ -107,8 +168,10 @@ async function persistPreviewInBackground(input: {
     });
     const receiptId = await publishReceipt(input.campaignId, input.jobId, canonicalUrl, input.providerModel, {
       publicId: outcome.asset.publicId,
-      url: canonicalUrl
-    });
+      url: canonicalUrl,
+      width: outcome.asset.width,
+      height: outcome.asset.height
+    }, scope);
     if (receiptId) {
       await getDb()
         .update(campaignAssets)
@@ -119,17 +182,19 @@ async function persistPreviewInBackground(input: {
     return;
   }
   if (outcome.outcome === "deferred") {
-    await transitionJob(input.campaignId, input.jobId, "storage_pending", "preview_ready");
+    await transitionJob(input.campaignId, input.jobId, "storage_pending", "preview_ready", scope);
     return;
   }
   // Failed: preview intact, retryable within the attempt budget.
-  await transitionJob(input.campaignId, input.jobId, "storage_pending", "storage_retry_needed");
+  await transitionJob(input.campaignId, input.jobId, "storage_pending", "storage_retry_needed", scope);
 }
 
 /** Compare-and-set a job status. Returns true only when it transitioned. */
-async function transitionJob(campaignId: string, jobId: string, from: ProductionJob["status"], to: ProductionJob["status"]): Promise<boolean> {
+export async function transitionJob(campaignId: string, jobId: string, from: ProductionJob["status"], to: ProductionJob["status"], scope?: string): Promise<boolean> {
   let moved = false;
-  await updateDb((d) => {
+  const write = (mutator: (db: Database) => void): Promise<unknown> =>
+    scope ? writeWorkspace(scope, mutator) : updateDb(mutator);
+  await write((d) => {
     const j = d.campaigns.find((x) => x.id === campaignId)?.jobs.find((x) => x.id === jobId);
     if (j && j.status === from) {
       j.status = to;
@@ -140,192 +205,96 @@ async function transitionJob(campaignId: string, jobId: string, from: Production
 }
 
 export async function runProduction(campaignId: string, onlyStageIds?: string[], workspaceId?: string): Promise<{ finished: boolean; error?: string }> {
-  const db = await loadDb();
-  const campaign = db.campaigns.find((c) => c.id === campaignId);
-  if (!campaign) return { finished: true, error: "Campaign not found" };
-  if (campaign.preflight?.decision !== "allow") {
-    return { finished: true, error: "Production blocked by policy preflight" };
-  }
-
-  const client = new LivepeerMcpClient(livepeerConfig());
-  const sourceMedia = db.sourceMedia.find((m) => m.id === campaign.sourceMediaId);
-  // Live pricing is best-effort (cached, never blocking): ceilings fall back
-  // to historical prices when the agent is unreachable.
-  const livePrices = await fetchLivePriceMap();
-  let previousOutputUrl: string | undefined = sourceMedia?.url;
-  let anyFailure = false;
-
-  for (const job of campaign.jobs) {
-    if (job.status === "ready_to_share") {
-      previousOutputUrl = job.outputUrl ?? previousOutputUrl;
-      continue;
-    }
-    // Stage-subset runs (studio deliverable selection, single-stage refine)
-    // leave unselected jobs untouched — they are neither executed nor marked.
-    if (onlyStageIds && !onlyStageIds.includes(job.stageId)) continue;
-    if (anyFailure) break; // a failed stage halts dependent stages
-
-    await updateDb((d) => {
-      const c = d.campaigns.find((x) => x.id === campaignId);
-      const j = c?.jobs.find((x) => x.id === job.id);
-      if (c) c.status = "generating";
-      if (j) {
-        j.status = "generating";
-        j.startedAt = nowIso();
-        // Record what actually fed this run: the registered source, or a
-        // prior stage output chained by the orchestrator.
-        const fromPrior = previousOutputUrl !== undefined && previousOutputUrl !== sourceMedia?.url;
-        j.requestMeta = { ...j.requestMeta, sourceKind: fromPrior ? "prior-output" : "source-media" };
-      }
-    });
-
-    try {
-      const stage = campaign.preflight?.plan.find((s) => s.id === job.stageId);
-      const isVideo = job.kind === "image-to-video";
-      // Refuse dispatch for models discovery does not list as available —
-      // the job fails honestly instead of spending against a missing model.
-      await assertCapabilityAvailable(job.capability);
-      const baseInput = {
-        capability: job.capability,
-        kind: job.kind,
-        prompt: job.prompt,
-        sourceUrl: previousOutputUrl,
-        maxCostUsd: stageSpendingCeiling(
-          { capability: job.capability, kind: job.kind },
-          livePrices,
-          isVideo ? 5 : 0
-        ),
-        inputs: stage
-          ? stage.format === "1:1"
-            ? { aspect_ratio: "1:1" }
-            : stage.format === "16:9"
-              ? { aspect_ratio: "16:9" }
-              : { aspect_ratio: "9:16", ...(isVideo ? { duration: 5 } : {}) }
-          : undefined,
-        timeoutSeconds: isVideo ? 600 : 90,
-        sessionId: campaign.id,
-        idempotencyKey: `pf_${campaign.id}_${job.stageId}_${job.id}`
-      };
-
-      // The Creative surface substitutes or retires models; when an error
-      // disabled the error names the recommended replacement — retry once with it.
-      let result;
-      try {
-        result = await client.runCapability(baseInput);
-      } catch (firstError) {
-        const replacement = (firstError as Error).message.match(/recommended replacement is ([a-z0-9-]+)/i);
-        if (!replacement) throw firstError;
-        result = await client.runCapability({ ...baseInput, capability: replacement[1] });
-        await updateDb((d) => {
-          const c = d.campaigns.find((x) => x.id === campaignId);
-          const j = c?.jobs.find((x) => x.id === job.id);
-          if (j) j.capability = `${j.capability} → ${replacement[1]} (auto-recovered)`;
-        });
-      }
-
-      if (!result.outputUrl) throw new Error("Generation completed without an output URL.");
-      const providerUrl = result.outputUrl;
-      previousOutputUrl = providerUrl;
-
-      // Preview first: the genuine Livepeer output is visible immediately as
-      // provider-hosted preview. Durable persistence runs detached below —
-      // the loop, the API response, and navigation never wait for it.
-      await updateDb((d) => {
-        const c = d.campaigns.find((x) => x.id === campaignId);
-        const j = c?.jobs.find((x) => x.id === job.id);
-        if (j) {
-          j.status = "preview_ready";
-          j.providerOutputUrl = providerUrl;
-          j.outputUrl = providerUrl;
-          j.providerUrlFingerprint = sha256(providerUrl);
-          j.livepeerJobId = result.jobId;
-          j.humanSummary = result.humanSummary;
-          j.costUsd = result.costUsd;
-        }
-      });
-
-      if (workspaceId) {
-        void persistPreviewInBackground({
-          workspaceId,
-          campaignId,
-          jobId: job.id,
-          providerUrl,
-          promptHash: sha256(job.prompt),
-          providerModel: result.capability ?? job.capability,
-          livepeerJobId: result.jobId,
-          costUsd: result.costUsd,
-          kind: job.kind
-        }).catch(() => undefined);
-      }
-    } catch (error) {
-      anyFailure = true;
-      await updateDb((d) => {
-        const c = d.campaigns.find((x) => x.id === campaignId);
-        const j = c?.jobs.find((x) => x.id === job.id);
-        if (c) c.status = "review";
-        if (j) {
-          j.status = "failed";
-          j.error = (error as Error).message.slice(0, 400);
-          j.finishedAt = nowIso();
-        }
-      });
-    }
-  }
-
-  const finalDb = await loadDb();
-  const finalCampaign = finalDb.campaigns.find((c) => c.id === campaignId);
-  const succeeded = finalCampaign?.jobs.filter((j) => j.status === "ready_to_share").length ?? 0;
-  await updateDb((d) => {
-    const c = d.campaigns.find((x) => x.id === campaignId);
-    if (c) {
-      // A failed generation run is a production outcome, never a policy
-      // verdict: "blocked" is reserved for preflight denials (it gates spend
-      // and drives the dashboard). Failed runs land in "review" so a human
-      // inspects the job errors instead of seeing a phantom policy block.
-      c.status = "review";
-      c.updatedAt = nowIso();
-    }
-    d.events.push({
-      id: newId("evt"),
-      at: nowIso(),
-      kind: "production.run",
-      summary: `Production run finished: ${succeeded}/${finalCampaign?.jobs.length ?? 0} stages succeeded.`,
-      refs: [campaignId]
-    });
-  });
+  // Compatibility entry point: the sequential chain is gone — execution is
+  // the dependency-aware async pump (bounded concurrency, resume from
+  // durable records). Awaits pump completion with a generous budget, same
+  // contract as before for detached callers.
+  const { submitRun, pumpRun } = await import("./runner");
+  const submitted = await submitRun({ campaignId, stageIds: onlyStageIds, workspaceId });
+  if (!submitted.run) return { finished: true, error: submitted.error };
+  if (!submitted.workspaceId) return { finished: true, error: "Workspace unknown — cannot execute." };
+  await pumpRun(submitted.workspaceId, campaignId, {
+    runId: submitted.run.id,
+    budgetMs: 10 * 60 * 1000
+  }).catch(() => undefined);
   return { finished: true };
 }
 
-async function publishReceipt(
+
+export async function publishReceipt(
   campaignId: string,
   jobId: string,
   outputUrl: string,
   capability: string,
-  storage: { publicId: string; url: string } | null
+  storage: { publicId: string; url: string; width?: number; height?: number } | null,
+  scope?: string
 ): Promise<string> {
-  const db = await loadDb();
+  const db = scope ? await readWorkspace(scope) : await loadDb();
   const campaign = db.campaigns.find((c) => c.id === campaignId);
   const job = campaign?.jobs.find((j) => j.id === jobId);
   if (!campaign || !job) return "";
 
+  const measuredWidth = Number.isFinite(storage?.width) ? (storage?.width as number) : undefined;
+  const measuredHeight = Number.isFinite(storage?.height) ? (storage?.height as number) : undefined;
+  const stageFormat = campaign.preflight?.plan.find((s) => s.id === job.stageId)?.format ?? "9:16";
   const receipt: DerivativeReceipt = {
     id: newId("rcpt"),
     campaignId,
     jobId,
     label: campaign.preflight?.plan.find((s) => s.id === job.stageId)?.label ?? job.stageId,
     mediaType: job.kind === "image-to-video" ? "video" : "image",
-    format: campaign.preflight?.plan.find((s) => s.id === job.stageId)?.format ?? "9:16",
+    format: stageFormat,
     outputUrl,
+    // Measured size from durable storage metadata (absent for legacy and
+    // provider-hosted rows) — the only honest source for "is it really 1:1".
+    ...(measuredWidth !== undefined && measuredHeight !== undefined
+      ? { actualWidth: measuredWidth, actualHeight: measuredHeight }
+      : {}),
+    // Requested-vs-delivered verdict persisted with the receipt: mismatches
+    // are never Ready for the requested placement (approval gates on this).
+    aspectVerdict: aspectVerdict(stageFormat, measuredWidth, measuredHeight),
     // URL fingerprint for correlation only — never content evidence (see types).
     providerUrlFingerprint: job.providerUrlFingerprint ?? sha256(outputUrl),
     capability,
     promptHash: sha256(job.prompt),
     claimsUsed: campaign.preflight?.allowedClaims ?? [],
+    // Exact model provenance: what was requested (profile + first pick)
+    // versus what actually rendered (clean actual capability - never text).
+    qualityProfile: job.qualityProfile,
+    role: job.role,
+    requestedCapability: job.requestedCapability ?? job.capability,
+    actualCapability: job.actualCapability ?? capability,
+    // Motion clip provenance: resolved length dispatched + requested length.
+    ...(job.kind === "image-to-video"
+      ? {
+          ...(job.requestMeta?.durationSeconds !== undefined ? { durationSeconds: job.requestMeta.durationSeconds } : {}),
+          ...(job.requestMeta?.requestedDurationSeconds !== undefined
+            ? { requestedDurationSeconds: job.requestMeta.requestedDurationSeconds }
+            : {}),
+          ...(job.requestMeta?.durationSource ? { durationSource: job.requestMeta.durationSource } : {}),
+          ...(job.requestMeta?.durationNote ? { durationNote: job.requestMeta.durationNote } : {})
+        }
+      : {}),
     derivedFrom: {
       sourceMediaId: campaign.sourceMediaId,
       passportId: campaign.passportId,
-      productFactsId: campaign.productFactsId
+      productFactsId: campaign.productFactsId,
+      ...(job.requestMeta?.sourceStageId ? { sourceStageId: job.requestMeta.sourceStageId } : {})
     },
+    // Preservation provenance copied from the rendering job: what actually
+    // ran (resolved tool, claimable evidence, fallback reason), never what
+    // was merely planned. Legacy jobs without these fields stay readable -
+    // the UI normalizes them to "no claim".
+    ...(job.requestMeta?.preservationRequested ? { preservationRequested: job.requestMeta.preservationRequested } : {}),
+    ...(job.requestMeta?.preservationResolved ? { preservationResolved: job.requestMeta.preservationResolved } : {}),
+    ...(job.requestMeta?.preservationEvidenceLevel ? { preservationEvidenceLevel: job.requestMeta.preservationEvidenceLevel } : {}),
+    ...(job.requestMeta?.preservationRequestedCapability ? { preservationRequestedCapability: job.requestMeta.preservationRequestedCapability } : {}),
+    ...(job.requestMeta?.preservationActualCapability ? { preservationActualCapability: job.requestMeta.preservationActualCapability } : {}),
+    ...(job.requestMeta?.approvedSourceAssetId ? { approvedSourceAssetId: job.requestMeta.approvedSourceAssetId } : {}),
+    ...(job.requestMeta?.fallbackReason ? { fallbackReason: job.requestMeta.fallbackReason } : {}),
+    ...(job.requestMeta?.providerOperationSucceeded !== undefined
+      ? { providerOperationSucceeded: job.requestMeta.providerOperationSucceeded }
+      : {}),
     generatedAt: nowIso(),
     costUsd: job.costUsd,
     visibility: "shared",
@@ -351,7 +320,7 @@ async function publishReceipt(
     receipt.publicationStatus = "failed";
   }
 
-  await updateDb((d) => {
+  const pushReceipt = (d: Database): void => {
     const c = d.campaigns.find((x) => x.id === campaignId);
     if (c) c.receipts.push(receipt);
     d.events.push({
@@ -361,7 +330,9 @@ async function publishReceipt(
       summary: `Derivative receipt ${receipt.id} published for stage "${receipt.label}".`,
       refs: [campaignId, receipt.id]
     });
-  });
+  };
+  if (scope) await writeWorkspace(scope, pushReceipt);
+  else await updateDb(pushReceipt);
   return receipt.id;
 }
 
@@ -384,7 +355,7 @@ export async function storeLegacyOutput(
   const receipt = campaign?.receipts.find((r) => r.jobId === jobId);
   const providerUrl = job?.providerOutputUrl ?? job?.outputUrl;
   if (!campaign || !job || !receipt || !providerUrl) {
-    return { stored: false, message: "Output not found — nothing was changed." };
+    return { stored: false, message: "Output not found - nothing was changed." };
   }
   if (receipt.storageStatus === "stored") return { stored: true, message: "Already stored in PermitFrame." };
   const outcome = await persistJobAsset({
@@ -424,10 +395,10 @@ export async function storeLegacyOutput(
       .set({ receiptId: receipt.id, storageUrl: canonicalUrl, updatedAt: new Date() })
       .where(eq(campaignAssets.jobId, jobId))
       .catch(() => undefined);
-    return { stored: true, message: "Stored in PermitFrame — share, download, and proof actions are unlocked." };
+    return { stored: true, message: "Stored in PermitFrame - share, download, and proof actions are unlocked." };
   }
   if (outcome.outcome === "deferred") {
-    return { stored: false, message: "Durable storage is not configured — outputs stay provider-hosted." };
+    return { stored: false, message: "Durable storage is not configured - outputs stay provider-hosted." };
   }
   await updateDb((d) => {
     const r = d.campaigns.find((x) => x.id === campaignId)?.receipts.find((x) => x.jobId === jobId);
@@ -435,7 +406,7 @@ export async function storeLegacyOutput(
   });
   return {
     stored: false,
-    message: `Secure storage failed (${outcome.error}) — the preview is intact. If the provider link expired, regenerate the stage for a fresh output.`
+    message: `Secure storage failed (${outcome.error}) - the preview is intact. If the provider link expired, regenerate the stage for a fresh output.`
   };
 }
 
@@ -465,7 +436,9 @@ export async function finalizeStoredJob(workspaceId: string, campaignId: string,
   });
   const receiptId = await publishReceipt(campaignId, jobId, canonicalUrl, job.capability, {
     publicId: asset.storagePublicId as string,
-    url: canonicalUrl
+    url: canonicalUrl,
+    width: asset.storageWidth ?? undefined,
+    height: asset.storageHeight ?? undefined
   });
   if (receiptId) {
     await getDb()

@@ -10,7 +10,7 @@ import { HowItWorks, PlatformFeatures, PolicyScenarios } from "@/components/land
 export default function LandingPage() {
   return (
     <div className="pf-page min-h-screen bg-background text-foreground dark:bg-[#0b0f0e] dark:text-white">
-      {/* Header — same dark backdrop, blur over content */}
+      {/* Header - same dark backdrop, blur over content */}
       <header className="fixed inset-x-0 top-0 z-50 border-b border-border bg-background/80 backdrop-blur-md dark:border-white/5 dark:bg-[#0b0f0e]/80">
         <div className="mx-auto flex h-14 w-full max-w-6xl items-center justify-between gap-2 px-4 sm:px-6">
           <Link href="/" className="flex min-w-0 items-center gap-2" aria-label="PermitFrame home">
@@ -31,7 +31,7 @@ export default function LandingPage() {
         </div>
       </header>
 
-      {/* Hero — same dark backdrop; emerald glow carries the character */}
+      {/* Hero - same dark backdrop; emerald glow carries the character */}
       <section className="grain relative overflow-hidden bg-background pb-16 pt-36 dark:bg-[#0b0f0e]">
         <div
           className="pointer-events-none absolute inset-0"
@@ -56,7 +56,7 @@ export default function LandingPage() {
           <FadeIn delay={0.16}>
             <p className="mx-auto mt-6 max-w-2xl text-pretty text-base leading-relaxed text-muted-foreground sm:text-lg dark:text-white/60">
               PermitFrame helps creative teams turn approved creator rights and brand rules into
-              platform-ready AI campaign assets — with a reviewable proof trail.
+              platform-ready AI campaign assets - with a reviewable proof trail.
             </p>
           </FadeIn>
         </div>
@@ -82,7 +82,7 @@ export default function LandingPage() {
       <PolicyScenarios />
       <PlatformFeatures />
 
-      {/* CTA — same dark backdrop; hairline separates, not a second backdrop */}
+      {/* CTA - same dark backdrop; hairline separates, not a second backdrop */}
       <section className="grain relative overflow-hidden border-t border-border bg-background py-20 text-center sm:py-24 dark:border-white/5 dark:bg-[#0b0f0e] dark:text-white">
         <div
           className="pointer-events-none absolute inset-0"
@@ -103,15 +103,15 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* Footer — semantic tokens, readable in both themes */}
+      {/* Footer - semantic tokens, readable in both themes */}
       <footer className="border-t border-border py-10 dark:border-white/5">
         <div className="mx-auto flex w-full max-w-6xl flex-col items-center justify-between gap-4 px-4 text-[12px] text-muted-foreground sm:flex-row sm:px-6">
           <div className="flex items-center gap-2">
             <PermitFrameMark className="h-4 w-4 shrink-0 text-emerald-700 dark:text-emerald-300" />
-            <span>PermitFrame — rights-aware creative production</span>
+            <span>PermitFrame - rights-aware creative production</span>
           </div>
           <p className="max-w-md text-center sm:text-right">
-            Attestations prove declarations and integrity — not legal ownership. Built for the
+            Attestations prove declarations and integrity - not legal ownership. Built for the
             Atumera Livepeer Agent Hackathon, Track 2.
           </p>
         </div>

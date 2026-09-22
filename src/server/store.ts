@@ -43,6 +43,30 @@ export async function updateDb(mutator: (db: Database) => void): Promise<Databas
   return updateWorkspaceDb(session.workspaceId, mutator);
 }
 
+/** Read one workspace's state without a viewer session (detached workers). */
+export async function loadWorkspaceDb(workspaceId: string): Promise<Database> {
+  const db = getDb();
+  const [row] = await db
+    .select({ data: workspaceState.data })
+    .from(workspaceState)
+    .where(eq(workspaceState.workspaceId, workspaceId))
+    .limit(1);
+  return row?.data ?? emptyDb();
+}
+
+/**
+ * Write route that works both in request scope (session) and detached
+ * workers (explicit workspace id). Pipeline helpers take an optional
+ * workspaceId and funnel through here.
+ */
+export async function writeDb(
+  workspaceId: string | undefined,
+  mutator: (db: Database) => void
+): Promise<Database> {
+  if (workspaceId) return updateWorkspaceDb(workspaceId, mutator);
+  return updateDb(mutator);
+}
+
 /** Write to an explicitly resolved workspace (no viewer session required). */
 export async function updateWorkspaceDb(
   workspaceId: string,

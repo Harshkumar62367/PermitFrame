@@ -12,7 +12,7 @@ const DKG_DIR = process.env.PERMITFRAME_DATA_DIR
  * Local-evidence adapter: the same Knowledge Asset schemas and the same
  * SPARQL semantics, persisted locally instead of the public DKG.
  * Used before testnet node credentials are configured, and as fallback
- * if the remote node is unreachable — the UI clearly labels this mode.
+ * if the remote node is unreachable - the UI clearly labels this mode.
  */
 export class FileDkgAdapter implements DkgAdapter {
   readonly mode = "local-evidence" as const;
@@ -22,7 +22,7 @@ export class FileDkgAdapter implements DkgAdapter {
       mode: this.mode,
       healthy: true,
       detail:
-        "Local evidence store — same KA schemas and SPARQL semantics, persisted under .data/dkg. Configure DKG_* env vars for testnet publication with real UALs."
+        "Local evidence store - same KA schemas and SPARQL semantics, persisted under .data/dkg. Configure DKG_* env vars for testnet publication with real UALs."
     };
   }
 

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateCaptions } from "@/server/platform";
+import { logDkgError, sanitizeDkgError } from "@/server/dkg/public-errors";
 
 export const dynamic = "force-dynamic";
 
@@ -8,6 +9,8 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
   try {
     return NextResponse.json({ captions: await generateCaptions(id) });
   } catch (e) {
-    return NextResponse.json({ error: (e as Error).message }, { status: 400 });
+    logDkgError("captions", e);
+    const safe = sanitizeDkgError(e, "workspace");
+    return NextResponse.json({ error: safe.message, code: safe.code }, { status: safe.status });
   }
 }

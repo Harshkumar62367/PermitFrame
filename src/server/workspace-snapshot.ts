@@ -35,7 +35,7 @@ export interface WorkspaceSnapshot extends WorkspaceOverview {
  * One authenticated read for the whole workspace: the shared overview builder
  * (campaigns with corrected statuses, metrics, pipeline, activity) plus
  * product facts, source media, consent invites and passport summaries.
- * No DKG or Livepeer calls — integration health loads independently and must
+ * No DKG or Livepeer calls - integration health loads independently and must
  * never block workspace views. This function performs exactly one loadDb()
  * call; status repairs only write when a row has actually drifted.
  */

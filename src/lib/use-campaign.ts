@@ -27,7 +27,7 @@ function fetchCampaignDetail(id: string, signal?: AbortSignal): Promise<Campaign
 
 /**
  * Campaign detail cache. Correctness first: the server response is always
- * the source of truth — the snapshot only warms the fetch (prefetch on
+ * the source of truth - the snapshot only warms the fetch (prefetch on
  * hover) so opens feel instant, never a substitute for real jobs/receipts.
  * Cached details survive back-navigation (stale 30s, background-refetch).
  */
@@ -48,7 +48,7 @@ export function useCampaignDetail(id: string) {
   });
 }
 
-/** Warm the detail cache (hover intent). Never renders — only fetches. */
+/** Warm the detail cache (hover intent). Never renders - only fetches. */
 export function usePrefetchCampaignDetail() {
   const queryClient = useQueryClient();
   return (id: string) => {

@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   deliverableKind,
+  describeMotionOutputs,
   hasUnknownPrice,
   recommendInitialStages,
   type Deliverable
@@ -74,5 +75,15 @@ describe("hasUnknownPrice", () => {
   it("flags stages missing from the catalogue price map", () => {
     assert.equal(hasUnknownPrice([stage("a", "text-to-image", "flux-schnell")]), false);
     assert.equal(hasUnknownPrice([stage("a", "text-to-image", "no-such-capability")]), true);
+  });
+});
+
+describe("describeMotionOutputs", () => {
+  it("names separate short clips, never a stitched film", () => {
+    assert.equal(describeMotionOutputs([]), "Images");
+    assert.equal(describeMotionOutputs([5]), "Images + one short video clip");
+    assert.equal(describeMotionOutputs([5, 5]), "Images + 2 separate short clips · 5s each");
+    assert.equal(describeMotionOutputs([5, 8]), "Images + 2 separate short clips");
+    assert.equal(describeMotionOutputs([null]), "Images + one short video clip");
   });
 });

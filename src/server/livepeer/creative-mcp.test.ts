@@ -6,7 +6,7 @@ import { quoteStage, stageSpendingCeiling, parseLivePrices } from "./pricing";
 import { estimateStagesLive } from "@/components/studio/studio-model";
 
 /**
- * Creative MCP migration tests. All MCP traffic is mocked — no live renders,
+ * Creative MCP migration tests. All MCP traffic is mocked - no live renders,
  * no spend. Covers endpoint default, action mapping, arg mapping, sync/async
  * parsing, honest failures, and bearer redaction.
  */
@@ -31,7 +31,7 @@ function errTool(message: string): Record<string, unknown> {
 
 const INIT = envelope({
   protocolVersion: "2025-03-26",
-  serverInfo: { name: "livepeer-agent-creative (demo credits — no key)" }
+  serverInfo: { name: "livepeer-agent-creative (demo credits - no key)" }
 });
 
 let seen: { method: string; tool?: string; args?: Record<string, unknown>; headers?: Record<string, string> }[];
@@ -120,6 +120,7 @@ describe("create_media action mapping", () => {
       capability: "flux-schnell",
       kind: "text-to-image",
       prompt: "rooftop keyframe",
+      qualityProfile: "draft",
       maxCostUsd: 0.25,
       sessionId: "cmp_abc",
       idempotencyKey: "pf_x"
@@ -150,6 +151,27 @@ describe("create_media action mapping", () => {
     assert.equal(call?.args?.source_url, "https://cdn.example/key.png");
     assert.equal(call?.args?.duration, 5);
     assert.ok(!("prefer_fast" in (call?.args ?? {})));
+  });
+
+  it("prefer_fast is a draft-only tradeoff: sent for draft, omitted otherwise", async () => {
+    stubFetch(() => syncImagePayload());
+    const client = new LivepeerMcpClient(livepeerConfig());
+    const base = { capability: "flux-dev", kind: "text-to-image", prompt: "stills" } as const;
+    for (const profile of ["draft", "balanced", "premium"] as const) {
+      seen = [];
+      await client.runCapability({ ...base, qualityProfile: profile });
+      const call = seen.find((s) => s.tool === "create_media");
+      if (profile === "draft") {
+        assert.equal(call?.args?.prefer_fast, true);
+      } else {
+        assert.ok(!("prefer_fast" in (call?.args ?? {})), `${profile} must omit prefer_fast entirely`);
+      }
+    }
+    // Unset profile defaults to final quality: no fast path.
+    seen = [];
+    await client.runCapability({ ...base });
+    const unset = seen.find((s) => s.tool === "create_media");
+    assert.ok(!("prefer_fast" in (unset?.args ?? {})));
   });
 
   it("image-to-video without a source refuses before any spend", async () => {
@@ -258,7 +280,7 @@ describe("honest creative failures", () => {
 
   it("max-cost rejection surfaces verbatim", async () => {
     stubFetch((tool) => {
-      if (tool === "create_media") return errTool("quote $1.20 exceeds max_cost_usd $0.25 — raise the ceiling or pick a cheaper model");
+      if (tool === "create_media") return errTool("quote $1.20 exceeds max_cost_usd $0.25 - raise the ceiling or pick a cheaper model");
       return okTool({});
     });
     await assert.rejects(

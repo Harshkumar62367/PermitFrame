@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 /**
- * Padded content card. Presentational only — no data fetching.
+ * Padded content card. Presentational only - no data fetching.
  * Compose a heading + body via children instead of boolean flags.
  */
 export function SectionCard({

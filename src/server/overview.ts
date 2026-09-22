@@ -12,7 +12,7 @@ export interface OverviewBlocker {
 }
 
 export interface OverviewPreflight {
-  /** Live verdict. "pending" means no preflight has run yet — never invent one. */
+  /** Live verdict. "pending" means no preflight has run yet - never invent one. */
   decision: "allow" | "block" | "pending";
   checkedAt: string | null;
   blockerCount: number;
@@ -117,7 +117,7 @@ export interface WorkspaceOverview {
   totalOutputs: number;
   metrics: OperationalMetrics;
   pipeline: PipelineCount[];
-  /** Newest-first application events. Empty when nothing has happened yet — never fabricated. */
+  /** Newest-first application events. Empty when nothing has happened yet - never fabricated. */
   activity: OverviewActivityItem[];
 }
 
@@ -135,7 +135,7 @@ const ACTIVITY_LIMIT = 12;
  * One cohesive read for the workspace overview: a single workspace-state
  * load fans out to campaigns (+creator names, thumbnails, preflight
  * summaries), expiry warnings, spend/output rollups, operational metrics,
- * the production pipeline and the real event feed. No DKG or Livepeer calls —
+ * the production pipeline and the real event feed. No DKG or Livepeer calls -
  * integration health loads independently and must never block the dashboard.
  *
  * Stored campaign statuses that drifted from their live preflight verdict are

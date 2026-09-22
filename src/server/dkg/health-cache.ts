@@ -11,7 +11,7 @@ import { LivepeerMcpClient, livepeerConfig } from "../livepeer/mcp-client";
  * module answers instantly from the last known result and revalidates in the
  * background (single-flight per area).
  *
- * Honest states — never inferred from a timeout budget:
+ * Honest states - never inferred from a timeout budget:
  * - "checking": no successful or failed check has completed yet.
  * - "healthy": the most recent check succeeded (and is fresh unless `stale`).
  * - "degraded": the most recent check failed, but a previous one succeeded.
@@ -25,7 +25,7 @@ export type IntegrationState = "checking" | "healthy" | "degraded" | "unavailabl
 export interface LivepeerHealth {
   endpoint: string;
   keyless: boolean;
-  /** Real signal — never assumed healthy. Unknown only before the first check. */
+  /** Real signal - never assumed healthy. Unknown only before the first check. */
   reachable: boolean;
   detail: string;
 }
@@ -89,11 +89,14 @@ async function defaultLivepeerProbe(): Promise<LivepeerHealth> {
       detail: `Livepeer Agent reachable at ${config.endpoint} (${config.bearer ? "API key" : "hosted access"}). Capability and pricing status is reported per production job.`
     };
   } catch (error) {
+    // Raw probe text never leaves the server: log it and report a safe
+    // diagnostic. The health route masks details as a backstop.
+    console.error("[health] livepeer probe failed:", String((error as Error)?.message ?? error).slice(0, 200));
     return {
       endpoint: config.endpoint,
       keyless: !config.bearer,
       reachable: false,
-      detail: `Livepeer Agent unreachable — productions will fail until it recovers. ${(error instanceof Error ? error.message : String(error)).slice(0, 140)}`
+      detail: "Livepeer Agent unreachable - productions will fail until it recovers."
     };
   }
 }
@@ -128,7 +131,7 @@ function dkgPlaceholder(): DkgHealth {
     mode,
     healthy: false,
     endpoint: process.env.DKG_ENDPOINT_LABEL ?? "local daemon (127.0.0.1:9200)",
-    detail: "Checking proof-ledger diagnostics — workspace data does not depend on this check."
+    detail: "Checking proof-ledger diagnostics - workspace data does not depend on this check."
   };
 }
 
@@ -138,7 +141,7 @@ function livepeerPlaceholder(): LivepeerHealth {
     endpoint: config.endpoint,
     keyless: !config.bearer,
     reachable: false,
-    detail: "Checking production service — only approved campaigns may start production jobs."
+    detail: "Checking production service - only approved campaigns may start production jobs."
   };
 }
 
@@ -157,7 +160,7 @@ function refreshSlot<T>(slot: Slot<T>, probe: () => Promise<T>, isOk: (result: T
       slot.checkedAt = Date.now();
       // Healthy ONLY after a genuinely successful check. A failure after a
       // previous success is degraded; failure with no prior result is
-      // unavailable — never healthy, never "offline because slow".
+      // unavailable - never healthy, never "offline because slow".
       slot.state = ok ? "healthy" : hadResult || slot.state === "healthy" || slot.state === "degraded" ? "degraded" : "unavailable";
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -169,7 +172,7 @@ function refreshSlot<T>(slot: Slot<T>, probe: () => Promise<T>, isOk: (result: T
     }
   })();
   // Fire-and-forget by design (SWR): the caller already has its instant
-  // answer. The promise never rejects — errors are recorded as states above.
+  // answer. The promise never rejects - errors are recorded as states above.
   slot.refresh.catch(() => undefined);
 }
 

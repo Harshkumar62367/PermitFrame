@@ -44,7 +44,7 @@ export interface SnapshotCampaign {
   id: string;
   title: string;
   status: string;
-  /** Corrected status — the live preflight verdict wins over the stored label. */
+  /** Corrected status - the live preflight verdict wins over the stored label. */
   effectiveStatus: string;
   stage: SnapshotStage;
   platform: string;

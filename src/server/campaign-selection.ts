@@ -25,7 +25,7 @@ export type SelectionResolution =
   | { ok: false; error: string };
 
 /**
- * Resolve an explicit campaign-creation selection. Every id is required —
+ * Resolve an explicit campaign-creation selection. Every id is required -
  * the server never falls back to "the first workspace record", which is
  * unsafe once a workspace holds multiple creators, media, or brand rules.
  * Pure (no session, no I/O) so all combinations are unit-testable.

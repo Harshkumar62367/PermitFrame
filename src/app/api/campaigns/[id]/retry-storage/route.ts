@@ -57,7 +57,7 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
       return receipt !== undefined && !hasSharableReceipt(receipt);
     }) ?? [];
     for (const job of legacyJobs) {
-      const out = await storeLegacyOutput(workspaceId, id, job.id).catch(() => ({ stored: false as const, message: "Store securely failed — try again in a moment." }));
+      const out = await storeLegacyOutput(workspaceId, id, job.id).catch(() => ({ stored: false as const, message: "Store securely failed - try again in a moment." }));
       if (out.stored) legacyStored += 1;
       else legacyMessage = out.message;
     }
@@ -72,7 +72,7 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
       finalized + legacyStored > 0
         ? `${finalized + legacyStored} asset${finalized + legacyStored === 1 ? "" : "s"} stored and delivered.`
         : legacyMessage ?? (retried > 0
-          ? "Storage retry ran — assets that stored are delivered; the rest stay pending with their provider result."
+          ? "Storage retry ran - assets that stored are delivered; the rest stay pending with their provider result."
           : "Nothing left to retry within the attempt budget.")
   });
 }

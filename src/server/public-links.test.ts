@@ -42,7 +42,7 @@ function seedCampaign(): Campaign {
         stageId: "keyframe",
         kind: "text-to-image",
         capability: "flux-schnell",
-        prompt: "FULL PROMPT with secret art-direction sauce — must never go public",
+        prompt: "FULL PROMPT with secret art-direction sauce - must never go public",
         status: "ready_to_share",
         outputUrl: "https://example.com/out.png",
         startedAt: "2026-01-01T00:00:00.000Z"
@@ -76,7 +76,7 @@ function seedCampaign(): Campaign {
     shareToken: SHARE_TOKEN,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
-    contextNote: "INTERNAL context note with contract terms — must never go public"
+    contextNote: "INTERNAL context note with contract terms - must never go public"
   };
 }
 

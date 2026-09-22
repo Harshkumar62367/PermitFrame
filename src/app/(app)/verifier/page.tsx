@@ -21,8 +21,8 @@ export default function VerifierPage() {
   const [ref, setRef] = useState("");
   const [fieldError, setFieldError] = useState<string | null>(null);
 
-  // Example shortcuts come from the shared ["workspace-snapshot"] cache —
-  // never hardcoded, never a duplicate /api/campaigns read — so public
+  // Example shortcuts come from the shared ["workspace-snapshot"] cache -
+  // never hardcoded, never a duplicate /api/campaigns read - so public
   // verification links remain stable as workspace data evolves. The public
   // /verify/[ref] routes stay separate and correctly public.
   const snapshot = useWorkspaceSnapshot();
@@ -47,7 +47,7 @@ export default function VerifierPage() {
         <PageHeader
           eyebrow="Verification"
           title="Verification"
-          description="Campaign history, client proof links, and evidence status — paste a receipt or campaign reference to open its public proof page, the same view your client sees."
+          description="Campaign history, client proof links, and evidence status - paste a receipt or campaign reference to open its public proof page, the same view your client sees."
           width="narrow"
         />
       </FadeIn>
@@ -55,17 +55,17 @@ export default function VerifierPage() {
         <div className="rounded-2xl border border-border bg-card p-5">
           <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">What your client can verify</p>
           <ul className="mt-2.5 space-y-1.5 text-[13px] leading-relaxed text-muted-foreground">
-            <li className="flex gap-2"><span aria-hidden className="text-emerald-600 dark:text-emerald-400">·</span> The finished asset itself — what was actually delivered.</li>
+            <li className="flex gap-2"><span aria-hidden className="text-emerald-600 dark:text-emerald-400">·</span> The finished asset itself - what was actually delivered.</li>
             <li className="flex gap-2"><span aria-hidden className="text-emerald-600 dark:text-emerald-400">·</span> Which advertising claims were verified before production.</li>
             <li className="flex gap-2"><span aria-hidden className="text-emerald-600 dark:text-emerald-400">·</span> Who approved the content, for which platforms and territories, and until when.</li>
           </ul>
-          <p className="mt-2.5 text-[12px] text-muted-foreground">No technical background needed — the proof page reads like a certificate, with optional technical details underneath.</p>
+          <p className="mt-2.5 text-[12px] text-muted-foreground">No technical background needed - the proof page reads like a certificate, with optional technical details underneath.</p>
         </div>
       </FadeIn>
       <FadeIn delay={0.05}>
         <SectionCard
           title="Look up a record"
-          description="Verification references look like vrf_… — find them on any approved campaign pack."
+          description="Verification references look like vrf_… - find them on any approved campaign pack."
         >
           <form
             onSubmit={(e) => {
@@ -101,7 +101,7 @@ export default function VerifierPage() {
             <p id={`${inputId}-error`} role="alert" className="mt-2 text-[12px] text-rose-600 dark:text-rose-300">{fieldError}</p>
           ) : (
             <p id={`${inputId}-hint`} className="mt-2 text-[11.5px] text-muted-foreground">
-              Unknown references show a “not found” page — nothing is fabricated.
+              Unknown references show a “not found” page - nothing is fabricated.
             </p>
           )}
         </SectionCard>

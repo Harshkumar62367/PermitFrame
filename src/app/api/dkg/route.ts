@@ -1,13 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDkg } from "@/server/dkg";
+import { logDkgError, sanitizeDkgError } from "@/server/dkg/public-errors";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   const dkg = getDkg();
-  const health = await dkg.health();
-  const assets = await dkg.listAssets().catch(() => []);
-  return NextResponse.json({ health, assets });
+  try {
+    const health = await dkg.health();
+    const assets = await dkg.listAssets().catch(() => []);
+    return NextResponse.json({ health, assets });
+  } catch (error) {
+    logDkgError("dkg-status", error);
+    const safe = sanitizeDkgError(error, "query");
+    return NextResponse.json({ error: safe.message, code: safe.code }, { status: safe.status });
+  }
 }
 
 export async function POST(request: NextRequest) {
@@ -23,6 +30,10 @@ export async function POST(request: NextRequest) {
     const bindings = await dkg.sparql(body.query);
     return NextResponse.json({ bindings, mode: dkg.mode });
   } catch (error) {
-    return NextResponse.json({ error: (error as Error).message.slice(0, 400) }, { status: 400 });
+    // Read-only proof query: raw CLI/transport text must never reach the
+    // inspector UI. Bounded timeout stays; only the wording is safe.
+    logDkgError("dkg-query", error);
+    const safe = sanitizeDkgError(error, "query");
+    return NextResponse.json({ error: safe.message, code: safe.code }, { status: safe.status });
   }
 }

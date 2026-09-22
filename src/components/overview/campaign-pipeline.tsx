@@ -15,7 +15,7 @@ const STAGE_FILTER: Record<SnapshotStage, string> = {
 
 /**
  * Read-only production pipeline: real counts at each stage, each linking to
- * the filtered campaigns page. No drag-and-drop — states move through the
+ * the filtered campaigns page. No drag-and-drop - states move through the
  * production workflow, not through this summary.
  */
 export function CampaignPipeline({ pipeline }: { pipeline: PipelineCount[] }) {

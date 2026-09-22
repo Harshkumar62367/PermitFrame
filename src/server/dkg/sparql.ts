@@ -2,7 +2,7 @@ import { PF_NS } from "./schemas";
 
 /**
  * Real SPARQL executed against the DKG (or shown as the query preview in
- * local-evidence mode). The policy engine consumes these results — this is
+ * local-evidence mode). The policy engine consumes these results - this is
  * how knowledge changes agent behavior.
  */
 

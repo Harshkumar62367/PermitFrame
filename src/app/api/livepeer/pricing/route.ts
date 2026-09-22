@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
 
 /**
  * Live Creative MCP price map for pre-render estimates. Best-effort and
- * cache-backed: `{ok:false}` when the agent is unreachable — the studio
+ * cache-backed: `{ok:false}` when the agent is unreachable - the studio
  * falls back to clearly labeled historical estimates instead of blocking.
  */
 export async function GET() {

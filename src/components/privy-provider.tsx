@@ -29,7 +29,7 @@ function SessionBridge({ children }: { children: React.ReactNode }) {
     let active = true;
     void (async () => {
       // Fast path: a valid HttpOnly PermitFrame session cookie authorizes
-      // immediately — no Privy wait, no session POST, no new database row.
+      // immediately - no Privy wait, no session POST, no new database row.
       try {
         const check = await fetch("/api/auth/session", { credentials: "same-origin" });
         if (check.ok) {

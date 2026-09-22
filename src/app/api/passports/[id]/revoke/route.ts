@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { AuthenticationRequiredError } from "@/server/auth";
 import { revokePassport } from "@/server/platform";
+import { logDkgError, sanitizeDkgError } from "@/server/dkg/public-errors";
 
 export const dynamic = "force-dynamic";
 
@@ -14,6 +15,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     if (e instanceof AuthenticationRequiredError) {
       return NextResponse.json({ error: "Authentication required" }, { status: 401 });
     }
-    return NextResponse.json({ error: (e as Error).message }, { status: 400 });
+    logDkgError("revoke", e);
+    const safe = sanitizeDkgError(e, "mutation");
+    return NextResponse.json({ error: safe.message, code: safe.code }, { status: safe.status });
   }
 }

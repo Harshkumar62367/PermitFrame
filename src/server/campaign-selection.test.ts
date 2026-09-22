@@ -77,7 +77,7 @@ describe("resolveCampaignSelection", () => {
     assert.equal(leo.ok, true);
   });
 
-  it("requires every id — never silently picks the first record", () => {
+  it("requires every id - never silently picks the first record", () => {
     for (const sel of [
       {},
       { ...MAYA_PICK, creatorId: undefined },

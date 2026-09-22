@@ -85,7 +85,7 @@ describe("deletionEligibility", () => {
     assert.equal(deletionEligibility(c).deletable, true);
   });
 
-  it("offers archive — never delete — for generated assets", () => {
+  it("offers archive - never delete - for generated assets", () => {
     const withReceipt = draft({
       receipts: [
         {
@@ -186,7 +186,7 @@ describe("applyDeleteToDb", () => {
     assert.equal(db.campaigns.length, 0);
     assert.equal(db.deletedCampaigns.length, 1);
     assert.equal(db.events.filter((e) => e.kind === "campaign.deleted").length, 1);
-    // Retry: success, nothing further happens — no duplicate tombstone/event.
+    // Retry: success, nothing further happens - no duplicate tombstone/event.
     const second = applyDeleteToDb(db, "cmp_gone", "t2", "evt_2");
     assert.deepEqual(second, { deleted: true, alreadyDeleted: true, title: "Gone" });
     assert.equal(db.deletedCampaigns.length, 1);

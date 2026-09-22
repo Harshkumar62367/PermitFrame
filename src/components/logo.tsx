@@ -1,5 +1,5 @@
 /**
- * PermitFrame mark — a verification frame: camera-viewfinder corners
+ * PermitFrame mark - a verification frame: camera-viewfinder corners
  * (the production frame) closing around a check (the permit).
  * Uses currentColor so it adapts to both themes.
  */

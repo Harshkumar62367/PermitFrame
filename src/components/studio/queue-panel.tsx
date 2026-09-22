@@ -1,16 +1,18 @@
 "use client";
 
 import { useState } from "react";
-import { Check, CircleDashed, Loader2, RotateCcw, Wand2, X } from "lucide-react";
+import { Check, CircleDashed, Hourglass, Loader2, RotateCcw, Wand2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { apiPost } from "@/lib/api";
+import { newRunKey } from "@/lib/idempotency-key";
 import { useInvalidateWorkspaceSnapshot } from "@/lib/use-workspace-snapshot";
+import { useRunProgress } from "@/lib/use-run-progress";
 import { cn } from "@/lib/utils";
-import type { Campaign } from "@/server/types";
+import type { Campaign, ProductionJob, ProductionStagePlan } from "@/server/types";
 import { isActiveJobStatus } from "@/server/types";
-import { formatUsd, plainActivity } from "./studio-model";
+import { formatUsd, plainActivity, displayCapability } from "./studio-model";
 
 interface QueuePanelProps {
   campaign: Campaign;
@@ -20,18 +22,41 @@ interface QueuePanelProps {
 
 const STATUS_META: Record<string, { label: string; className: string }> = {
   queued: { label: "Queued", className: "bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-800" },
+  waiting: { label: "Waiting for dependency", className: "bg-muted text-muted-foreground ring-border" },
   generating: { label: "Generating", className: "bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-800" },
-  preview_ready: { label: "Preview", className: "bg-sky-50 text-sky-700 ring-sky-600/20 dark:bg-sky-950/40 dark:text-sky-300 dark:ring-sky-800" },
+  preview_ready: { label: "Checking quality", className: "bg-sky-50 text-sky-700 ring-sky-600/20 dark:bg-sky-950/40 dark:text-sky-300 dark:ring-sky-800" },
   storage_pending: { label: "Saving", className: "bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-800" },
   storage_retry_needed: { label: "Retry needed", className: "bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-800" },
-  ready_to_share: { label: "Ready to share", className: "bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-950/40 dark:text-emerald-300 dark:ring-emerald-800" },
-  failed: { label: "Failed", className: "bg-rose-50 text-rose-700 ring-rose-600/20 dark:bg-rose-950/40 dark:text-rose-300 dark:ring-rose-800" }
+  retrying: { label: "Retrying soon", className: "bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-800" },
+  ready_to_share: { label: "Ready", className: "bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-950/40 dark:text-emerald-300 dark:ring-emerald-800" },
+  failed: { label: "Failed", className: "bg-rose-50 text-rose-700 ring-rose-600/20 dark:bg-rose-950/40 dark:text-rose-300 dark:ring-rose-800" },
+  cancelled: { label: "Cancelled", className: "bg-muted text-muted-foreground ring-border" }
 };
+
+/** Display state: queued jobs blocked on an unready dependency wait instead. */
+function displayStatus(
+  job: ProductionJob,
+  plan: ProductionStagePlan[] | undefined,
+  readyStages: Set<string>
+): string {
+  // Backoff scheduled by the runner: the next pump dispatches once the
+  // window passes (the claim clears it). No clock reads here - staleness
+  // is bounded by the polling cadence, which always pumps on load.
+  if ((job.status === "queued" || job.status === "generating") && job.nextAttemptAt) {
+    return "retrying";
+  }
+  if (job.status === "queued") {
+    const stage = plan?.find((s) => s.id === job.stageId);
+    const deps = stage?.dependsOnStageIds ?? (stage?.kind === "image-to-video" ? ["keyframe"] : []);
+    if (deps.some((d) => !readyStages.has(d))) return "waiting";
+  }
+  return job.status;
+}
 
 /**
  * Right panel: the generation queue and per-output status. Retries re-queue
  * the failed stage through the produce endpoint; refinements regenerate one
- * stage with reviewer instructions. Both reuse the existing APIs — the panel
+ * stage with reviewer instructions. Both reuse the existing APIs - the panel
  * only ever displays real job records.
  */
 export function QueuePanel({ campaign, allowed, onChanged }: QueuePanelProps) {
@@ -40,22 +65,61 @@ export function QueuePanel({ campaign, allowed, onChanged }: QueuePanelProps) {
   const [refineFor, setRefineFor] = useState<string | null>(null);
   const [instructions, setInstructions] = useState("");
   const [detailsFor, setDetailsFor] = useState<string | null>(null);
+  const [cancelNote, setCancelNote] = useState<string | null>(null);
   const invalidateSnapshot = useInvalidateWorkspaceSnapshot();
 
   const done = campaign.jobs.filter((j) => j.status === "ready_to_share").length;
   const total = campaign.jobs.length;
   const failed = campaign.jobs.filter((j) => j.status === "failed");
+  const readyStages = new Set(
+    campaign.jobs.filter((j) => j.status === "ready_to_share").map((j) => j.stageId)
+  );
+  const plan = campaign.preflight?.plan;
+  const activeRun = [...(campaign.runs ?? [])].reverse().find((r) => r.status === "active") ?? null;
+  const lastRun = [...(campaign.runs ?? [])].reverse()[0] ?? null;
+  // Progressive follow: while a run is active the run endpoint is polled
+  // with backoff (stops on terminal, cleans up on unmount); completed
+  // assets appear as each job row refreshes. Leave and return anytime -
+  // the run record resumes from durable state.
+  const runStatus = useRunProgress(campaign.id, activeRun?.id ?? null, onChanged);
+  const runReady = runStatus?.progress.ready ?? campaign.jobs.filter((j) => j.status === "ready_to_share" && (activeRun ? activeRun.stageIds.includes(j.stageId) : true)).length;
+  const runTotal = runStatus?.progress.total ?? activeRun?.stageIds.length ?? total;
+  const spent = campaign.jobs.filter((j) => j.status === "ready_to_share").reduce((s, j) => s + (j.costUsd ?? 0), 0);
 
   async function retryFailed() {
     if (busy || failed.length === 0) return;
     setBusy("retry");
     setError(null);
     try {
-      await apiPost(`/api/campaigns/${campaign.id}/produce`, { stageIds: failed.map((j) => j.stageId) });
+      await apiPost(`/api/campaigns/${campaign.id}/produce`, {
+        stageIds: failed.map((j) => j.stageId),
+        idempotencyKey: newRunKey("retry")
+      });
       invalidateSnapshot();
       await onChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Retry failed to start.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function cancelJob(jobId: string) {
+    if (busy) return;
+    setBusy(`cancel-${jobId}`);
+    setError(null);
+    setCancelNote(null);
+    try {
+      const result = await apiPost<{ ok: boolean; results: { jobId: string; outcome: string; detail: string }[] }>(
+        `/api/campaigns/${campaign.id}/cancel`,
+        { jobIds: [jobId] }
+      );
+      const first = result.results[0];
+      setCancelNote(first ? `${first.outcome}: ${first.detail}` : "Cancel requested.");
+      invalidateSnapshot();
+      await onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Cancel failed.");
     } finally {
       setBusy(null);
     }
@@ -79,44 +143,71 @@ export function QueuePanel({ campaign, allowed, onChanged }: QueuePanelProps) {
   }
 
   return (
-    <section aria-label="Generation queue" className="flex h-full max-h-none flex-col rounded-2xl border border-border bg-card p-5 xl:sticky xl:top-4 xl:max-h-[calc(100vh-2rem)] xl:overflow-y-auto">
+    <section aria-label="Generation queue" className="flex min-w-0 flex-col rounded-2xl border border-border bg-card p-4 xl:h-full xl:min-h-0 xl:overflow-hidden">
       <div className="flex items-center justify-between gap-2">
         <h3 className="text-[15px] font-semibold tracking-tight">Queue</h3>
         {total > 0 && (
           <span className="font-mono text-[11px] text-muted-foreground" role="status">
-            {done}/{total} stages complete
+            {activeRun ? `${runReady} of ${runTotal} ready` : `${done}/${total} stages complete`}
           </span>
         )}
       </div>
+      {(activeRun || lastRun) && (
+        <p className="mt-1.5 break-words text-[11.5px] text-muted-foreground" role="status">
+          Run {activeRun ? "active" : "finished"}
+          {runStatus?.estimateTotal !== null && runStatus?.estimateTotal !== undefined && ` · pack est. ${formatUsd(runStatus.estimateTotal)}`}
+          {` · spent ${formatUsd(runStatus?.actualTotal ?? spent)}`}
+          {(runStatus?.spendCapUsd ?? lastRun?.spendCapUsd) !== undefined && ` of ${formatUsd((runStatus?.spendCapUsd ?? lastRun?.spendCapUsd) as number)} cap`}
+          {runStatus?.run?.note && ` · ${runStatus.run.note}`}
+        </p>
+      )}
 
       {total === 0 ? (
         <div className="mt-4 rounded-xl border border-dashed border-border p-4 text-center">
           <p className="text-[13px] font-medium">Queue is empty</p>
           <p className="mx-auto mt-1 max-w-[220px] text-[12px] leading-relaxed text-muted-foreground">
-            Select deliverables in the creative plan and generate — queued stages appear here with live status.
+            Select deliverables in the creative plan and generate - queued stages appear here with live status.
           </p>
         </div>
       ) : (
-        <ul className="mt-4 space-y-2.5">
+        <ul className="pf-pane-scroll mt-3 space-y-2 xl:min-h-0 xl:flex-1 xl:overflow-y-auto xl:pr-1">
           {campaign.jobs.map((job) => {
             const stage = campaign.preflight?.plan.find((s) => s.id === job.stageId);
-            const meta = STATUS_META[job.status] ?? STATUS_META.queued;
+            const shown = displayStatus(job, plan, readyStages);
+            const meta = STATUS_META[shown] ?? STATUS_META.queued;
             const refining = refineFor === job.id;
+            const cancellable = job.status === "queued" && !job.livepeerJobId;
             return (
-              <li key={job.id} className="rounded-xl bg-muted/50 p-3 ring-1 ring-border">
+              <li
+                key={job.id}
+                className="min-w-0 rounded-xl bg-muted/50 p-3 ring-1 ring-border"
+              >
                 <div className="flex items-center gap-2">
                   {job.status === "generating" && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-amber-600" aria-hidden />}
-                  {job.status === "queued" && <CircleDashed className="h-3.5 w-3.5 shrink-0 text-amber-600" aria-hidden />}
+                  {job.status === "queued" && shown === "waiting" && <Hourglass className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />}
+                  {job.status === "queued" && shown !== "waiting" && <CircleDashed className="h-3.5 w-3.5 shrink-0 text-amber-600" aria-hidden />}
                   {job.status === "storage_pending" && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-amber-600" aria-hidden />}
                   {job.status === "ready_to_share" && <Check className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" aria-hidden />}
                   {job.status === "failed" && <X className="h-3.5 w-3.5 shrink-0 text-rose-600 dark:text-rose-300" aria-hidden />}
+                  {job.status === "cancelled" && <X className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />}
                   <p className="min-w-0 flex-1 truncate text-[12.5px] font-medium">{stage?.label ?? job.stageId}</p>
                   <span className={cn("shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ring-1", meta.className)}>
                     {meta.label}
                   </span>
+                  {cancellable && allowed && (
+                    <button
+                      type="button"
+                      onClick={() => void cancelJob(job.id)}
+                      disabled={busy !== null}
+                      title="Cancel before dispatch - nothing has been spent on this stage"
+                      className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium text-muted-foreground underline-offset-2 ring-1 ring-border hover:text-foreground hover:underline"
+                    >
+                      {busy === `cancel-${job.id}` ? "Cancelling…" : "Cancel"}
+                    </button>
+                  )}
                 </div>
-                <p className="mt-1 truncate font-mono text-[10px] text-muted-foreground" title={job.capability}>
-                  {job.capability}
+                <p className="mt-1 truncate font-mono text-[10px] text-muted-foreground" title={displayCapability(job)}>
+                  {displayCapability(job)}
                   {typeof job.costUsd === "number" && ` · ${formatUsd(job.costUsd)}`}
                 </p>
                 {isActiveJobStatus(job.status) && (
@@ -125,19 +216,37 @@ export function QueuePanel({ campaign, allowed, onChanged }: QueuePanelProps) {
                   </p>
                 )}
                 {job.outputUrl && (job.status === "ready_to_share" || job.status === "preview_ready" || job.status === "storage_pending" || job.status === "storage_retry_needed") && (
-                  job.kind === "image-to-video" ? (
-                    <video src={job.outputUrl} controls preload="metadata" className="mt-2 aspect-video w-full rounded-lg bg-black object-contain" />
-                  ) : (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={job.outputUrl} alt={stage?.label ?? "generated output"} loading="lazy" className="mt-2 aspect-video w-full rounded-lg object-cover ring-1 ring-border" />
-                  )
+                  <div className="mt-2 h-40 overflow-hidden rounded-lg bg-black/40 ring-1 ring-border sm:h-44">
+                    {job.kind === "image-to-video" ? (
+                      <video src={job.outputUrl} controls preload="metadata" className="h-full w-full object-cover" />
+                    ) : (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={job.outputUrl} alt={stage?.label ?? "generated output"} loading="lazy" className="h-full w-full object-cover" />
+                    )}
+                  </div>
                 )}
-                {(job.status === "preview_ready" || job.status === "storage_pending") && (
-                  <p className="mt-1.5 text-[11px] text-muted-foreground">Preview — saving securely. Not share-ready yet.</p>
+                {job.status === "preview_ready" && (
+                  <p className="mt-1.5 text-[11px] text-muted-foreground">Output received - checking quality and saving securely. Not share-ready yet.</p>
+                )}
+                {job.status === "storage_pending" && (
+                  <p className="mt-1.5 text-[11px] text-muted-foreground">Saving securely. Not share-ready yet.</p>
+                )}
+                {shown === "retrying" && (
+                  <p className="mt-1.5 text-[11px] text-muted-foreground" role="status">
+                    Submit hiccup - retrying automatically{job.lastTransientError ? `: ${job.lastTransientError}` : "."} Nothing extra is spent: retries reuse the same provider key.
+                  </p>
                 )}
                 {job.status === "storage_retry_needed" && (
                   <p className="mt-1.5 text-[11px] text-amber-700 dark:text-amber-300">
-                    Preview kept — secure storage needs a retry. Use “Retry secure storage” in Review &amp; deliver.
+                    Preview kept - secure storage needs a retry. Use “Retry secure storage” in Review &amp; deliver.
+                  </p>
+                )}
+                {job.requestMeta?.fallbackReason && (
+                  <p
+                    className="mt-1.5 break-words text-[11px] text-amber-700 dark:text-amber-300"
+                    title={job.requestMeta.fallbackReason}
+                  >
+                    Preservation fallback used - guided by the approved reference. Details in Review once ready.
                   </p>
                 )}
                 {job.error && (
@@ -159,7 +268,7 @@ export function QueuePanel({ campaign, allowed, onChanged }: QueuePanelProps) {
                   <dl id={`prod-details-${job.id}`} className="mt-1.5 space-y-1 rounded-lg bg-background/60 p-2.5 font-mono text-[10.5px] ring-1 ring-border">
                     <div className="flex justify-between gap-2">
                       <dt className="shrink-0 text-muted-foreground">capability</dt>
-                      <dd className="min-w-0 break-all text-right" title={job.capability}>{job.capability}</dd>
+                      <dd className="min-w-0 break-all text-right" title={displayCapability(job)}>{displayCapability(job)}</dd>
                     </div>
                     <div className="flex justify-between gap-2">
                       <dt className="shrink-0 text-muted-foreground">provider job</dt>
@@ -167,8 +276,8 @@ export function QueuePanel({ campaign, allowed, onChanged }: QueuePanelProps) {
                     </div>
                     <div className="flex justify-between gap-2">
                       <dt className="shrink-0 text-muted-foreground">request</dt>
-                      <dd className="min-w-0 text-right">
-                        {[job.requestMeta?.aspectRatio, job.requestMeta?.durationSeconds ? `${job.requestMeta.durationSeconds}s` : null, job.requestMeta?.sourceKind === "prior-output" ? "prior stage output" : job.requestMeta?.sourceKind === "source-media" ? "source media" : null].filter(Boolean).join(" · ") || "—"}
+                      <dd className="min-w-0 text-right" title={job.requestMeta?.durationNote ?? undefined}>
+                        {[job.requestMeta?.aspectRatio, job.requestMeta?.durationSeconds ? `${job.requestMeta.durationSeconds}s${job.requestMeta?.requestedDurationSeconds !== undefined && job.requestMeta.requestedDurationSeconds !== job.requestMeta.durationSeconds ? ` (requested ${job.requestMeta.requestedDurationSeconds}s)` : ""}` : null, job.requestMeta?.sourceKind === "prior-output" ? "prior stage output" : job.requestMeta?.sourceKind === "source-media" ? "source media" : null].filter(Boolean).join(" · ") || "-"}
                       </dd>
                     </div>
                     <div className="flex justify-between gap-2">
@@ -179,6 +288,28 @@ export function QueuePanel({ campaign, allowed, onChanged }: QueuePanelProps) {
                       <dt className="shrink-0 text-muted-foreground">cost</dt>
                       <dd className="min-w-0 text-right">{typeof job.costUsd === "number" ? formatUsd(job.costUsd) : "not billed yet"}</dd>
                     </div>
+                    {(() => {
+                      // Preservation provenance: what preservation path this
+                      // job took (requested → resolved tool + claimable level).
+                      // Detail lives in Review once the output lands.
+                      const m = job.requestMeta;
+                      if (!m?.preservationResolved) return null;
+                      const bits = [
+                        m.preservationRequested && m.preservationRequested !== m.preservationResolved
+                          ? `${m.preservationRequested} → ${m.preservationResolved}`
+                          : m.preservationResolved,
+                        m.preservationActualCapability ? `via ${m.preservationActualCapability}` : null,
+                        m.preservationEvidenceLevel && m.preservationEvidenceLevel !== "none"
+                          ? m.preservationEvidenceLevel
+                          : "no preservation claim"
+                      ].filter(Boolean).join(" · ");
+                      return (
+                        <div className="flex justify-between gap-2">
+                          <dt className="shrink-0 text-muted-foreground">preservation</dt>
+                          <dd className="min-w-0 break-words text-right" title={m.fallbackReason ?? bits}>{bits}</dd>
+                        </div>
+                      );
+                    })()}
                     {job.outputUrl && (
                       <div className="flex justify-between gap-2">
                         <dt className="shrink-0 text-muted-foreground">output</dt>
@@ -230,6 +361,7 @@ export function QueuePanel({ campaign, allowed, onChanged }: QueuePanelProps) {
       )}
 
       {error && <p role="alert" className="mt-3 break-words text-[12px] text-rose-600 dark:text-rose-300">{error}</p>}
+      {cancelNote && <p role="status" className="mt-3 break-words text-[12px] text-muted-foreground">{cancelNote}</p>}
 
       {failed.length > 0 && (
         <Button

@@ -3,7 +3,7 @@
 import { RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { campaignOutcome, OutcomeBadge } from "@/components/campaign-outcome";
-import { cn } from "@/lib/utils";
+import { cn, displayText } from "@/lib/utils";
 import type { Campaign, PermissionPassport, SourceMedia } from "@/server/types";
 
 interface StudioHeaderProps {
@@ -16,11 +16,11 @@ interface StudioHeaderProps {
 
 /**
  * Studio header: campaign name, objective, approval status, selected
- * creator/source and platforms. Re-check keeps the verdict live — rights
+ * creator/source and platforms. Re-check keeps the verdict live - rights
  * may have changed since approval.
  */
 export function StudioHeader({ campaign, sourceMedia, passport, busy, onRecheck }: StudioHeaderProps) {
-  const objective = campaign.request.objective?.trim() || campaign.title;
+  const objective = displayText(campaign.request.objective?.trim() || campaign.title);
   const outcome = campaignOutcome({
     status: campaign.status,
     decision: campaign.preflight?.decision ?? null,
@@ -35,8 +35,8 @@ export function StudioHeader({ campaign, sourceMedia, passport, busy, onRecheck 
           <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-emerald-700 dark:text-emerald-300">
             Creative Studio · {outcome.label}
           </p>
-          <h2 className="font-display mt-1.5 text-balance text-2xl font-semibold tracking-tight">{campaign.title}</h2>
-          {objective !== campaign.title && (
+          <h2 className="font-display mt-1.5 text-balance text-2xl font-semibold tracking-tight">{displayText(campaign.title)}</h2>
+          {objective !== displayText(campaign.title) && (
             <p className="mt-1 text-[13.5px] text-muted-foreground">{objective}</p>
           )}
           {outcome.explanation && (
@@ -66,7 +66,7 @@ export function StudioHeader({ campaign, sourceMedia, passport, busy, onRecheck 
           className="shrink-0 rounded-full"
         >
           <RefreshCw className={cn("h-3.5 w-3.5", busy && "animate-spin")} aria-hidden />
-          {busy ? "Checking…" : "Check permissions again"}
+          {busy ? "Checking permissions…" : "Check permissions again"}
         </Button>
       </div>
     </div>

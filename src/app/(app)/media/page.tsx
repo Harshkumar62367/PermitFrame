@@ -15,6 +15,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
 import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
 import { apiPost, describeRecord } from "@/lib/api";
+import { useLongAction } from "@/lib/use-long-action";
 import { useInvalidateDkgGraph } from "@/lib/use-dkg-graph";
 import { useInvalidateWorkspaceSnapshot, useWorkspaceSnapshot, type SnapshotCampaign } from "@/lib/use-workspace-snapshot";
 import { cn } from "@/lib/utils";
@@ -34,7 +35,13 @@ export default function MediaLibraryPage() {
     : null;
   const [form, setForm] = useState({ title: "", url: "", type: "image" });
   const [fieldError, setFieldError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const registerAction = useLongAction({
+    working: "Registering source asset…",
+    slow: "Still registering and recording the source asset. Please keep this page open - proof services can take a little longer.",
+    timedOut:
+      "Registration is taking longer than expected. Refresh this page once before retrying - the asset may already have been registered."
+  });
+  const busy = registerAction.busy;
   const [result, setResult] = useState<{ ok: boolean; text: string; ual?: string } | null>(null);
   const invalidateSnapshot = useInvalidateWorkspaceSnapshot();
   const invalidateDkgGraph = useInvalidateDkgGraph();
@@ -46,24 +53,32 @@ export default function MediaLibraryPage() {
   }
 
   async function register() {
-    if (busy) return;
+    if (registerAction.busy) return;
     if (!form.url.trim().toLowerCase().startsWith("http")) {
-      setFieldError("Paste a public http(s) URL — the bytes stay with the creator; only the URL and hash are recorded.");
+      setFieldError("Paste a public http(s) URL - the bytes stay with the creator; only the URL and hash are recorded.");
       return;
     }
     setFieldError(null);
     setResult(null);
-    setBusy(true);
-    try {
-      const j = await apiPost<{ media: SourceMedia }>("/api/media", {
+    // Registration publishes a Knowledge Asset, so it can legitimately
+    // outlast the default 30s browser budget - 120s with slow status and
+    // refresh-first recovery. Input is preserved for retry either way.
+    const result = await registerAction.execute(() =>
+      apiPost<{ media: SourceMedia }>("/api/media", {
         title: form.title,
         url: form.url.trim(),
         type: form.type
-      });
+      }, undefined, registerAction.timeoutMs)
+    );
+    if (!result.ok || !result.value) {
+      if (result.message) setResult({ ok: false, text: result.message });
+      return;
+    }
+    const j = result.value;
       const record = describeRecord(j.media.ual);
       setResult({
         ok: true,
-        text: `${record.headline} — “${j.media.title}”. ${record.detail}`,
+        text: `${record.headline} - “${j.media.title}”. ${record.detail}`,
         ual: j.media.ual
       });
       setForm({ title: "", url: "", type: "image" });
@@ -71,12 +86,6 @@ export default function MediaLibraryPage() {
       // (awaited, so the new row appears) and mark the cached graph stale.
       await invalidateSnapshot();
       invalidateDkgGraph();
-    } catch (e) {
-      // Form input is preserved for retry.
-      setResult({ ok: false, text: e instanceof Error ? e.message : "Registration failed. Your input is preserved." });
-    } finally {
-      setBusy(false);
-    }
   }
 
   const canSubmit = form.url.trim().toLowerCase().startsWith("http");
@@ -89,14 +98,14 @@ export default function MediaLibraryPage() {
         <PageHeader
           eyebrow="Media library"
           title="Media library"
-          description="Source images and video, plus generated campaign assets. Only the reference and its fingerprint are stored — the files stay with the creator."
+          description="Source images and video, plus generated campaign assets. Only the reference and its fingerprint are stored - the files stay with the creator."
         />
       </FadeIn>
 
       <FadeIn delay={0.05}>
         <SectionCard
           title="Register a source asset"
-          description="Guided scenario — every field starts empty; grey placeholder text is only an example, never a value."
+          description="Guided scenario - every field starts empty; grey placeholder text is only an example, never a value."
           actions={
             <Button variant="outline" size="sm" onClick={fillExample} className="h-7 rounded-full px-2.5 text-[11.5px]">
               <Wand2 className="h-3 w-3" aria-hidden /> Fill guided example
@@ -153,9 +162,9 @@ export default function MediaLibraryPage() {
           </div>
           <p id={submitHint} className="mt-2 text-[11.5px] text-muted-foreground">
             {!canSubmit
-              ? "Register is disabled until a public URL is pasted — placeholders don't count."
-              : busy
-                ? "Registering — duplicate clicks are ignored and your input is preserved on failure."
+              ? "Register is disabled until a public URL is pasted - placeholders don't count."
+              : busy && registerAction.status
+                ? registerAction.status
                 : "Only the URL and its reference fingerprint enter the evidence layer."}
           </p>
           {result && (
@@ -179,7 +188,7 @@ export default function MediaLibraryPage() {
       <section aria-label="Approved source media">
         <h2 className="mb-1 text-[15px] font-semibold tracking-tight">Approved source media</h2>
         <p className="mb-3 text-[12px] text-muted-foreground">
-          Registered inputs for generation — only the reference and its fingerprint are stored.
+          Registered inputs for generation - only the reference and its fingerprint are stored.
         </p>
       <Stagger className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {(media ?? []).map((m) => (
@@ -206,13 +215,13 @@ export default function MediaLibraryPage() {
       {media && media.length === 0 && !loadError && (
         <EmptyState
           title="No media yet"
-          body="Register the first approved asset above, then brief a campaign — the permission check runs automatically before anything is produced."
+          body="Register the first approved asset above, then brief a campaign - the permission check runs automatically before anything is produced."
         />
       )}
       {media && media.length > 0 && (
         <p className="text-[11.5px] leading-relaxed text-muted-foreground">
           Provenance note: records are keyed by stable IDs, so registering the same URL twice creates two
-          separate records. PermitFrame never deletes or merges them — newest first is just display order.
+          separate records. PermitFrame never deletes or merges them - newest first is just display order.
         </p>
       )}
       <GeneratedOutputs campaigns={snapshot.data?.campaigns ?? null} />
@@ -222,7 +231,7 @@ export default function MediaLibraryPage() {
 
 /**
  * Generated campaign outputs, kept visually separate from approved source
- * media. Finished assets live with their campaigns — this section links
+ * media. Finished assets live with their campaigns - this section links
  * each pack back to its studio. Read from the shared snapshot, so no
  * per-campaign reads and nothing fabricated.
  */
@@ -233,7 +242,7 @@ function GeneratedOutputs({ campaigns }: { campaigns: SnapshotCampaign[] | null 
     <section aria-label="Generated campaign outputs" className="mt-2">
       <h2 className="mb-1 text-[15px] font-semibold tracking-tight">Generated campaign outputs</h2>
       <p className="mb-3 text-[12px] text-muted-foreground">
-        Finished assets belong to their campaigns — open a pack to review, approve, and verify each output.
+        Finished assets belong to their campaigns - open a pack to review, approve, and verify each output.
       </p>
       {produced.length === 0 ? (
         <p className="rounded-xl border border-dashed border-border px-4 py-5 text-center text-[12.5px] text-muted-foreground">

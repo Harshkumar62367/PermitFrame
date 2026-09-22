@@ -15,6 +15,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
 import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
 import { apiPost, describeRecord } from "@/lib/api";
+import { useLongAction } from "@/lib/use-long-action";
 import { useInvalidateDkgGraph } from "@/lib/use-dkg-graph";
 import { useInvalidateWorkspaceSnapshot, useWorkspaceSnapshot } from "@/lib/use-workspace-snapshot";
 import { cn } from "@/lib/utils";
@@ -44,7 +45,13 @@ export default function ProductsPage() {
   const [editing, setEditing] = useState<ProductFacts | null>(null);
   const [form, setForm] = useState(EMPTY_FORM);
   const [fieldErrors, setFieldErrors] = useState<{ brand?: string; productName?: string; overlap?: string }>({});
-  const [busy, setBusy] = useState(false);
+  const saveAction = useLongAction({
+    working: "Saving brand rules…",
+    slow: "Still saving and recording the brand rules. Please keep this page open - proof services can take a little longer.",
+    timedOut:
+      "Saving is taking longer than expected. Refresh this page once before retrying - the brand rules may already have been saved."
+  });
+  const busy = saveAction.busy;
   const [result, setResult] = useState<{ ok: boolean; text: string; ual?: string } | null>(null);
   const invalidateSnapshot = useInvalidateWorkspaceSnapshot();
   const invalidateDkgGraph = useInvalidateDkgGraph();
@@ -76,7 +83,7 @@ export default function ProductsPage() {
   }
 
   async function save() {
-    if (busy) return;
+    if (saveAction.busy) return;
     const errors: typeof fieldErrors = {};
     if (!form.brand.trim()) errors.brand = "Brand is required.";
     if (!form.productName.trim()) errors.productName = "Product name is required.";
@@ -88,9 +95,11 @@ export default function ProductsPage() {
     setResult(null);
     if (errors.brand || errors.productName || errors.overlap) return;
 
-    setBusy(true);
-    try {
-      const j = await apiPost<{ facts: ProductFacts }>("/api/facts", {
+    // Saving publishes a Knowledge Asset, so it can legitimately outlast
+    // the default 30s browser budget - 120s with slow status and
+    // refresh-first recovery. Input is preserved for retry either way.
+    const result = await saveAction.execute(() =>
+      apiPost<{ facts: ProductFacts }>("/api/facts", {
         id: editing?.id,
         brand: form.brand,
         productName: form.productName,
@@ -98,13 +107,19 @@ export default function ProductsPage() {
         prohibitedClaims: prohibited,
         guidelines: form.guidelines.split("\n").map((g) => g.trim()).filter(Boolean),
         evidenceNotes: form.evidence
-      });
+      }, undefined, saveAction.timeoutMs)
+    );
+    if (!result.ok || !result.value) {
+      if (result.message) setResult({ ok: false, text: result.message });
+      return;
+    }
+    const j = result.value;
       const record = describeRecord(j.facts.ual);
       setResult({
         ok: true,
         text: editing
-          ? `${record.headline} — ${j.facts.brand} ${j.facts.productName} updated. ${record.detail}`
-          : `${record.headline} — ${j.facts.brand} ${j.facts.productName} is now enforced by the permission check. ${record.detail}`,
+          ? `${record.headline} - ${j.facts.brand} ${j.facts.productName} updated. ${record.detail}`
+          : `${record.headline} - ${j.facts.brand} ${j.facts.productName} is now enforced by the permission check. ${record.detail}`,
         ual: j.facts.ual
       });
       cancelEdit();
@@ -112,12 +127,6 @@ export default function ProductsPage() {
       // snapshot (awaited, so the new row appears) and mark cached graph stale.
       await invalidateSnapshot();
       invalidateDkgGraph();
-    } catch (e) {
-      // Form input is preserved for retry.
-      setResult({ ok: false, text: e instanceof Error ? e.message : "Save failed. Your input is preserved." });
-    } finally {
-      setBusy(false);
-    }
   }
 
   const canSubmit = form.brand.trim().length > 0 && form.productName.trim().length > 0;
@@ -139,7 +148,7 @@ export default function ProductsPage() {
       <FadeIn delay={0.05}>
         <SectionCard
           title={editing ? `Editing ${editing.brand} ${editing.productName}` : "Add brand rules"}
-          description="Guided scenario — every field starts empty; grey placeholder text is only an example, never a value. Use suggested values to accelerate data entry."
+          description="Guided scenario - every field starts empty; grey placeholder text is only an example, never a value. Use suggested values to accelerate data entry."
           actions={
             !editing && (
               <Button variant="outline" size="sm" onClick={fillExample} className="h-7 rounded-full px-2.5 text-[11.5px]">
@@ -245,9 +254,9 @@ export default function ProductsPage() {
           </div>
           <p id={submitHint} className="mt-2 text-[11.5px] text-muted-foreground">
             {!canSubmit
-              ? "Save is disabled until brand and product name are filled — placeholders don't count."
-              : busy
-                ? "Saving — duplicate clicks are ignored and your input is preserved on failure."
+              ? "Save is disabled until brand and product name are filled - placeholders don't count."
+              : busy && saveAction.status
+                ? saveAction.status
                 : "Saves to the workspace and its proof record; the permission check enforces it immediately."}
           </p>
           {result && (
@@ -282,8 +291,8 @@ export default function ProductsPage() {
                 </Button>
               </div>
               <div className="mt-3 space-y-2 text-[12.5px]">
-                <p><span className="text-emerald-700 dark:text-emerald-300">approved:</span> {f.approvedClaims.join(", ") || "—"}</p>
-                <p><span className="text-rose-600 dark:text-rose-300">prohibited:</span> {f.prohibitedClaims.join(", ") || "—"}</p>
+                <p><span className="text-emerald-700 dark:text-emerald-300">approved:</span> {f.approvedClaims.join(", ") || "-"}</p>
+                <p><span className="text-rose-600 dark:text-rose-300">prohibited:</span> {f.prohibitedClaims.join(", ") || "-"}</p>
                 {f.guidelines.length > 0 && <p className="text-muted-foreground">guidelines: {f.guidelines.join(" · ")}</p>}
               </div>
             </div>
@@ -293,7 +302,7 @@ export default function ProductsPage() {
       {factsList && factsList.length === 0 && !loadError && (
         <EmptyState
           title="No brand rules yet"
-          body="Add the first brand above — campaigns can't claim anything until its rules exist. Next: add creator rights and creative, then brief a campaign."
+          body="Add the first brand above - campaigns can't claim anything until its rules exist. Next: add creator rights and creative, then brief a campaign."
         />
       )}
     </div>

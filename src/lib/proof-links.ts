@@ -1,6 +1,6 @@
 /**
  * Proof-link helpers (pure, no network). The OriginTrail explorer only
- * indexes the networks it serves — a correctly-formed link can still land
+ * indexes the networks it serves - a correctly-formed link can still land
  * on a blank page for testnet assets. For EVM chains we additionally offer
  * the token page on the chain's block explorer, derived from the UAL itself
  * (contract + token id), so the on-chain NFT is always one click away.
@@ -43,7 +43,7 @@ export function blockExplorerNftUrl(ual: string): { label: string; href: string 
 /**
  * Download href for a delivered asset. Cloudinary delivery URLs accept the
  * `fl_attachment` flag, which makes the CDN respond with
- * Content-Disposition: attachment — a real file download even cross-origin
+ * Content-Disposition: attachment - a real file download even cross-origin
  * (the plain `download` attribute is ignored off-origin). Provider-hosted
  * legacy URLs have no such flag, so they open in a new tab for manual save.
  */

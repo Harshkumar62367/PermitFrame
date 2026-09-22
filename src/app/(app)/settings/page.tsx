@@ -94,9 +94,9 @@ export default function SettingsPage() {
               {!health || health.dkg.state === "checking"
                 ? "Checking proof-ledger diagnostics in the background. Workspace data does not depend on this check."
                 : health.dkg.mode === "edge-node" && health.dkg.healthy
-                  ? "Shared proof ledger connected — approvals can publish public verification."
+                  ? "Shared proof ledger connected - approvals can publish public verification."
                   : health.dkg.mode === "edge-node"
-                    ? "Shared proof ledger unreachable — campaigns keep working with workspace records."
+                    ? "Shared proof ledger unreachable - campaigns keep working with workspace records."
                     : "Workspace proof records. Connect the shared ledger in Advanced evidence below for public verification."}
             </p>
           </SectionCard>
@@ -124,7 +124,7 @@ export default function SettingsPage() {
                 </div>
               ) : (
                 <p className="mt-1.5 text-[11.5px] text-muted-foreground">
-                  Run the capability check below — roles are mapped only from capabilities the Livepeer server reports as available.
+                  Run the capability check below - roles are mapped only from capabilities the Livepeer server reports as available.
                 </p>
               )}
             </div>
@@ -146,7 +146,7 @@ export default function SettingsPage() {
             {caps.status === "ready" && (
               <div role="status" className="mt-2 space-y-1 font-mono text-[10.5px]">
                 <p className="text-emerald-700 dark:text-emerald-300">
-                  Reachable — {capCount} {capCount === 1 ? "capability" : "capabilities"}, {priceCount} pricing {priceCount === 1 ? "entry" : "entries"}.
+                  Reachable - {capCount} {capCount === 1 ? "capability" : "capabilities"}, {priceCount} pricing {priceCount === 1 ? "entry" : "entries"}.
                 </p>
                 <p className="text-muted-foreground">Checked {caps.at}.</p>
                 {capCount !== null && capCount > 0 && (
@@ -179,7 +179,7 @@ export default function SettingsPage() {
             </p>
             {storage?.configured && !storage.reachable && (
               <p className="mt-1.5 text-[12px] text-amber-700 dark:text-amber-300">
-                Completed outputs wait as storage-pending with provider results intact — no proof is published for undelivered assets.
+                Completed outputs wait as storage-pending with provider results intact - no proof is published for undelivered assets.
               </p>
             )}
           </SectionCard>

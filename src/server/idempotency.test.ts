@@ -27,7 +27,7 @@ function blankDb(): Database {
 }
 
 const INTENT: CreationIntent = {
-  title: "Instagram campaign — GR",
+  title: "Instagram campaign - GR",
   brand: "Maya",
   productName: "TerraRunner",
   creatorId: "crt_1",

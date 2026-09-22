@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Check, CircleDashed, Loader2, Sparkles, TriangleAlert, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { apiGet, apiPost } from "@/lib/api";
+import { newRunKey } from "@/lib/idempotency-key";
 import { useInvalidateWorkspaceSnapshot } from "@/lib/use-workspace-snapshot";
 import { cn } from "@/lib/utils";
 import type { Campaign, ProductionStagePlan } from "@/server/types";
@@ -37,7 +38,7 @@ const STATE_META: Record<DeliverableState, { label: string; className: string }>
 
 /**
  * Main panel: the approved creative plan as selectable deliverables.
- * Selection is honest — only the selected plan stages are sent to the
+ * Selection is honest - only the selected plan stages are sent to the
  * produce endpoint, and stages that already succeeded stay done.
  */
 function KindBadge({ stages }: { stages: ProductionStagePlan[] }) {
@@ -50,7 +51,7 @@ function KindBadge({ stages }: { stages: ProductionStagePlan[] }) {
   return (
     <span
       className={cn("rounded-full px-2 py-0.5 text-[10.5px] font-medium ring-1", tone)}
-      title={label === "Image" ? "Image generation" : "Includes video — slower and costlier than image"}
+      title={label === "Image" ? "Image generation" : "Includes video - slower and costlier than image"}
     >
       {label}
     </span>
@@ -135,7 +136,12 @@ export function CreativePlan({ campaign, allowed, onChanged }: CreativePlanProps
     setBusy(true);
     setError(null);
     try {
-      await apiPost(`/api/campaigns/${campaign.id}/produce`, { stageIds: selectedStages.map((s) => s.id) });
+      // Client-generated run key: double-clicks and retries replay the same
+      // run instead of dispatching duplicate paid jobs.
+      await apiPost(`/api/campaigns/${campaign.id}/produce`, {
+        stageIds: selectedStages.map((s) => s.id),
+        idempotencyKey: newRunKey("studio")
+      });
       setConfirming(false);
       invalidateSnapshot();
       await onChanged();
@@ -148,7 +154,7 @@ export function CreativePlan({ campaign, allowed, onChanged }: CreativePlanProps
   }
 
   return (
-    <section aria-label="Creative plan" className="flex h-full flex-col rounded-2xl border border-border bg-card p-5">
+    <section aria-label="Creative plan" className="flex min-w-0 flex-col rounded-2xl border border-border bg-card p-4 xl:h-full xl:min-h-0 xl:overflow-hidden">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h3 className="text-[15px] font-semibold tracking-tight">Creative plan</h3>
@@ -158,10 +164,10 @@ export function CreativePlan({ campaign, allowed, onChanged }: CreativePlanProps
               liveEstimate && liveEstimate.exact
                 ? "Quoted from live Creative MCP prices"
                 : livePrices
-                  ? `Historical estimate ${formatUsd(estimate)}${estimateExact ? "" : "+"} — live prices do not cover this selection exactly`
+                  ? `Historical estimate ${formatUsd(estimate)}${estimateExact ? "" : "+"} - live prices do not cover this selection exactly`
                   : estimateExact
                     ? undefined
-                    : "Some stages lack catalogue prices — actual spend may be higher"
+                    : "Some stages lack catalogue prices - actual spend may be higher"
             }
           >
             {estimateLabel} · {formatUsd(spent)} spent
@@ -181,15 +187,15 @@ export function CreativePlan({ campaign, allowed, onChanged }: CreativePlanProps
 
       {selected === null && recommendedIds.length > 0 && (
         <p className="mt-3 text-[12px] leading-relaxed text-muted-foreground">
-          Recommended start: {deliverables.find((d) => d.stages.some((s) => recommendedIds.includes(s.id)))?.title ?? "one deliverable"} —
-          image stages only. Video is slower and costlier — select it deliberately, never by default.
+          Recommended start: {deliverables.find((d) => d.stages.some((s) => recommendedIds.includes(s.id)))?.title ?? "one deliverable"} -
+          image stages only. Video is slower and costlier - select it deliberately, never by default.
         </p>
       )}
       {deliverables.length === 0 && (
-        <p className="mt-4 text-[13px] text-muted-foreground">No approved plan stages — re-check rights to rebuild the plan.</p>
+        <p className="mt-4 text-[13px] text-muted-foreground">No approved plan stages - re-check rights to rebuild the plan.</p>
       )}
 
-      <div className="mt-4 space-y-3">
+      <div className="pf-pane-scroll mt-3 space-y-2 xl:min-h-0 xl:flex-1 xl:overflow-y-auto xl:pr-1">
         {deliverables.map((d) => {
           const stageIds = d.stages.map((s) => s.id);
           const state = deliverableState(campaign.jobs, stageIds);
@@ -202,7 +208,7 @@ export function CreativePlan({ campaign, allowed, onChanged }: CreativePlanProps
             <div
               key={d.id}
               className={cn(
-                "rounded-xl border p-4 transition",
+                "rounded-xl border p-3 transition",
                 selectableIds.length > 0 && checkedCount > 0 ? "border-emerald-600/40 bg-emerald-50/40 dark:border-emerald-800 dark:bg-emerald-950/20" : "border-border"
               )}
             >
@@ -229,14 +235,16 @@ export function CreativePlan({ campaign, allowed, onChanged }: CreativePlanProps
                   </span>
                 )}
                 <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <p className="text-[13.5px] font-semibold">{d.title}</p>
+                  <div className="flex items-center gap-2">
+                    <p className="min-w-0 flex-1 truncate text-[13.5px] font-semibold">{d.title}</p>
+                    <span className={cn("shrink-0 rounded-full px-2 py-0.5 text-[10.5px] font-medium ring-1", meta.className)}>{meta.label}</span>
+                  </div>
+                  <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
                     <span className="rounded-full bg-secondary px-2 py-0.5 font-mono text-[10px] text-secondary-foreground">{d.spec}</span>
                     <KindBadge stages={d.stages} />
                     <span className="font-mono text-[10px] text-muted-foreground">{formatUsd(estimateStages(d.stages.filter((s) => !succeededStageIds.has(s.id))))} remaining</span>
-                    <span className={cn("rounded-full px-2 py-0.5 text-[10.5px] font-medium ring-1", meta.className)}>{meta.label}</span>
                   </div>
-                  <p className="mt-0.5 text-[12px] text-muted-foreground">{d.platforms}</p>
+                  <p className="mt-1 text-[12px] text-muted-foreground">{d.platforms}</p>
                   <p className="mt-0.5 truncate font-mono text-[10px] text-muted-foreground" title={`Planned capabilities: ${Array.from(new Set(d.stages.map((s) => s.capability))).join(", ")}`}>
                     via {Array.from(new Set(d.stages.map((s) => s.capability))).join(" + ")}
                   </p>
@@ -275,20 +283,31 @@ export function CreativePlan({ campaign, allowed, onChanged }: CreativePlanProps
                       );
                     })}
                   </ul>
-                  {outputs.length > 0 && (
-                    <div className="mt-2.5 flex gap-2 overflow-x-auto pb-0.5">
-                      {outputs.map((r) => (
-                        r.mediaType === "image" ? (
+                  {outputs.length > 0 || d.stages.length > 0 ? (
+                    <div className="mt-2 flex gap-1.5 overflow-x-auto pb-0.5">
+                      {d.stages.map((stage) => {
+                        const output = outputs.find((r) => {
+                          const jobForStage = campaign.jobs.find((j) => j.stageId === stage.id);
+                          return jobForStage && r.jobId === jobForStage.id;
+                        });
+                        if (!output) {
+                          return (
+                            <span key={stage.id} className="grid h-11 w-11 shrink-0 place-items-center rounded-lg border border-dashed border-border font-mono text-[9px] text-muted-foreground" title={`${stage.label} - output lands here once generated`}>
+                              {stage.format}
+                            </span>
+                          );
+                        }
+                        return output.mediaType === "image" ? (
                           // eslint-disable-next-line @next/next/no-img-element
-                          <img key={r.id} src={r.outputUrl} alt={r.label} className="h-14 w-14 shrink-0 rounded-lg object-cover ring-1 ring-border" loading="lazy" />
+                          <img key={output.id} src={output.outputUrl} alt={output.label} className="h-11 w-11 shrink-0 rounded-lg object-cover ring-1 ring-border" loading="lazy" />
                         ) : (
-                          <span key={r.id} className="grid h-14 w-14 shrink-0 place-items-center rounded-lg bg-black font-mono text-[9px] text-white ring-1 ring-border">
+                          <span key={output.id} className="grid h-11 w-11 shrink-0 place-items-center rounded-lg bg-black font-mono text-[9px] text-white ring-1 ring-border">
                             video
                           </span>
-                        )
-                      ))}
+                        );
+                      })}
                     </div>
-                  )}
+                  ) : null}
                 </div>
               </div>
             </div>
@@ -298,20 +317,20 @@ export function CreativePlan({ campaign, allowed, onChanged }: CreativePlanProps
 
       {error && <p role="alert" className="mt-3 break-words text-[12px] text-rose-600 dark:text-rose-300">{error}</p>}
 
-      <div className="mt-4 border-t border-border pt-4">
+      <div className="mt-3 border-t border-border pt-3">
         {hasMotion && !confirming && selectedStages.length > 0 && (
           <p className="mb-3 flex items-start gap-1.5 text-[12px] leading-relaxed text-muted-foreground">
             <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-violet-600 dark:text-violet-300" aria-hidden />
-            Selection includes video — slower and costlier than image. The confirm step breaks down the cost before anything spends.
+            Selection includes video - slower and costlier than image. The confirm step breaks down the cost before anything spends.
           </p>
         )}
         {campaign.jobs.length === 0 && selectable.length > 0 ? (
           <p className="text-[12px] leading-relaxed text-muted-foreground">
-            Nothing generated yet — select the deliverables for this pack, then generate. Only approved stages can run.
+            Nothing generated yet - select the deliverables for this pack, then generate. Only approved stages can run.
           </p>
         ) : selectable.length === 0 && campaign.jobs.length > 0 ? (
           <p className="text-[12px] leading-relaxed text-muted-foreground">
-            Every approved stage has completed — review the outputs below or refine individual assets.
+            Every approved stage has completed - review the outputs below or refine individual assets.
           </p>
         ) : null}
         <Button
@@ -327,7 +346,7 @@ export function CreativePlan({ campaign, allowed, onChanged }: CreativePlanProps
         {!allowed && (
           <p className="mt-2 flex items-start gap-1.5 text-[12px] text-rose-600 dark:text-rose-300">
             <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
-            Blocked — fix the rights issue before anything can generate.
+            Blocked - fix the rights issue before anything can generate.
           </p>
         )}
       </div>
@@ -342,7 +361,17 @@ export function CreativePlan({ campaign, allowed, onChanged }: CreativePlanProps
             <ul className="mt-3 space-y-1.5">
               {selectedStages.map((s) => (
                 <li key={s.id} className="flex items-center justify-between gap-2 text-[13px]">
-                  <span className="min-w-0 truncate">{s.label}</span>
+                  <span className="min-w-0 truncate" title={s.kind === "image-to-video" && s.durationNote ? s.durationNote : undefined}>
+                    {s.label}
+                    {s.kind === "image-to-video" && s.durationSeconds !== undefined && (
+                      <span className="ml-1.5 font-mono text-[11px] text-muted-foreground">
+                        {s.durationSeconds}s
+                        {s.requestedDurationSeconds !== undefined && s.requestedDurationSeconds !== s.durationSeconds && (
+                          <> (requested {s.requestedDurationSeconds}s)</>
+                        )}
+                      </span>
+                    )}
+                  </span>
                   <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{formatUsd(estimateStages([s]))} est.</span>
                 </li>
               ))}
@@ -358,9 +387,9 @@ export function CreativePlan({ campaign, allowed, onChanged }: CreativePlanProps
                 </span>{" "}
                 · {formatUsd(spent)} spent so far on this campaign.
               </p>
-              <p className="text-muted-foreground">Generation spend is non-refundable once a stage runs. Only approved stages are queued — anything unselected stays untouched.</p>
+              <p className="text-muted-foreground">Generation spend is non-refundable once a stage runs. Only approved stages are queued - anything unselected stays untouched.</p>
               {hasMotion && (
-                <p className="text-muted-foreground">Video stages can take several minutes. Generation runs on the server — safe to leave this page; progress is saved per finished stage.</p>
+                <p className="text-muted-foreground">Video stages can take several minutes. Generation runs on the server - safe to leave this page; progress is saved per finished stage.</p>
               )}
             </div>
             {error && <p role="alert" className="mt-3 break-words text-[12px] text-rose-600 dark:text-rose-300">{error}</p>}
