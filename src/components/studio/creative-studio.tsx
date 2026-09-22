@@ -10,6 +10,7 @@ import type { Campaign, PermissionPassport, ProductFacts, SourceMedia } from "@/
 import { StudioHeader } from "./studio-header";
 import { BriefPanel } from "./brief-panel";
 import { TemplatePanel } from "./template-panel";
+import { useFilmPlan } from "./use-film-plan";
 import { CreativePlan } from "./creative-plan";
 import { QueuePanel } from "./queue-panel";
 import { ReviewSection } from "./review-section";
@@ -46,6 +47,10 @@ export function CreativeStudio({ campaign, sourceMedia, passport, productFacts, 
 
   const decision = campaign.preflight;
   const allowed = decision?.decision === "allow";
+  // Film planning state lives here so the plan panel and the asset-plan
+  // panel agree: while Film mode is selected, the asset Generate control
+  // below carries a note that it still generates the current asset pack.
+  const film = useFilmPlan({ campaign, allowed, onChanged });
 
   async function recheckNow() {
     if (recheck.busy) return;
@@ -80,7 +85,7 @@ export function CreativeStudio({ campaign, sourceMedia, passport, productFacts, 
         <p role="alert" className="break-words text-[12.5px] text-rose-600 dark:text-rose-300">{recheckError}</p>
       )}
 
-      <TemplatePanel campaign={campaign} allowed={allowed} onChanged={onChanged} />
+      <TemplatePanel campaign={campaign} allowed={allowed} film={film} onChanged={onChanged} />
 
       {allowed ? (
         <>
@@ -94,14 +99,14 @@ export function CreativeStudio({ campaign, sourceMedia, passport, productFacts, 
             </div>
           </details>
           <div className="grid items-stretch gap-4 xl:h-[min(720px,calc(100vh-2rem))] xl:grid-cols-[minmax(0,1.45fr)_minmax(340px,0.9fr)] min-[1600px]:grid-cols-[minmax(0,1.35fr)_minmax(380px,0.95fr)]">
-            <CreativePlan campaign={campaign} allowed={allowed} onChanged={onChanged} />
+            <CreativePlan campaign={campaign} allowed={allowed} filmMode={film.mode} onChanged={onChanged} />
             <QueuePanel campaign={campaign} allowed={allowed} onChanged={onChanged} />
           </div>
         </>
       ) : (
         <div className="grid items-start gap-4 xl:grid-cols-[300px_minmax(0,1fr)_320px] min-[1600px]:grid-cols-[320px_minmax(0,1fr)_360px]">
           <BriefPanel campaign={campaign} passport={passport} productFacts={productFacts} onChanged={onChanged} />
-          <CreativePlan campaign={campaign} allowed={allowed} onChanged={onChanged} />
+          <CreativePlan campaign={campaign} allowed={allowed} filmMode={film.mode} onChanged={onChanged} />
           <QueuePanel campaign={campaign} allowed={allowed} onChanged={onChanged} />
         </div>
       )}

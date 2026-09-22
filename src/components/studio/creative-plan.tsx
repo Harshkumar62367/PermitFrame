@@ -8,6 +8,7 @@ import { newRunKey } from "@/lib/idempotency-key";
 import { useInvalidateWorkspaceSnapshot } from "@/lib/use-workspace-snapshot";
 import { cn } from "@/lib/utils";
 import type { Campaign, ProductionStagePlan } from "@/server/types";
+import type { FilmMode } from "@/server/livepeer/film-plan";
 import {
   deliverableKind,
   deliverableState,
@@ -25,6 +26,8 @@ import {
 interface CreativePlanProps {
   campaign: Campaign;
   allowed: boolean;
+  /** Selected production mode - while Film mode is on, this control still generates the asset pack. */
+  filmMode: FilmMode;
   onChanged: () => Promise<void>;
 }
 const STATE_META: Record<DeliverableState, { label: string; className: string }> = {
@@ -57,7 +60,7 @@ function KindBadge({ stages }: { stages: ProductionStagePlan[] }) {
     </span>
   );
 }
-export function CreativePlan({ campaign, allowed, onChanged }: CreativePlanProps) {
+export function CreativePlan({ campaign, allowed, filmMode, onChanged }: CreativePlanProps) {
   const deliverables = useMemo(() => planDeliverables(campaign), [campaign]);
   const succeededStageIds = useMemo(
     () => new Set(campaign.jobs.filter((j) => j.status === "ready_to_share").map((j) => j.stageId)),
@@ -343,6 +346,11 @@ export function CreativePlan({ campaign, allowed, onChanged }: CreativePlanProps
           <Sparkles className="h-4 w-4" aria-hidden />
           {busy ? "Starting…" : `Generate selected assets${selectedStages.length > 0 ? ` (${selectedStages.length})` : ""}`}
         </Button>
+        {filmMode === "campaign_film" && (
+          <p className="mt-1.5 text-[11.5px] leading-relaxed text-muted-foreground">
+            This generates the current asset pack. Film generation will be available after you save and submit the film plan.
+          </p>
+        )}
         {!allowed && (
           <p className="mt-2 flex items-start gap-1.5 text-[12px] text-rose-600 dark:text-rose-300">
             <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />

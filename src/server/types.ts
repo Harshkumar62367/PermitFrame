@@ -120,6 +120,15 @@ export interface CampaignRequest {
    * campaigns persist as JSONB documents.
    */
   productionSpec?: import("./livepeer/templates").TemplateSelection;
+  /**
+   * Campaign Film plan (first half: durable local planning + user
+   * confirmation only). Optional JSON - legacy rows without one keep
+   * current short-clip behavior exactly. No migration: campaigns persist
+   * as JSONB documents. Saving a film plan never rebuilds preflight,
+   * never submits a provider job, and never alters the template spec -
+   * the runner, review, and proof paths do not read this field.
+   */
+  filmPlan?: import("./livepeer/film-plan").FilmPlan;
   // Studio editorial fields (optional so older records keep working):
   // objective, primary message and visual direction refine the brief.
   // They never change the rights evaluation - platform, country, claims
@@ -590,6 +599,12 @@ export interface Campaign {
   receipts: DerivativeReceipt[];
   /** Durable async runs (newest last). Missing on legacy rows - treated as empty. */
   runs?: ProductionRun[];
+  /**
+   * Durable film execution runs (newest last). Optional JSON - legacy rows
+   * without it have no film execution. The short-clip runner, review, and
+   * proof paths never read this field, so film runs cannot distort them.
+   */
+  filmRuns?: import("./livepeer/film-run").FilmRun[];
   creatorId: string;
   sourceMediaId: string;
   passportId: string;

@@ -380,3 +380,93 @@ describe("live pricing quotes", () => {
     assert.ok(partial && !partial.exact, "unmapped stages make the total inexact");
   });
 });
+
+describe("film cancellation note safety", () => {
+  afterEach(() => restoreFetch());
+
+  /**
+   * cancel_creative_job notes are stable user-safe strings: SSH paths,
+   * URLs, tokens, payload fragments, and stack-like text from hostile
+   * provider responses (or transport failures) never reach the returned
+   * note - and therefore never reach the persisted run record. Raw causes
+   * go only to the redacted server log.
+   */
+  const HOSTILE_BITS = [
+    "/home/deployer/.ssh/id_ed25519_dkg_ec2",
+    "https://hooks.example/dispatch?token=tok_abc123",
+    "Bearer eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature",
+    "sk-live-provider-key-999",
+    "-----BEGIN PRIVATE KEY-----",
+    "at cancelCreativeJob (node:internal/process:99:5)"
+  ];
+
+  function assertNoteClean(note: string, expected: string): void {
+    assert.equal(note, expected);
+    for (const bit of HOSTILE_BITS) {
+      assert.ok(!note.includes(bit), `cancel note must not contain ${JSON.stringify(bit.slice(0, 40))}`);
+    }
+  }
+
+  it("confirmed cancellation returns the stable note despite hostile payload text", async () => {
+    stubFetch((tool) => {
+      assert.equal(tool, "cancel_creative_job");
+      return okTool(
+        { status: "cancelled", job_id: "cjob_abc123" },
+        `cancelled ${HOSTILE_BITS.join(" ")}`
+      );
+    });
+    const result = await new LivepeerMcpClient(livepeerConfig()).cancelCreativeJob("cjob_abc123");
+    assert.equal(result.cancelled, true);
+    assertNoteClean(result.note, "Provider confirmed cancellation.");
+  });
+
+  it("unconfirmed cancellation hides payload fragments behind the stable note", async () => {
+    stubFetch((tool) => {
+      assert.equal(tool, "cancel_creative_job");
+      return okTool(
+        { status: "running", job_id: "cjob_abc123" },
+        `still running: ssh -i ${HOSTILE_BITS[0]} dispatch ${HOSTILE_BITS[1]}`
+      );
+    });
+    const result = await new LivepeerMcpClient(livepeerConfig()).cancelCreativeJob("cjob_abc123");
+    assert.equal(result.cancelled, false);
+    assertNoteClean(result.note, "Provider did not confirm cancellation.");
+  });
+
+  it("transport failure hides secrets behind the stable note", async () => {
+    stubFetch(() => {
+      throw new Error(`fetch failed for https://hooks.example/x?token=tok_abc123 with Bearer ${HOSTILE_BITS[2].slice(7, 27)}`);
+    });
+    const result = await new LivepeerMcpClient(livepeerConfig()).cancelCreativeJob("cjob_abc123");
+    assert.equal(result.cancelled, false);
+    assertNoteClean(result.note, "Provider cancel request failed before confirmation.");
+  });
+
+  it("older cancel_job path uses the same stable notes", async () => {
+    stubFetch((tool) => {
+      assert.equal(tool, "cancel_job");
+      return okTool(
+        { status: "running", job_id: "mjob_42" },
+        `still running: ssh -i ${HOSTILE_BITS[0]} dispatch ${HOSTILE_BITS[1]} ${HOSTILE_BITS[5]}`
+      );
+    });
+    const refused = await new LivepeerMcpClient(livepeerConfig()).cancelProviderJob("mjob_42");
+    assert.equal(refused.cancelled, false);
+    assertNoteClean(refused.note, "Provider did not confirm cancellation.");
+
+    stubFetch((tool) => {
+      assert.equal(tool, "cancel_job");
+      return okTool({ status: "cancelled", job_id: "mjob_42" }, `cancelled ${HOSTILE_BITS[3]} ${HOSTILE_BITS[4]}`);
+    });
+    const confirmed = await new LivepeerMcpClient(livepeerConfig()).cancelProviderJob("mjob_42");
+    assert.equal(confirmed.cancelled, true);
+    assertNoteClean(confirmed.note, "Provider confirmed cancellation.");
+
+    stubFetch(() => {
+      throw new Error(`socket hang up reaching ${HOSTILE_BITS[1]} with ${HOSTILE_BITS[2].slice(0, 20)}`);
+    });
+    const failed = await new LivepeerMcpClient(livepeerConfig()).cancelProviderJob("mjob_42");
+    assert.equal(failed.cancelled, false);
+    assertNoteClean(failed.note, "Provider cancel request failed before confirmation.");
+  });
+});

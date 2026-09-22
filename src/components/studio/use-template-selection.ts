@@ -5,6 +5,7 @@ import { apiGet, apiPost } from "@/lib/api";
 import { useInvalidateWorkspaceSnapshot } from "@/lib/use-workspace-snapshot";
 import type { Campaign } from "@/server/types";
 import { formatUsd, describeMotionOutputs } from "./studio-model";
+import { describeLegacyShortClipSeconds } from "@/server/livepeer/film-plan";
 import {
   ALL_FORMATS,
   FORMAT_LABELS,
@@ -75,6 +76,15 @@ export function useTemplateSelection({ campaign, allowed, onChanged }: UseTempla
   const template = useMemo(() => templates?.find((t) => t.id === templateId) ?? null, [templates, templateId]);
 
   const durationError = validateDuration(motionOn, motionSeconds);
+
+  // Legacy persisted lengths (e.g. 40s) render the exact legacy notice
+  // until the user picks a valid chip - a freshly typed invalid value
+  // keeps the standard duration error instead.
+  const persistedSeconds = spec?.motionSeconds ?? null;
+  const legacyClipMessage =
+    persistedSeconds !== null && motionSeconds === persistedSeconds
+      ? describeLegacyShortClipSeconds(persistedSeconds)
+      : null;
 
   const selection = useMemo(
     () =>
@@ -228,6 +238,7 @@ export function useTemplateSelection({ campaign, allowed, onChanged }: UseTempla
     applyError,
     // derived
     durationError,
+    legacyClipMessage,
     selection,
     hasChanges,
     canApply,

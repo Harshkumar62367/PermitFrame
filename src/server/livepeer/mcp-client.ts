@@ -1,5 +1,14 @@
 import crypto from "node:crypto";
 import type { QualityProfile } from "../types";
+import { redactSecrets } from "../dkg/edge-node-adapter";
+import {
+  buildCreativeConfirmArgs,
+  parseCreativeStatus,
+  parseCreativeSubmit,
+  type CreativeStatusParsed,
+  type CreativeSubmitArgs,
+  type CreativeSubmitParsed
+} from "./film-job";
 
 /**
  * Minimal MCP (streamable HTTP) client for the Livepeer Agent Creative
@@ -441,16 +450,103 @@ export class LivepeerMcpClient {
   }
 
   /**
+   * Campaign Film submit (submit_creative_job): returns immediately with a
+   * provider job id (or a staged/awaiting-confirmation gate, or a
+   * budget_exceeded refusal). A non-empty provider id is tracked, never
+   * treated as completion. Callers persist the id before any poll/confirm
+   * so retries never submit a second paid job. Args carry only confirmed
+   * film fields (title, scenes, target, aspect, deliver reel, budget cap,
+   * stable session tag) - no auto_plan, soundtrack, music, or model picks.
+   */
+  async submitCreativeJob(args: CreativeSubmitArgs): Promise<CreativeSubmitParsed> {
+    const payload = await this.callTool("submit_creative_job", { ...args }, 120_000);
+    assertToolOk(payload, "submit_creative_job");
+    return parseCreativeSubmit(payload);
+  }
+
+  /**
+   * Campaign Film execute mode: approve a job the cost-confirm gate staged.
+   * Only called after the user confirmed the plan + budget cap and the
+   * provider estimate fits inside it. Parsed like a submit (the provider
+   * may return the dispatched state or re-stage).
+   */
+  async confirmCreativeJob(providerJobId: string): Promise<CreativeSubmitParsed> {
+    const payload = await this.callTool("submit_creative_job", buildCreativeConfirmArgs(providerJobId), 120_000);
+    assertToolOk(payload, "submit_creative_job(confirm)");
+    return parseCreativeSubmit(payload);
+  }
+
+  /**
+   * Campaign Film status (get_creative_job): per-scene progress plus the
+   * final reel URL. Read-only and free - safe for resume polling. Shapes
+   * are defensive (submit/get responses are unobserved): unknown payloads
+   * parse to non-terminal snapshots, never guesses.
+   */
+  async getCreativeJob(jobId: string): Promise<CreativeStatusParsed> {
+    const payload = await this.callTool("get_creative_job", { job_id: jobId }, 60_000);
+    assertToolOk(payload, "get_creative_job");
+    return parseCreativeStatus(payload);
+  }
+
+  /**
+   * Campaign Film cancel (cancel_creative_job): stops the worker picking up
+   * new scenes; already-dispatched renders complete naturally. Returns
+   * whether the provider confirmed - callers must not claim success
+   * otherwise, and never touch unrelated campaign assets.
+   *
+   * Cancellation notes are stable user-safe strings only: raw provider
+   * text, transport errors, and payload fragments never reach the public
+   * note or the persisted run record - the raw cause goes exclusively
+   * through the redacted server log below.
+   */
+  async cancelCreativeJob(jobId: string): Promise<{ cancelled: boolean; note: string }> {
+    let payload: Record<string, unknown>;
+    try {
+      payload = await this.callTool("cancel_creative_job", { job_id: jobId });
+    } catch (e) {
+      console.error(
+        "[livepeer-mcp:cancel_creative_job]",
+        redactSecrets(e instanceof Error ? e.message : String(e)).slice(0, 500)
+      );
+      return { cancelled: false, note: "Provider cancel request failed before confirmation." };
+    }
+    const text = resultText(payload).toLowerCase();
+    const status = extractStatus(payload);
+    const confirmed =
+      !payload.error &&
+      !(payload.result as { isError?: boolean } | undefined)?.isError &&
+      (status === "cancelled" || status === "canceled" || text.includes("cancelled") || text.includes("canceled"));
+    if (!confirmed) {
+      console.error(
+        "[livepeer-mcp:cancel_creative_job]",
+        redactSecrets(resultText(payload)).slice(0, 500)
+      );
+    }
+    return {
+      cancelled: confirmed,
+      note: confirmed ? "Provider confirmed cancellation." : "Provider did not confirm cancellation."
+    };
+  }
+
+  /**
    * Best-effort provider cancellation for async media and creative jobs.
    * Returns whether the provider confirmed it - callers must not claim
    * success otherwise.
+   *
+   * Cancellation notes are stable user-safe strings only: raw provider
+   * text and transport errors never reach the public note - the raw cause
+   * goes exclusively through the redacted server log below.
    */
   async cancelProviderJob(jobId: string): Promise<{ cancelled: boolean; note: string }> {
     let payload: Record<string, unknown>;
     try {
       payload = await this.callTool("cancel_job", { job_id: jobId });
     } catch (e) {
-      return { cancelled: false, note: `Provider cancel call failed: ${(e as Error).message.slice(0, 200)}` };
+      console.error(
+        "[livepeer-mcp:cancel_job]",
+        redactSecrets(e instanceof Error ? e.message : String(e)).slice(0, 500)
+      );
+      return { cancelled: false, note: "Provider cancel request failed before confirmation." };
     }
     const text = resultText(payload).toLowerCase();
     const status = extractStatus(payload);
@@ -458,9 +554,15 @@ export class LivepeerMcpClient {
       !payload.error &&
       !(payload.result as { isError?: boolean } | undefined)?.isError &&
       (status === "cancelled" || text.includes("cancelled") || text.includes("canceled"));
+    if (!confirmed) {
+      console.error(
+        "[livepeer-mcp:cancel_job]",
+        redactSecrets(resultText(payload)).slice(0, 500)
+      );
+    }
     return {
       cancelled: confirmed,
-      note: confirmed ? "Provider confirmed cancellation." : `Provider did not confirm cancellation: ${resultText(payload).slice(0, 200) || status || "no confirmation"}`
+      note: confirmed ? "Provider confirmed cancellation." : "Provider did not confirm cancellation."
     };
   }
 

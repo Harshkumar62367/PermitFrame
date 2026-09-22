@@ -19,6 +19,8 @@ interface TemplateCustomizationProps {
   advancedOpen: boolean;
   onToggleAdvanced: () => void;
   durationError: string | null;
+  /** Exact notice for a persisted legacy length (e.g. 40s) - blocks apply until corrected. */
+  legacyClipMessage: string | null;
   durationUnverified: boolean;
   profile: string;
   onProfile: (profile: string) => void;
@@ -44,6 +46,7 @@ export function TemplateCustomization({
   advancedOpen,
   onToggleAdvanced,
   durationError,
+  legacyClipMessage,
   durationUnverified,
   profile,
   onProfile,
@@ -161,12 +164,17 @@ export function TemplateCustomization({
                     {s}s
                   </button>
                 ))}
-                {motionSeconds !== null && !DURATION_CHIPS.includes(motionSeconds) && (
+                {motionSeconds !== null && !DURATION_CHIPS.includes(motionSeconds) && !legacyClipMessage && (
                   <span className="rounded-lg bg-sky-100 px-2.5 py-1.5 font-mono text-[12px] text-sky-800 ring-1 ring-sky-300 dark:bg-sky-950 dark:text-sky-200 dark:ring-sky-800" title="Kept from the existing plan - pick a chip to change it">
                     {motionSeconds}s current plan
                   </span>
                 )}
               </div>
+              {legacyClipMessage && (
+                <p role="alert" className="mt-1.5 break-words text-[12.5px] text-amber-700 dark:text-amber-300">
+                  {legacyClipMessage}
+                </p>
+              )}
               <button
                 type="button"
                 onClick={onToggleAdvanced}
