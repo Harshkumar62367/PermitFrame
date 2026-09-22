@@ -306,9 +306,11 @@ describe("deletion route authorization (static)", () => {
     const archive = read("src/app/api/campaigns/[id]/archive/route.ts");
     assert.ok(archive.includes("archiveCampaign"), "archive route delegates to archiveCampaign");
     assert.ok(archive.includes("AuthenticationRequiredError"), "archive auth failures map to 401");
-    const server = read("src/server/campaigns.ts");
+    const server = read("src/server/campaign-lifecycle.ts");
     assert.ok(server.includes("requireWorkspaceOwner"), "delete/archive require the workspace owner");
     assert.ok(server.includes("ownerId"), "ownership is checked against the workspaces table");
+    const facade = read("src/server/campaigns.ts");
+    assert.ok(facade.includes("requireWorkspaceOwner"), "the campaigns façade still exposes the owner gate");
   });
 
   it("deletion rules stay session-free (pure domain logic)", () => {
