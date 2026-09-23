@@ -4,9 +4,8 @@ import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { AppSidebar } from "@/components/app-sidebar";
 import { MobileNav } from "@/components/mobile-nav";
-import { apiGet } from "@/lib/api";
 import { WORKSPACE_SNAPSHOT_KEY, fetchWorkspaceSnapshot } from "@/lib/use-workspace-snapshot";
-import type { ShellHealth } from "@/components/app-sidebar";
+import { useIntegrationHealth } from "@/lib/use-integration-health";
 import { cn } from "@/lib/utils";
 
 const COLLAPSE_KEY = "permitframe-sidebar-collapsed";
@@ -17,7 +16,7 @@ const COLLAPSE_KEY = "permitframe-sidebar-collapsed";
  * sidebar collapse (persisted locally, never automatic).
  */
 export function AppShell({ children }: { children: React.ReactNode }) {
-  const [health, setHealth] = useState<ShellHealth | null>(null);
+  const { health, isSlow, retry } = useIntegrationHealth();
   // Expanded by default so the first render matches the server and never
   // flashes; the stored preference applies before paint via layout effect.
   const [collapsed, setCollapsed] = useState(false);
@@ -44,15 +43,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => {
-    const controller = new AbortController();
-    apiGet<{ dkg: ShellHealth["dkg"]; livepeer: ShellHealth["livepeer"] }>("/api/health", controller.signal).then(
-      (d) => setHealth({ dkg: d.dkg, livepeer: d.livepeer }),
-      () => undefined // sidebar keeps its neutral "checking" state
-    );
-    return () => controller.abort();
-  }, []);
-
   function toggleCollapse() {
     setCollapsed((v) => {
       try {
@@ -72,8 +62,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       >
         Skip to content
       </a>
-      <AppSidebar health={health} collapsed={collapsed} onToggleCollapse={toggleCollapse} />
-      <MobileNav health={health} />
+      <AppSidebar health={health} isSlow={isSlow} onRetry={retry} collapsed={collapsed} onToggleCollapse={toggleCollapse} />
+      <MobileNav health={health} isSlow={isSlow} onRetry={retry} />
       <main id="pf-main" className={cn("pf-main min-w-0 transition-[padding] duration-200", collapsed && "pf-main-collapsed")}>
         <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 lg:py-8 min-[1500px]:max-w-[80rem]">{children}</div>
       </main>

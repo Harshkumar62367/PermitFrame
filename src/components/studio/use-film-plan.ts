@@ -5,8 +5,18 @@ import { apiPost } from "@/lib/api";
 import { useInvalidateWorkspaceSnapshot } from "@/lib/use-workspace-snapshot";
 import type { Campaign } from "@/server/types";
 import {
+  addFilmScene,
+  canDistributeRemainingSeconds,
+  canSwitchTargetDirectly,
   createStarterScenes,
+  describeFilmDurationMismatch,
   describeFilmPlanSummary,
+  describeSceneGaps,
+  distributeRemainingSeconds,
+  filmDurationState,
+  moveFilmScene,
+  normalizeFilmDraftScenes,
+  removeFilmScene,
   validateFilmPlan,
   type FilmMode,
   type FilmPlan,
@@ -24,8 +34,11 @@ interface UseFilmPlanInput {
 /**
  * Draft state for Campaign Film planning (first half: plan + confirm only).
  * Owns mode, target, aspect, title, budget, and the ordered scene list -
- * starters regenerate deterministically when the total changes, edits apply
- * per scene, and validation runs locally before review. Saving persists the
+ * target changes on an untouched starter plan load the new starters
+ * directly, while any custom storyboard requires explicit confirmation;
+ * aspect changes normalize every draft scene to the plan aspect; add,
+ * remove, move, and explicit distribute actions never redistribute time
+ * silently; validation runs locally before review. Saving persists the
  * validated plan to the campaign request JSON; it never rebuilds preflight
  * and never submits a provider job. No LLM, no provider calls.
  */
@@ -36,7 +49,11 @@ export function useFilmPlan({ campaign, allowed, onChanged }: UseFilmPlanInput) 
   const [aspect, setAspect] = useState<TemplateFormat>(persisted?.aspectRatio ?? "9:16");
   const [title, setTitle] = useState<string>(persisted?.title ?? "");
   const [budget, setBudget] = useState<string>(persisted ? String(persisted.budgetCapUsd) : "");
-  const [scenes, setScenes] = useState<FilmScene[]>(() => persisted?.scenes ?? createStarterScenes(30, "9:16"));
+  const [scenes, setScenes] = useState<FilmScene[]>(() =>
+    persisted ? normalizeFilmDraftScenes(persisted.scenes, persisted.aspectRatio) : createStarterScenes(30, "9:16")
+  );
+  const [pendingTarget, setPendingTarget] = useState<FilmTargetDuration | null>(null);
+  const [sceneOpError, setSceneOpError] = useState<string | null>(null);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [reviewing, setReviewing] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
@@ -71,26 +88,133 @@ export function useFilmPlan({ campaign, allowed, onChanged }: UseFilmPlanInput) 
     [target, scenes]
   );
   const totalSeconds = useMemo(() => scenes.reduce((sum, s) => sum + (Number.isFinite(s.durationSeconds) ? s.durationSeconds : 0), 0), [scenes]);
+  const durationState = useMemo(() => filmDurationState(scenes, target), [scenes, target]);
+  const canDistribute = useMemo(() => canDistributeRemainingSeconds(scenes, target), [scenes, target]);
+  const distributeBlockedReason =
+    durationState.status === "under" && !canDistribute
+      ? "Distributing would push a scene over the 15-second maximum - adjust scene durations first."
+      : null;
 
+  /**
+   * Choosing a total never silently wipes saved or custom work. Only a
+   * fresh untouched starter storyboard (no saved plan) switches directly;
+   * any edited draft - and any saved plan, even one whose scenes happen to
+   * equal the starters - stages a pending target and waits for explicit
+   * confirmation. Confirming loads the new starter scenes; cancelling
+   * leaves target and scenes untouched. Nothing persists or calls a
+   * provider from this confirmation.
+   */
   function setTargetDuration(next: FilmTargetDuration) {
-    setTarget(next);
-    // Picking a total loads the matching deterministic starter scenes;
-    // per-scene edits happen afterwards on this fresh plan.
-    setScenes(createStarterScenes(next, aspect));
+    setSceneOpError(null);
+    if (next === target) {
+      setPendingTarget(null);
+      return;
+    }
+    if (canSwitchTargetDirectly(persisted, scenes, target, aspect)) {
+      setTarget(next);
+      setScenes(createStarterScenes(next, aspect));
+      setSavedNotice(null);
+      return;
+    }
+    setPendingTarget(next);
+  }
+
+  function confirmTargetChange() {
+    if (pendingTarget === null) return;
+    setTarget(pendingTarget);
+    setScenes(createStarterScenes(pendingTarget, aspect));
+    setPendingTarget(null);
     setSavedNotice(null);
+  }
+
+  function cancelTargetChange() {
+    setPendingTarget(null);
   }
 
   function setAspectRatio(next: TemplateFormat) {
     setAspect(next);
+    // One aspect ratio per film: every draft scene follows the plan aspect.
+    setScenes((prev) => prev.map((s) => ({ ...s, format: next })));
     setSavedNotice(null);
   }
 
-  function updateScene(id: string, patch: Partial<Pick<FilmScene, "title" | "durationSeconds" | "visualDirection" | "sourceIntent" | "format">>) {
+  function updateScene(id: string, patch: Partial<Pick<FilmScene, "title" | "durationSeconds" | "visualDirection" | "sourceIntent">>) {
     setScenes((prev) => prev.map((s) => (s.id === id ? { ...s, ...patch } : s)));
     setSavedNotice(null);
   }
 
+  function addScene(): string | null {
+    const result = addFilmScene(scenes, aspect);
+    setSceneOpError(result.ok ? null : result.error);
+    if (!result.ok) return null;
+    setScenes(result.scenes);
+    setSavedNotice(null);
+    return result.scenes[result.scenes.length - 1].id;
+  }
+
+  function removeScene(id: string) {
+    const result = removeFilmScene(scenes, id);
+    setSceneOpError(result.ok ? null : result.error);
+    if (result.ok) {
+      setScenes(result.scenes);
+      setSavedNotice(null);
+    }
+  }
+
+  function moveScene(id: string, direction: "up" | "down") {
+    const result = moveFilmScene(scenes, id, direction);
+    setSceneOpError(result.ok ? null : result.error);
+    if (result.ok) {
+      setScenes(result.scenes);
+      setSavedNotice(null);
+    }
+  }
+
+  function distributeRemaining() {
+    const result = distributeRemainingSeconds(scenes, target);
+    setSceneOpError(result.ok ? null : result.error);
+    if (result.ok) {
+      setScenes(result.scenes);
+      setSavedNotice(null);
+    }
+  }
+
   const canReview = allowed && mode === "campaign_film" && validPlan !== null;
+
+  /**
+   * Concise, UI-reachable reasons review is unavailable. The permission lock
+   * is reported whenever review is unavailable because of it - even when
+   * the plan itself is valid. The list is empty only when the plan is valid
+   * and permission is allowed. validateFilmPlan remains the authority
+   * (filmError covers anything this list cannot name); the panel shows
+   * these instead of a bare disabled button so nothing fails silently.
+   */
+  const reviewBlockers = useMemo(() => {
+    if (mode !== "campaign_film") return [];
+    if (validPlan !== null && allowed) return [];
+    const blockers: string[] = [];
+    if (!allowed) blockers.push("Locked until the permission check passes.");
+    if (validPlan !== null) return blockers;
+    const trimmedTitle = title.trim();
+    if (trimmedTitle === "") blockers.push("Add a film title.");
+    else if (trimmedTitle.length > 120) blockers.push("Shorten the film title to 120 characters or fewer.");
+    const rawBudget = budget.trim();
+    const amount = rawBudget === "" ? NaN : Number(rawBudget);
+    if (rawBudget === "") blockers.push("Add a total budget cap in USD.");
+    else if (!Number.isFinite(amount) || amount <= 0) blockers.push("Budget cap must be a positive USD amount.");
+    for (const s of scenes) {
+      const gaps = describeSceneGaps(s);
+      if (gaps.length > 0) blockers.push(`Scene ${s.order} needs ${gaps.join(", ")}.`);
+    }
+    if (
+      durationState.status !== "exact" &&
+      scenes.every((s) => Number.isInteger(s.durationSeconds))
+    ) {
+      blockers.push(describeFilmDurationMismatch(durationState.totalSeconds, target));
+    }
+    if (blockers.length === 0 && filmError) blockers.push(filmError);
+    return blockers;
+  }, [mode, validPlan, allowed, title, budget, scenes, durationState, target, filmError]);
 
   /**
    * Server dry-run first: review and save share one validation authority.
@@ -139,6 +263,9 @@ export function useFilmPlan({ campaign, allowed, onChanged }: UseFilmPlanInput) 
     setMode,
     target,
     setTargetDuration,
+    pendingTarget,
+    confirmTargetChange,
+    cancelTargetChange,
     aspect,
     setAspectRatio,
     title,
@@ -147,6 +274,14 @@ export function useFilmPlan({ campaign, allowed, onChanged }: UseFilmPlanInput) 
     setBudget,
     scenes,
     updateScene,
+    addScene,
+    removeScene,
+    moveScene,
+    distributeRemaining,
+    sceneOpError,
+    durationState,
+    canDistribute,
+    distributeBlockedReason,
     reviewOpen,
     setReviewOpen,
     reviewing,
@@ -161,6 +296,7 @@ export function useFilmPlan({ campaign, allowed, onChanged }: UseFilmPlanInput) 
     summary,
     totalSeconds,
     canReview,
+    reviewBlockers,
     openReview,
     confirmSave
   };

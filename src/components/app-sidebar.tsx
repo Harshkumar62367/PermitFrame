@@ -7,11 +7,9 @@ import { SidebarNavigation } from "./sidebar/sidebar-navigation";
 import { SidebarFooterNav } from "./sidebar/sidebar-footer-nav";
 import { IntegrationStatusStrip } from "./sidebar/integration-status-strip";
 import { AccountMenu } from "./sidebar/account-menu";
+import type { IntegrationHealth } from "@/lib/use-integration-health";
 
-export interface ShellHealth {
-  dkg: { mode: string; healthy: boolean; blockchain?: string; detail?: string; endpoint?: string; state?: "checking" | "healthy" | "degraded" | "unavailable" };
-  livepeer: { keyless: boolean; endpoint?: string; reachable?: boolean; detail?: string; state?: "checking" | "healthy" | "degraded" | "unavailable" };
-}
+export type ShellHealth = IntegrationHealth;
 
 /**
  * Desktop sidebar, HackerEarth-style floating panel: inset from the viewport
@@ -21,11 +19,15 @@ export interface ShellHealth {
 export function AppSidebar({
   health,
   collapsed = false,
-  onToggleCollapse = () => undefined
+  onToggleCollapse = () => undefined,
+  isSlow = false,
+  onRetry
 }: {
   health: ShellHealth | null;
   collapsed?: boolean;
   onToggleCollapse?: () => void;
+  isSlow?: boolean;
+  onRetry?: () => void;
 }) {
   return (
     <aside
@@ -45,7 +47,7 @@ export function AppSidebar({
 
       <div className={cn("shrink-0 space-y-1 border-t border-border dark:border-white/[0.07]", collapsed ? "px-2 py-2" : "px-3 py-2")}>
         <SidebarFooterNav collapsed={collapsed} />
-        <IntegrationStatusStrip health={health} collapsed={collapsed} />
+        <IntegrationStatusStrip health={health} collapsed={collapsed} isSlow={isSlow} onRetry={onRetry} />
         <AccountMenu collapsed={collapsed} />
       </div>
     </aside>

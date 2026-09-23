@@ -6,7 +6,9 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { campaignOutcome, OutcomeBadge } from "@/components/campaign-outcome";
 import type { Campaign } from "@/server/types";
-import { hasSharableReceipt, isActiveJobStatus } from "@/server/types";
+import { deliveryBlockReason, hasSharableReceipt, isActiveJobStatus, isDeliverableReceipt } from "@/server/types";
+import { deriveQualityReview } from "@/server/livepeer/quality-review";
+import { canCreateVariations } from "./studio-model";
 import { useReviewActions } from "./use-review-actions";
 import { ReviewAssetCard } from "./review-asset-card";
 import { ReviewLightbox } from "./review-lightbox";
@@ -64,6 +66,15 @@ export function ReviewSection({ campaign, onChanged }: ReviewSectionProps) {
   const receiptRecords = campaign.receipts.filter((r) => r.ual);
   const campaignRecord = campaign.campaignUAL ?? actions.approvedUal;
   const hasTechnicalRecords = receiptRecords.length > 0 || !!campaignRecord;
+  // Concise pack review for the approval decision: counts over production
+  // receipts (joined to jobs). Advisory critique flags inform only - the
+  // aspect-ratio block remains the sole automatic technical refusal.
+  const productionReceipts = campaign.receipts.filter((r) => campaign.jobs.some((j) => j.id === r.jobId));
+  const packStates = productionReceipts.map((r) => deriveQualityReview(campaign.jobs.find((j) => j.id === r.jobId), r).state);
+  const packDelivered = productionReceipts.filter((r) => isDeliverableReceipt(r)).length;
+  const packBlocked = productionReceipts.filter((r) => deliveryBlockReason(r) !== null).length;
+  const packAttention = packStates.filter((s) => s === "needs_attention").length;
+  const packUnassessed = packStates.filter((s) => s === "not_assessed").length;
 
   return (
     <section aria-label="Review and deliver" className="rounded-2xl border border-border bg-card p-5 sm:p-6">
@@ -127,6 +138,12 @@ export function ReviewSection({ campaign, onChanged }: ReviewSectionProps) {
         <p role="status" className="mt-3 break-words text-[12.5px] text-muted-foreground">{actions.approval.status}</p>
       )}
       {actions.notice && <p role="status" className="mt-3 break-words text-[12.5px] text-amber-700 dark:text-amber-300">{actions.notice}</p>}
+      {productionReceipts.length > 0 && (
+        <p role="status" className="mt-3 break-words text-[12px] text-muted-foreground">
+          Pack review: {packDelivered} deliverable · {packBlocked} ratio-blocked · {packAttention} flagged for attention · {packUnassessed} unassessed.
+          Advisory flags need human judgment - only ratio mismatches refuse approval automatically.
+        </p>
+      )}
 
       {campaign.receipts.length > 0 ? (
         <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -136,8 +153,9 @@ export function ReviewSection({ campaign, onChanged }: ReviewSectionProps) {
               <ReviewAssetCard
                 key={r.id}
                 receipt={r}
+                job={job ?? null}
                 index={i}
-                canVary={r.mediaType === "image" && job?.status === "ready_to_share"}
+                canVary={canCreateVariations(r, job?.status)}
                 active={active}
                 regenFor={actions.regenFor}
                 varyFor={actions.varyFor}

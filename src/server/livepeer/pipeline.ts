@@ -1,4 +1,4 @@
-import type { Campaign, Database, DerivativeReceipt, ProductionJob, PublicationStatus, QualityProfile, StageInputSource, StageRole } from "../types";
+import type { Campaign, Database, DerivativeReceipt, ProductionJob, PublicationStatus, QualityProfile, StageInputSource, StageRole, Visibility } from "../types";
 import { loadDb, newId, nowIso, sha256, updateDb } from "../store";
 import { readWorkspace, writeWorkspace } from "./run-store";
 import { getDb } from "../db/client";
@@ -125,18 +125,28 @@ export async function persistPreviewInBackground(input: {
   livepeerJobId?: string;
   costUsd?: number;
   kind: ProductionJob["kind"];
+  /** Test seam: deferred/failing ledger publish for atomicity tests. */
+  publish?: ReceiptLedgerPublish;
 }): Promise<void> {
   const scope = input.workspaceId;
   if (!isCloudinaryConfigured()) {
-    // Legacy delivery: durable storage unavailable, so the preview itself
-    // delivers (labeled provider-hosted downstream).
-    const delivered = await transitionJob(input.campaignId, input.jobId, "preview_ready", "ready_to_share", scope);
-    if (delivered) {
-      await writeWorkspace(scope, (d) => {
-        const j = d.campaigns.find((x) => x.id === input.campaignId)?.jobs.find((x) => x.id === input.jobId);
-        if (j) j.finishedAt = nowIso();
-      });
-      await publishReceipt(input.campaignId, input.jobId, input.providerUrl, input.providerModel, null, scope);
+    // Provider-hosted delivery: durable storage unavailable, so the preview
+    // itself delivers (labeled provider-hosted downstream). The
+    // compare-and-set claim (preview_ready only) and the complete receipt
+    // land in ONE workspace mutation via persistLocalDelivery - no observer
+    // can read Ready without the receipt, and a duplicate worker finalizes
+    // nothing. Ledger publication follows local persistence, never before.
+    const { receiptId, claimed } = await persistLocalDelivery({
+      campaignId: input.campaignId,
+      jobId: input.jobId,
+      canonicalUrl: input.providerUrl,
+      capability: input.providerModel,
+      storage: null,
+      scope,
+      claimFrom: "preview_ready"
+    });
+    if (claimed && receiptId) {
+      await publishReceiptToLedger({ campaignId: input.campaignId, receiptId, scope, publish: input.publish }).catch(() => undefined);
     }
     return;
   }
@@ -158,20 +168,23 @@ export async function persistPreviewInBackground(input: {
   });
   if (outcome.outcome === "stored") {
     const canonicalUrl = outcome.asset.secureUrl;
-    await writeWorkspace(scope, (d) => {
-      const j = d.campaigns.find((x) => x.id === input.campaignId)?.jobs.find((x) => x.id === input.jobId);
-      if (j) {
-        j.status = "ready_to_share";
-        j.outputUrl = canonicalUrl;
-        j.finishedAt = nowIso();
-      }
+    // Atomic local finalization: ready_to_share, canonical URL, completion
+    // fields, and the complete receipt (ratio block included) land in ONE
+    // write. Ledger publication follows and can never gate them.
+    const { receiptId } = await persistLocalDelivery({
+      campaignId: input.campaignId,
+      jobId: input.jobId,
+      canonicalUrl,
+      capability: input.providerModel,
+      storage: {
+        publicId: outcome.asset.publicId,
+        url: canonicalUrl,
+        width: outcome.asset.width,
+        height: outcome.asset.height
+      },
+      scope
     });
-    const receiptId = await publishReceipt(input.campaignId, input.jobId, canonicalUrl, input.providerModel, {
-      publicId: outcome.asset.publicId,
-      url: canonicalUrl,
-      width: outcome.asset.width,
-      height: outcome.asset.height
-    }, scope);
+    await publishReceiptToLedger({ campaignId: input.campaignId, receiptId, scope, publish: input.publish }).catch(() => undefined);
     if (receiptId) {
       await getDb()
         .update(campaignAssets)
@@ -221,26 +234,30 @@ export async function runProduction(campaignId: string, onlyStageIds?: string[],
 }
 
 
-export async function publishReceipt(
-  campaignId: string,
-  jobId: string,
+/**
+ * Pure receipt construction (no I/O): the complete local receipt including
+ * measured dimensions, aspectVerdict, and deliveryBlocked. DKG publication
+ * is a separate later step - see publishReceiptToLedger.
+ */
+export function buildReceipt(
+  campaign: Campaign,
+  job: ProductionJob,
   outputUrl: string,
   capability: string,
-  storage: { publicId: string; url: string; width?: number; height?: number } | null,
-  scope?: string
-): Promise<string> {
-  const db = scope ? await readWorkspace(scope) : await loadDb();
-  const campaign = db.campaigns.find((c) => c.id === campaignId);
-  const job = campaign?.jobs.find((j) => j.id === jobId);
-  if (!campaign || !job) return "";
-
+  storage: { publicId: string; url: string; width?: number; height?: number } | null
+): DerivativeReceipt {
   const measuredWidth = Number.isFinite(storage?.width) ? (storage?.width as number) : undefined;
   const measuredHeight = Number.isFinite(storage?.height) ? (storage?.height as number) : undefined;
   const stageFormat = campaign.preflight?.plan.find((s) => s.id === job.stageId)?.format ?? "9:16";
+  // Hard delivery guard: a measured ratio mismatch is persisted as a
+  // structured non-deliverable reason in the SAME receipt write, so the
+  // output can never transiently read as shareable. Unknown (no measured
+  // size, unplanned format) preserves legacy behavior - never a mismatch.
+  const verdict = aspectVerdict(stageFormat, measuredWidth, measuredHeight);
   const receipt: DerivativeReceipt = {
     id: newId("rcpt"),
-    campaignId,
-    jobId,
+    campaignId: campaign.id,
+    jobId: job.id,
     label: campaign.preflight?.plan.find((s) => s.id === job.stageId)?.label ?? job.stageId,
     mediaType: job.kind === "image-to-video" ? "video" : "image",
     format: stageFormat,
@@ -252,7 +269,8 @@ export async function publishReceipt(
       : {}),
     // Requested-vs-delivered verdict persisted with the receipt: mismatches
     // are never Ready for the requested placement (approval gates on this).
-    aspectVerdict: aspectVerdict(stageFormat, measuredWidth, measuredHeight),
+    aspectVerdict: verdict,
+    ...(verdict === "mismatch" ? { deliveryBlocked: "aspect_ratio_mismatch" as const } : {}),
     // URL fingerprint for correlation only — never content evidence (see types).
     providerUrlFingerprint: job.providerUrlFingerprint ?? sha256(outputUrl),
     capability,
@@ -307,33 +325,164 @@ export async function publishReceipt(
         }
       : {})
   };
+  return receipt;
+}
 
-  try {
-    const dkg = getDkg();
-    const record = await dkg.publish(receiptKa(receipt), receipt.visibility);
-    receipt.ual = record.ual;
-    receipt.ualExplorer = record.explorerUrl;
-    receipt.publicationStatus = record.publicationStatus;
-  } catch {
-    // keep the receipt locally even if publication fails; the persisted
-    // "failed" state makes the retry path honest.
-    receipt.publicationStatus = "failed";
-  }
+export interface LocalDeliveryInput {
+  campaignId: string;
+  jobId: string;
+  canonicalUrl: string;
+  capability: string;
+  storage: { publicId: string; url: string; width?: number; height?: number } | null;
+  scope?: string;
+  /**
+   * Compare-and-set claim: finalize only when the job currently holds this
+   * status. Lets the provider-hosted branch claim preview_ready and persist
+   * the receipt in the same mutation. Absent means no claim check (hot and
+   * retry paths already hold their own claims).
+   */
+  claimFrom?: ProductionJob["status"];
+}
 
-  const pushReceipt = (d: Database): void => {
-    const c = d.campaigns.find((x) => x.id === campaignId);
-    if (c) c.receipts.push(receipt);
+/**
+ * Atomic local finalization: ONE workspace mutation persists the complete
+ * local receipt (dimensions, aspectVerdict, deliveryBlocked) together with
+ * the job's canonical URL, completion fields, final ready_to_share status,
+ * and the local event. No observer can ever see Ready without the receipt
+ * (and its ratio block) already persisted. DKG publication happens only
+ * after this write - see publishReceiptToLedger.
+ *
+ * Idempotent: an existing receipt is never duplicated and never mutated
+ * (block reason and publication state preserved); a ready job with a
+ * receipt is left fully untouched. A ready job missing its receipt (a
+ * pre-atomicity window row) gets the receipt healed without touching the job.
+ * With claimFrom, a status mismatch finalizes nothing (claimed: false) -
+ * duplicate workers cannot re-finalize or duplicate the receipt.
+ */
+export async function persistLocalDelivery(input: LocalDeliveryInput): Promise<{ receiptId: string; created: boolean; claimed: boolean }> {
+  let receiptId = "";
+  let created = false;
+  let claimed = input.claimFrom === undefined;
+  const write = (mutator: (db: Database) => void): Promise<unknown> =>
+    input.scope ? writeWorkspace(input.scope, mutator) : updateDb(mutator);
+  await write((d) => {
+    const c = d.campaigns.find((x) => x.id === input.campaignId);
+    const j = c?.jobs.find((x) => x.id === input.jobId);
+    if (!c || !j) return;
+    if (input.claimFrom !== undefined && j.status !== input.claimFrom) {
+      const raced = c.receipts.find((r) => r.jobId === input.jobId);
+      if (raced) receiptId = raced.id;
+      return;
+    }
+    claimed = true;
+    const existing = c.receipts.find((r) => r.jobId === input.jobId);
+    if (existing) {
+      if (j.status !== "ready_to_share") {
+        j.status = "ready_to_share";
+        j.outputUrl = input.canonicalUrl;
+        j.finishedAt = j.finishedAt ?? nowIso();
+      }
+      receiptId = existing.id;
+      return;
+    }
+    const receipt = buildReceipt(c, j, input.canonicalUrl, input.capability, input.storage);
+    j.status = "ready_to_share";
+    j.outputUrl = input.canonicalUrl;
+    j.finishedAt = j.finishedAt ?? nowIso();
+    c.receipts.push(receipt);
     d.events.push({
       id: newId("evt"),
       at: nowIso(),
       kind: "dkg.publish",
-      summary: `Derivative receipt ${receipt.id} published for stage "${receipt.label}".`,
-      refs: [campaignId, receipt.id]
+      summary: `Derivative receipt ${receipt.id} recorded for stage "${receipt.label}".`,
+      refs: [input.campaignId, receipt.id]
     });
-  };
-  if (scope) await writeWorkspace(scope, pushReceipt);
-  else await updateDb(pushReceipt);
-  return receipt.id;
+    receiptId = receipt.id;
+    created = true;
+  });
+  return { receiptId, created, claimed };
+}
+
+/** Injectable ledger publisher (DKG). Tests swap in a deferred mock. */
+export type ReceiptLedgerPublish = (
+  knowledgeAsset: unknown,
+  visibility: Visibility
+) => Promise<{ ual: string; explorerUrl?: string; publicationStatus: PublicationStatus }>;
+
+/**
+ * Ledger publication for an already-persisted receipt. Reads the receipt
+ * fresh, attempts DKG publish, and patches only the publication fields
+ * (ual, ualExplorer, publicationStatus). A DKG timeout/failure records the
+ * honest "failed" state - local delivery, ratio blocking, queue status,
+ * and the share filter are already durable and unaffected. Never throws.
+ * Receipts that stay unpublished (no UAL) are picked up by the republish
+ * route, exactly as before.
+ */
+export async function publishReceiptToLedger(input: {
+  campaignId: string;
+  receiptId: string;
+  scope?: string;
+  publish?: ReceiptLedgerPublish;
+}): Promise<void> {
+  try {
+    const db = input.scope ? await readWorkspace(input.scope) : await loadDb();
+    const receipt = db.campaigns.find((c) => c.id === input.campaignId)?.receipts.find((r) => r.id === input.receiptId);
+    if (!receipt || receipt.ual) return;
+    const publish = input.publish ?? ((ka, visibility) => getDkg().publish(receiptKa(ka as DerivativeReceipt), visibility));
+    const record = await publish(receiptKa(receipt), receipt.visibility);
+    const write = (mutator: (db: Database) => void): Promise<unknown> =>
+      input.scope ? writeWorkspace(input.scope, mutator) : updateDb(mutator);
+    await write((d) => {
+      const r = d.campaigns.find((x) => x.id === input.campaignId)?.receipts.find((x) => x.id === input.receiptId);
+      if (!r || r.ual) return;
+      r.ual = record.ual;
+      r.ualExplorer = record.explorerUrl;
+      r.publicationStatus = record.publicationStatus;
+    }).catch(() => undefined);
+  } catch {
+    try {
+      const write = (mutator: (db: Database) => void): Promise<unknown> =>
+        input.scope ? writeWorkspace(input.scope, mutator) : updateDb(mutator);
+      await write((d) => {
+        const r = d.campaigns.find((x) => x.id === input.campaignId)?.receipts.find((x) => x.id === input.receiptId);
+        // Preserve any concurrently published state; only record the failure
+        // when the receipt still carries no ledger outcome.
+        if (!r || r.ual || r.publicationStatus) return;
+        r.publicationStatus = "failed";
+      }).catch(() => undefined);
+    } catch {
+      // Local delivery is already durable; publication bookkeeping is best-effort.
+    }
+  }
+}
+
+/**
+ * Full receipt flow preserving the original contract: atomic local
+ * finalization first (job + receipt + block in one write), ledger
+ * publication after. Returns the receipt id, or "" when campaign/job
+ * are missing. The optional publish hook is the test seam for deferred
+ * or failing DKG; production always uses the real adapter.
+ */
+export async function publishReceipt(
+  campaignId: string,
+  jobId: string,
+  outputUrl: string,
+  capability: string,
+  storage: { publicId: string; url: string; width?: number; height?: number } | null,
+  scope?: string,
+  opts?: { publish?: ReceiptLedgerPublish }
+): Promise<string> {
+  const { receiptId } = await persistLocalDelivery({
+    campaignId,
+    jobId,
+    canonicalUrl: outputUrl,
+    capability,
+    storage,
+    scope
+  });
+  if (!receiptId) return "";
+  await publishReceiptToLedger({ campaignId, receiptId, scope, publish: opts?.publish }).catch(() => undefined);
+  return receiptId;
 }
 
 /**
@@ -412,40 +561,77 @@ export async function storeLegacyOutput(
 
 /**
  * Complete delivery for a job whose durable asset is stored: flip the job
- * to succeeded with the canonical URL and publish its receipt. Used by the
- * storage-retry path (the hot path above inlines the same steps). Idempotent:
- * already-succeeded jobs and existing receipts are left untouched.
+ * to succeeded with the canonical URL and persist its receipt atomically
+ * (same guarantees as the hot path), then publish to the ledger. Used by
+ * the storage-retry path. Idempotent: already-delivered jobs and existing
+ * receipts are left untouched; nothing is ever duplicated.
  */
-export async function finalizeStoredJob(workspaceId: string, campaignId: string, jobId: string): Promise<{ finalized: boolean }> {
+export async function finalizeStoredJob(
+  workspaceId: string,
+  campaignId: string,
+  jobId: string,
+  opts?: { publish?: ReceiptLedgerPublish }
+): Promise<{ finalized: boolean }> {
   const assets = await getCampaignAssets(workspaceId, campaignId).catch(() => []);
   const asset = assets.find((a) => a.jobId === jobId);
+  return finalizeStoredDelivery({ workspaceId, campaignId, jobId, asset, publish: opts?.publish });
+}
+
+export interface StoredDeliveryAsset {
+  storageStatus: string;
+  storageUrl?: string | null;
+  storagePublicId?: string | null;
+  storageWidth?: number | null;
+  storageHeight?: number | null;
+}
+
+/**
+ * Retry-path core over an already-resolved durable asset. Workspace-seam
+ * only (no Neon/Cloudinary reads), so atomicity tests drive this directly.
+ * A stored asset with a non-ready job finalizes atomically; an
+ * already-delivered job with a receipt is untouched; a ready job missing
+ * its receipt is healed without duplicating anything.
+ */
+export async function finalizeStoredDelivery(input: {
+  workspaceId: string;
+  campaignId: string;
+  jobId: string;
+  asset: StoredDeliveryAsset | undefined;
+  publish?: ReceiptLedgerPublish;
+}): Promise<{ finalized: boolean }> {
+  const { asset } = input;
   if (!asset || asset.storageStatus !== "stored" || !asset.storageUrl) return { finalized: false };
-  const db = await loadDb();
-  const campaign = db.campaigns.find((c) => c.id === campaignId);
-  const job = campaign?.jobs.find((j) => j.id === jobId);
-  if (!campaign || !job || job.status === "ready_to_share") return { finalized: false };
+  const db = await readWorkspace(input.workspaceId);
+  const campaign = db.campaigns.find((c) => c.id === input.campaignId);
+  const job = campaign?.jobs.find((j) => j.id === input.jobId);
+  if (!campaign || !job) return { finalized: false };
+  if (job.status === "ready_to_share" && campaign.receipts.some((r) => r.jobId === input.jobId)) {
+    return { finalized: false };
+  }
   const canonicalUrl = asset.storageUrl;
-  await updateDb((d) => {
-    const c = d.campaigns.find((x) => x.id === campaignId);
-    const j = c?.jobs.find((x) => x.id === jobId);
-    if (j) {
-      j.status = "ready_to_share";
-      j.outputUrl = canonicalUrl;
-      j.finishedAt = nowIso();
-    }
+  const { receiptId } = await persistLocalDelivery({
+    campaignId: input.campaignId,
+    jobId: input.jobId,
+    canonicalUrl,
+    capability: job.capability,
+    storage: {
+      publicId: asset.storagePublicId as string,
+      url: canonicalUrl,
+      width: asset.storageWidth ?? undefined,
+      height: asset.storageHeight ?? undefined
+    },
+    scope: input.workspaceId
   });
-  const receiptId = await publishReceipt(campaignId, jobId, canonicalUrl, job.capability, {
-    publicId: asset.storagePublicId as string,
-    url: canonicalUrl,
-    width: asset.storageWidth ?? undefined,
-    height: asset.storageHeight ?? undefined
-  });
-  if (receiptId) {
+  if (!receiptId) return { finalized: false };
+  await publishReceiptToLedger({ campaignId: input.campaignId, receiptId, scope: input.workspaceId, publish: input.publish }).catch(() => undefined);
+  try {
     await getDb()
       .update(campaignAssets)
       .set({ receiptId, updatedAt: new Date() })
-      .where(eq(campaignAssets.jobId, jobId))
+      .where(eq(campaignAssets.jobId, input.jobId))
       .catch(() => undefined);
+  } catch {
+    // Normalized mirror is best-effort; the workspace blob stays canonical.
   }
   return { finalized: true };
 }

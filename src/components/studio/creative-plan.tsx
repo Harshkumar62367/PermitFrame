@@ -8,6 +8,8 @@ import { newRunKey } from "@/lib/idempotency-key";
 import { useInvalidateWorkspaceSnapshot } from "@/lib/use-workspace-snapshot";
 import { cn } from "@/lib/utils";
 import type { Campaign, ProductionStagePlan } from "@/server/types";
+import { deliveryBlockedJobIds } from "@/server/types";
+import { deriveQualityReview } from "@/server/livepeer/quality-review";
 import type { FilmMode } from "@/server/livepeer/film-plan";
 import {
   deliverableKind,
@@ -36,6 +38,7 @@ const STATE_META: Record<DeliverableState, { label: string; className: string }>
   running: { label: "Generating", className: "bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-800" },
   partial: { label: "Partial", className: "bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-800" },
   done: { label: "Complete", className: "bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-950/40 dark:text-emerald-300 dark:ring-emerald-800" },
+  review: { label: "Needs ratio review", className: "bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-800" },
   failed: { label: "Needs retry", className: "bg-rose-50 text-rose-700 ring-rose-600/20 dark:bg-rose-950/40 dark:text-rose-300 dark:ring-rose-800" }
 };
 
@@ -66,6 +69,16 @@ export function CreativePlan({ campaign, allowed, filmMode, onChanged }: Creativ
     () => new Set(campaign.jobs.filter((j) => j.status === "ready_to_share").map((j) => j.stageId)),
     [campaign]
   );
+  // Stages whose stored output is delivery-blocked (ratio mismatch):
+  // generated, reviewable, but never Complete - and not re-selectable
+  // here (regeneration runs from Review & deliver).
+  const blockedStageIds = useMemo(() => {
+    const blockedJobs = deliveryBlockedJobIds(campaign.receipts);
+    return new Set(
+      campaign.jobs.filter((j) => blockedJobs.has(j.id)).map((j) => j.stageId)
+    );
+  }, [campaign]);
+  const hasBlockedStages = blockedStageIds.size > 0;
   const [selected, setSelected] = useState<string[] | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -201,7 +214,7 @@ export function CreativePlan({ campaign, allowed, filmMode, onChanged }: Creativ
       <div className="pf-pane-scroll mt-3 space-y-2 xl:min-h-0 xl:flex-1 xl:overflow-y-auto xl:pr-1">
         {deliverables.map((d) => {
           const stageIds = d.stages.map((s) => s.id);
-          const state = deliverableState(campaign.jobs, stageIds);
+          const state = deliverableState(campaign.jobs, stageIds, blockedStageIds);
           const meta = STATE_META[state];
           const selectableIds = stageIds.filter((id) => !succeededStageIds.has(id));
           const checkedCount = selectableIds.filter((id) => selectedIds.includes(id)).length;
@@ -232,6 +245,10 @@ export function CreativePlan({ campaign, allowed, filmMode, onChanged }: Creativ
                   >
                     <Check className="h-3.5 w-3.5" aria-hidden />
                   </button>
+                ) : state === "review" ? (
+                  <span className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-md bg-amber-600/10 text-amber-700 ring-1 ring-amber-600/20 dark:text-amber-300" aria-label={`${d.title} needs ratio review`}>
+                    <TriangleAlert className="h-3.5 w-3.5" aria-hidden />
+                  </span>
                 ) : (
                   <span className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-md bg-emerald-600/10 text-emerald-700 ring-1 ring-emerald-600/20 dark:text-emerald-300" aria-label={`${d.title} complete`}>
                     <Check className="h-3.5 w-3.5" aria-hidden />
@@ -254,8 +271,13 @@ export function CreativePlan({ campaign, allowed, filmMode, onChanged }: Creativ
                   <ul className="mt-2 space-y-1">
                     {d.stages.map((stage) => {
                       const job = campaign.jobs.find((j) => j.stageId === stage.id);
-                      const done = job?.status === "ready_to_share";
-                      const selectableStage = !done;
+                      const blocked = blockedStageIds.has(stage.id);
+                      const done = job?.status === "ready_to_share" && !blocked;
+                      const selectableStage = !done && !blocked;
+                      // Advisory attention only: never changes selectability.
+                      const attention =
+                        !!job &&
+                        deriveQualityReview(job, campaign.receipts.find((r) => r.jobId === job.id)).state === "needs_attention";
                       const isChecked = selectedIds.includes(stage.id);
                       return (
                         <li key={stage.id} className="flex items-center gap-2 text-[12.5px]">
@@ -273,6 +295,10 @@ export function CreativePlan({ campaign, allowed, filmMode, onChanged }: Creativ
                             >
                               <Check className="h-3 w-3" aria-hidden />
                             </button>
+                          ) : blocked ? (
+                            <span className="shrink-0 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700 ring-1 ring-amber-600/20 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-800" title="Stored and reviewable, but not deliverable until the ratio matches - regenerate from Review & deliver">
+                              Needs ratio review
+                            </span>
                           ) : (
                             <Check className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" aria-hidden />
                           )}
@@ -282,6 +308,13 @@ export function CreativePlan({ campaign, allowed, filmMode, onChanged }: Creativ
                           {job && job.status === "generating" && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-amber-600" aria-hidden />}
                           {job && job.status === "queued" && <CircleDashed className="h-3.5 w-3.5 shrink-0 text-amber-600" aria-hidden />}
                           {job && job.status === "failed" && <X className="h-3.5 w-3.5 shrink-0 text-rose-600" aria-hidden />}
+                          {attention && (
+                            <span
+                              className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500 dark:bg-amber-400"
+                              title="The automated visual check flagged this output - see Review & deliver. Advisory only."
+                              aria-label={`${stage.label} flagged for attention`}
+                            />
+                          )}
                         </li>
                       );
                     })}
@@ -333,7 +366,9 @@ export function CreativePlan({ campaign, allowed, filmMode, onChanged }: Creativ
           </p>
         ) : selectable.length === 0 && campaign.jobs.length > 0 ? (
           <p className="text-[12px] leading-relaxed text-muted-foreground">
-            Every approved stage has completed - review the outputs below or refine individual assets.
+            {hasBlockedStages
+              ? "Generation has settled, but some outputs need a ratio review - regenerate them from Review & deliver before approval."
+              : "Every approved stage has completed - review the outputs below or refine individual assets."}
           </p>
         ) : null}
         <Button

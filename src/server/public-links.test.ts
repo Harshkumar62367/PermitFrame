@@ -64,7 +64,10 @@ function seedCampaign(): Campaign {
         derivedFrom: { sourceMediaId: "med_secret", passportId: "pp_secret", productFactsId: "pf_secret" },
         generatedAt: "2026-01-01T00:00:00.000Z",
         costUsd: 0.0032,
-        visibility: "private"
+        // Client-visible outputs are shared: private receipts never reach
+        // the share view (see publicOutputsForShare), so the probe pack -
+        // which the tests below expect to be listed - is shared.
+        visibility: "shared"
       }
     ],
     creatorId: "crt_secret",

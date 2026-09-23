@@ -9,6 +9,12 @@ import {
   type CreativeSubmitArgs,
   type CreativeSubmitParsed
 } from "./film-job";
+import { parseTranscribeResult, type TranscribeParsed } from "./film-captions";
+import {
+  parseMuxResult,
+  parseTtsResult,
+  type ProviderRefParsed
+} from "./narration-policy";
 
 /**
  * Minimal MCP (streamable HTTP) client for the Livepeer Agent Creative
@@ -489,9 +495,92 @@ export class LivepeerMcpClient {
   }
 
   /**
+   * Burn-captions finishing (transcribe): one synchronous call carrying
+   * only confirmed fields (source_url, burn:true after user confirmation,
+   * explicit language). No granularity/vocabulary/styling (the UI collects
+   * none - provider defaults apply), no budget field (the tool offers no
+   * pre-quote). Failures throw with provider text (callers log redacted
+   * and fail honestly); usable outputs parse defensively.
+   */
+  async transcribeForCaptions(input: {
+    sourceUrl: string;
+    language: string;
+  }): Promise<TranscribeParsed> {
+    const payload = await this.callTool(
+      "transcribe",
+      { source_url: input.sourceUrl, burn: true, language: input.language },
+      600_000
+    );
+    assertToolOk(payload, "transcribe");
+    return parseTranscribeResult(payload, input.sourceUrl);
+  }
+
+  /**
+   * Narrated-reel TTS (create_media action=tts): one async call carrying
+   * only prompt + shared cost/idempotency fields. No voice (no exact
+   * verified accepted value in discovery), no model overrides. Failures
+   * throw with provider text (callers log redacted and fail honestly);
+   * audio URLs parse defensively (HTTPS audio only, source echoes and
+   * video/sidecar URLs rejected).
+   */
+  async submitNarrationTts(input: {
+    prompt: string;
+    sessionId: string;
+    idempotencyKey: string;
+    maxCostUsd: number;
+    excludeUrls?: string[];
+  }): Promise<ProviderRefParsed> {
+    const payload = await this.callTool(
+      "create_media",
+      {
+        action: "tts",
+        prompt: input.prompt,
+        async: true,
+        session_id: input.sessionId,
+        idempotency_key: input.idempotencyKey,
+        max_cost_usd: input.maxCostUsd
+      },
+      120_000
+    );
+    assertToolOk(payload, "create_media(tts)");
+    return parseTtsResult(payload, input.excludeUrls ?? []);
+  }
+
+  /**
+   * Narrated-reel mux (create_media action=mux_audio): one async call
+   * carrying only source/audio URLs, audio_fill none (narration never
+   * loops), plus shared cost/idempotency fields. Video URLs parse
+   * defensively (source echo excluded by the caller).
+   */
+  async submitMuxAudio(input: {
+    sourceUrl: string;
+    audioUrl: string;
+    sessionId: string;
+    idempotencyKey: string;
+    maxCostUsd: number;
+  }): Promise<ProviderRefParsed> {
+    const payload = await this.callTool(
+      "create_media",
+      {
+        action: "mux_audio",
+        source_url: input.sourceUrl,
+        audio_url: input.audioUrl,
+        audio_fill: "none",
+        async: true,
+        session_id: input.sessionId,
+        idempotency_key: input.idempotencyKey,
+        max_cost_usd: input.maxCostUsd
+      },
+      120_000
+    );
+    assertToolOk(payload, "create_media(mux_audio)");
+    return parseMuxResult(payload, [input.sourceUrl, input.audioUrl]);
+  }
+
+  /**
    * Campaign Film cancel (cancel_creative_job): stops the worker picking up
    * new scenes; already-dispatched renders complete naturally. Returns
-   * whether the provider confirmed - callers must not claim success
+   * whether the provider confirmed it - callers must not claim success
    * otherwise, and never touch unrelated campaign assets.
    *
    * Cancellation notes are stable user-safe strings only: raw provider
@@ -590,12 +679,20 @@ export class LivepeerMcpClient {
       num(s.weighted_total ?? s.total ?? s.score) ??
       num((s.sub_scores as Record<string, unknown> | undefined)?.weighted_total) ??
       null;
+    // Safety: provider pass_fail/verdict text is never persisted verbatim -
+    // it may carry URLs, tokens, paths, or transport detail. The note is a
+    // fixed product-owned message derived from safe values only (score,
+    // threshold, parseability). Pass semantics are unchanged.
+    const passed = score === null ? true : score >= threshold;
     return {
       score,
-      passed: score === null ? true : score >= threshold,
+      passed,
       note:
-        str(s.pass_fail ?? s.verdict) ??
-        (score === null ? "Critique returned no parseable score - treated as advisory pass." : `Vision score ${score.toFixed(2)} vs threshold ${threshold}.`)
+        score === null
+          ? "Automated visual check did not return a usable score."
+          : passed
+            ? `Automated visual check scored ${score.toFixed(2)} against the ${threshold.toFixed(2)} review threshold.`
+            : `Automated visual check scored ${score.toFixed(2)} below the ${threshold.toFixed(2)} review threshold.`
     };
   }
 }

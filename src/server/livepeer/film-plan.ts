@@ -39,8 +39,13 @@ export const FILM_SCENE_MAX_SECONDS = 15;
 export type FilmSceneStatus = "planned";
 
 export type FilmFinishingKind = "narration" | "music" | "subtitles";
-/** All finishing options are visibly unavailable in this task. */
-export const FILM_FINISHING_UNAVAILABLE: FilmFinishingKind[] = ["narration", "music", "subtitles"];
+/**
+ * Finishing kinds the film-plan submission payload cannot carry. This is
+ * about the plan payload only - narration and burned captions remain
+ * explicit post-delivery actions on a delivered reel, while music and
+ * soundtrack mixing are not available yet.
+ */
+export const FILM_PLAN_UNSUPPORTED_FINISHING: FilmFinishingKind[] = ["narration", "music", "subtitles"];
 
 export interface FilmScene {
   /** Stable id (starter plans use film-scene-1..n); unique within the plan. */
@@ -68,7 +73,11 @@ export interface FilmPlan {
   /** Required total budget cap in USD for film mode. */
   budgetCapUsd: number;
   scenes: FilmScene[];
-  /** Optional finishing requests; every option is unavailable in this task. */
+  /**
+   * Optional finishing requests; never submitted - the persisted plan
+   * payload carries no actionable finishing request. Non-empty requests are rejected with an
+   * honest redirect (post-delivery actions or not-available-yet).
+   */
   finishing?: { requested: FilmFinishingKind[] };
 }
 
@@ -85,7 +94,8 @@ function isFilmTarget(value: unknown): value is FilmTargetDuration {
  * target, missing title, missing/non-positive budget, scene count outside
  * 2-30, non-sequential ordering, non-whole or out-of-range scene lengths,
  * empty beat/direction/intent text, unknown formats, non-planned statuses,
- * totals that miss the target, and any finishing request (all unavailable).
+ * totals that miss the target, and any finishing request (narration belongs
+ * to post-delivery; music/subtitles are not plan-submittable).
  */
 export function validateFilmPlan(raw: unknown): FilmPlanValidation {
   if (typeof raw !== "object" || raw === null) return { ok: false, error: "Film plan must be an object." };
@@ -159,11 +169,23 @@ export function validateFilmPlan(raw: unknown): FilmPlanValidation {
     if (!visualDirection) return { ok: false, error: `Scene ${label} needs visual direction.` };
     const sourceIntent = typeof s.sourceIntent === "string" ? s.sourceIntent.trim() : "";
     if (!sourceIntent) return { ok: false, error: `Scene ${label} needs a source/reference intent.` };
-    if (typeof s.format !== "string" || !FILM_FORMATS.includes(s.format as TemplateFormat)) {
+    // One aspect ratio per Campaign Film: the plan-level aspect is the only
+    // value the provider ever receives. A missing scene format is a legacy
+    // draft - normalize it to the plan aspect. An explicitly mismatched
+    // format is rejected rather than silently submitted as the plan aspect.
+    const rawFormat = typeof s.format === "string" ? s.format : "";
+    const sceneFormat: TemplateFormat = (rawFormat === "" ? aspectRatio : rawFormat) as TemplateFormat;
+    if (rawFormat !== "" && !FILM_FORMATS.includes(sceneFormat)) {
       return { ok: false, error: `Scene ${label}: format must be one of 9:16, 4:5, 1:1, 16:9.` };
     }
-    if (!FILM_SUPPORTED_ASPECTS.includes(s.format as TemplateFormat)) {
+    if (!FILM_SUPPORTED_ASPECTS.includes(sceneFormat)) {
       return { ok: false, error: `Scene ${label}: 4:5 is not supported for Campaign Film - use 9:16, 1:1, or 16:9.` };
+    }
+    if (sceneFormat !== aspectRatio) {
+      return {
+        ok: false,
+        error: `Scene ${label}: aspect ${sceneFormat} does not match the film aspect ${aspectRatio} - one aspect ratio per Campaign Film; scenes follow the plan-level aspect.`
+      };
     }
     if (s.status !== "planned") {
       return { ok: false, error: `Scene ${label}: only "planned" scenes exist yet - generation has not started.` };
@@ -175,16 +197,13 @@ export function validateFilmPlan(raw: unknown): FilmPlanValidation {
       title: beat,
       visualDirection,
       sourceIntent,
-      format: s.format as TemplateFormat,
+      format: sceneFormat,
       status: "planned"
     });
   }
   const total = scenes.reduce((sum, s) => sum + s.durationSeconds, 0);
   if (total !== target) {
-    return {
-      ok: false,
-      error: `Scene durations total ${total}s but the film target is ${target}s - adjust scenes so the total matches exactly.`
-    };
+    return { ok: false, error: describeFilmDurationMismatch(total, target) };
   }
   let finishing: { requested: FilmFinishingKind[] } | undefined;
   if (v.finishing !== undefined) {
@@ -193,7 +212,14 @@ export function validateFilmPlan(raw: unknown): FilmPlanValidation {
       return { ok: false, error: "Finishing must look like { requested: [] }." };
     }
     if (f.requested.length > 0) {
-      return { ok: false, error: "Audio finishing (narration, music, subtitles) is not available in this task." };
+      // Narration is a post-delivery action (script + separate spend cap),
+      // never part of the plan submission. Music/soundtrack mixing is not
+      // available yet; captions are likewise post-delivery. Nothing here is
+      // persisted or enabled - the plan payload carries no actionable finishing request.
+      if (f.requested.includes("narration")) {
+        return { ok: false, error: "Narration is added after a reel is delivered, because it needs a script and a separate spend cap." };
+      }
+      return { ok: false, error: "Music and soundtrack mixing are not available yet; burned captions are added after a reel is delivered." };
     }
     finishing = { requested: [] };
   }
@@ -285,12 +311,251 @@ export function createStarterFilmPlan(
 }
 
 /**
+ * Required-field gaps for one draft scene, in editor field order: story
+ * beat, valid duration, visual direction, scene direction note. Empty
+ * means the scene is ready to review. Used for compact-row status and for
+ * explaining what blocks review - never a substitute for validateFilmPlan,
+ * which remains the single authority before review/save.
+ */
+export function describeSceneGaps(
+  scene: Pick<FilmScene, "title" | "durationSeconds" | "visualDirection" | "sourceIntent">
+): string[] {
+  const gaps: string[] = [];
+  if (scene.title.trim() === "") gaps.push("a story beat");
+  if (
+    !Number.isInteger(scene.durationSeconds) ||
+    scene.durationSeconds < FILM_SCENE_MIN_SECONDS ||
+    scene.durationSeconds > FILM_SCENE_MAX_SECONDS
+  ) {
+    gaps.push("a valid duration (3–15 seconds)");
+  }
+  if (scene.visualDirection.trim() === "") gaps.push("visual direction");
+  if (scene.sourceIntent.trim() === "") gaps.push("a scene direction note");
+  return gaps;
+}
+
+/**
  * Truthful plan summary for the UI. Names the total, the scene count, and
  * the separate-shots reality - never a single long render.
  */
 export function describeFilmPlanSummary(plan: Pick<FilmPlan, "targetDurationSeconds" | "scenes">): string {
   const n = plan.scenes.length;
   return `${plan.targetDurationSeconds}-second campaign film · ${n} planned scene${n === 1 ? "" : "s"} · each scene renders as a separate short shot before final assembly.`;
+}
+
+export type FilmDurationStatus = "exact" | "under" | "over";
+
+export interface FilmDurationState {
+  totalSeconds: number;
+  targetSeconds: FilmTargetDuration;
+  status: FilmDurationStatus;
+  /** Absolute whole-second difference between total and target (0 when exact). */
+  differenceSeconds: number;
+}
+
+/**
+ * Structured duration state for a draft storyboard: exact, under by N, or
+ * over by N seconds. Review/Save still requires exact - this only describes
+ * the gap so the UI can name it honestly.
+ */
+export function filmDurationState(
+  scenes: Pick<FilmScene, "durationSeconds">[],
+  target: FilmTargetDuration
+): FilmDurationState {
+  const totalSeconds = scenes.reduce(
+    (sum, s) => sum + (typeof s.durationSeconds === "number" && Number.isFinite(s.durationSeconds) ? s.durationSeconds : 0),
+    0
+  );
+  if (totalSeconds === target) return { totalSeconds, targetSeconds: target, status: "exact", differenceSeconds: 0 };
+  if (totalSeconds < target) {
+    return { totalSeconds, targetSeconds: target, status: "under", differenceSeconds: target - totalSeconds };
+  }
+  return { totalSeconds, targetSeconds: target, status: "over", differenceSeconds: totalSeconds - target };
+}
+
+/**
+ * Exact-difference copy for an off-target storyboard. Under-filled plans
+ * name the missing seconds; over-filled plans ask for manual reduction -
+ * there is no automatic correction for over-filled plans.
+ */
+export function describeFilmDurationMismatch(total: number, target: FilmTargetDuration): string {
+  if (total === target) return `${total} of ${target} seconds planned - the storyboard matches the target exactly.`;
+  const diff = Math.abs(target - total);
+  const unit = diff === 1 ? "second" : "seconds";
+  if (total < target) {
+    return `${total} of ${target} seconds planned — add ${diff} ${unit} across scenes or add another scene.`;
+  }
+  return `${total} of ${target} seconds planned — reduce ${diff} ${unit} across scenes to match the ${target}-second target.`;
+}
+
+function renumberFilmScenes(scenes: FilmScene[]): FilmScene[] {
+  return scenes.map((s, i) => ({ ...s, order: i + 1 }));
+}
+
+/**
+ * Draft normalization to the single plan-level aspect: every draft scene
+ * takes the plan aspect (legacy scenes missing a format are covered too -
+ * they simply take the plan aspect). Explicit formats are never preserved
+ * here; validation additionally rejects an explicit mismatch on any path
+ * that bypasses this normalization rather than silently rewriting it.
+ */
+export function normalizeFilmDraftScenes(scenes: FilmScene[], aspect: TemplateFormat): FilmScene[] {
+  return renumberFilmScenes(scenes.map((s) => ({ ...s, format: aspect })));
+}
+
+export type FilmScenesResult = { ok: true; scenes: FilmScene[] } | { ok: false; error: string; scenes: FilmScene[] };
+
+/**
+ * Add a draft scene at the end: sequential order, a valid 3-second initial
+ * duration, empty story fields (validation rejects review/save until they
+ * are filled), planned status, and the global film aspect. Time is never
+ * redistributed - the duration state simply reports the new gap.
+ */
+export function addFilmScene(scenes: FilmScene[], aspect: TemplateFormat): FilmScenesResult {
+  if (scenes.length >= FILM_MAX_SCENES) {
+    return { ok: false, error: `Campaign films hold at most ${FILM_MAX_SCENES} planned scenes.`, scenes };
+  }
+  const used = new Set(scenes.map((s) => s.id));
+  let k = 1;
+  while (used.has(`film-scene-${k}`)) k += 1;
+  const scene: FilmScene = {
+    id: `film-scene-${k}`,
+    order: scenes.length + 1,
+    durationSeconds: FILM_SCENE_MIN_SECONDS,
+    title: "",
+    visualDirection: "",
+    sourceIntent: "",
+    format: aspect,
+    status: "planned"
+  };
+  return { ok: true, scenes: [...scenes.map((s) => ({ ...s })), scene] };
+}
+
+/**
+ * Remove a scene without redistributing time: other durations are
+ * preserved untouched and order is renumbered to exactly 1..n. Refused
+ * below two scenes with an honest message and no mutation.
+ */
+export function removeFilmScene(scenes: FilmScene[], id: string): FilmScenesResult {
+  if (scenes.length <= FILM_MIN_SCENES) {
+    return {
+      ok: false,
+      error: "Campaign films need at least 2 planned scenes - removing this scene is not allowed.",
+      scenes
+    };
+  }
+  if (!scenes.some((s) => s.id === id)) {
+    return { ok: false, error: "That scene is not in this storyboard - nothing was removed.", scenes };
+  }
+  return { ok: true, scenes: renumberFilmScenes(scenes.filter((s) => s.id !== id).map((s) => ({ ...s }))) };
+}
+
+/**
+ * Move a scene one step up or down. The array order is the playback order;
+ * order fields are renumbered to exactly 1..n. Edge moves are refused with
+ * no mutation (the UI also disables them).
+ */
+export function moveFilmScene(scenes: FilmScene[], id: string, direction: "up" | "down"): FilmScenesResult {
+  const index = scenes.findIndex((s) => s.id === id);
+  if (index === -1) {
+    return { ok: false, error: "That scene is not in this storyboard - nothing was moved.", scenes };
+  }
+  const target = direction === "up" ? index - 1 : index + 1;
+  if (target < 0 || target >= scenes.length) {
+    return {
+      ok: false,
+      error: direction === "up" ? "This scene is already first - it cannot move up." : "This scene is already last - it cannot move down.",
+      scenes
+    };
+  }
+  const next = scenes.map((s) => ({ ...s }));
+  const [moved] = next.splice(index, 1);
+  next.splice(target, 0, moved);
+  return { ok: true, scenes: renumberFilmScenes(next) };
+}
+
+/** Whether an explicit distribute action can run without breaching 15s per scene. */
+export function canDistributeRemainingSeconds(
+  scenes: Pick<FilmScene, "durationSeconds">[],
+  target: FilmTargetDuration
+): boolean {
+  const total = scenes.reduce(
+    (sum, s) => sum + (typeof s.durationSeconds === "number" && Number.isFinite(s.durationSeconds) ? s.durationSeconds : 0),
+    0
+  );
+  const remaining = target - total;
+  if (remaining <= 0) return false;
+  const capacity = scenes.reduce(
+    (sum, s) => sum + Math.max(0, FILM_SCENE_MAX_SECONDS - s.durationSeconds),
+    0
+  );
+  return capacity >= remaining;
+}
+
+/**
+ * Explicit, deterministic distribution of the remaining seconds: deal one
+ * second at a time in scene order, wrapping round-robin past scenes
+ * already at 15 seconds. Never runs automatically - only when the user
+ * picks the distribute action. Refused when a full pass places nothing
+ * (any further placement would push a scene over 15 seconds), and never
+ * corrects an over-filled plan (the user reduces those manually).
+ */
+export function distributeRemainingSeconds(scenes: FilmScene[], target: FilmTargetDuration): FilmScenesResult {
+  const total = scenes.reduce((sum, s) => sum + s.durationSeconds, 0);
+  const remaining = target - total;
+  if (remaining === 0) {
+    return { ok: false, error: `${total} of ${target} seconds planned - the storyboard matches the target exactly.`, scenes };
+  }
+  if (remaining < 0) {
+    return { ok: false, error: describeFilmDurationMismatch(total, target), scenes };
+  }
+  const next = scenes.map((s) => ({ ...s }));
+  let left = remaining;
+  while (left > 0) {
+    let placed = false;
+    for (const slot of next) {
+      if (left === 0) break;
+      if (slot.durationSeconds < FILM_SCENE_MAX_SECONDS) {
+        slot.durationSeconds += 1;
+        left -= 1;
+        placed = true;
+      }
+    }
+    if (!placed) {
+      return {
+        ok: false,
+        error: `Cannot distribute ${remaining} ${remaining === 1 ? "second" : "seconds"} without pushing a scene over the 15-second maximum - reduce a scene duration or choose a different total.`,
+        scenes
+      };
+    }
+  }
+  return { ok: true, scenes: renumberFilmScenes(next) };
+}
+
+/**
+ * Whether the draft is still the untouched deterministic starter storyboard
+ * for its target and aspect. Target switches on such a plan may load the
+ * new starters directly; anything else requires explicit confirmation.
+ */
+export function isStarterStoryboardFor(scenes: FilmScene[], target: FilmTargetDuration, aspect: TemplateFormat): boolean {
+  return JSON.stringify(scenes) === JSON.stringify(createStarterScenes(target, aspect));
+}
+
+/**
+ * Whether picking a new total may load its starter scenes directly: only
+ * when there is no saved film plan and the draft is still the untouched
+ * deterministic starter storyboard for its target and aspect. A saved plan
+ * always requires explicit confirmation before replacement, even if its
+ * scenes happen to equal the starter scenes - saving is itself an act of
+ * authorship that must never be discarded without asking.
+ */
+export function canSwitchTargetDirectly(
+  persisted: FilmPlan | null | undefined,
+  scenes: FilmScene[],
+  target: FilmTargetDuration,
+  aspect: TemplateFormat
+): boolean {
+  return (persisted === null || persisted === undefined) && isStarterStoryboardFor(scenes, target, aspect);
 }
 
 /**

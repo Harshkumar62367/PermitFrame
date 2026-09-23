@@ -15,10 +15,10 @@ interface FilmReviewModalProps {
 }
 
 /**
- * Film plan confirmation: enumerates scene count, total duration, format,
- * and budget cap, then states the exact honesty line before anything is
- * saved. Saving only persists the plan - generation and final assembly
- * have not started. Focuses Cancel first, closes on Escape/backdrop.
+ * Film plan confirmation: enumerates scene count, total duration, global
+ * aspect, and budget cap, then states the exact honesty line before
+ * anything is saved. Saving only persists the plan - generation and final
+ * assembly have not started. Focuses Cancel first, closes on Escape/backdrop.
  */
 export function FilmReviewModal({ open, plan, summary, saving, saveError, onConfirm, onCancel }: FilmReviewModalProps) {
   const titleId = useId();
@@ -66,7 +66,7 @@ export function FilmReviewModal({ open, plan, summary, saving, saveError, onConf
             <dd className="font-mono font-medium">{plan.targetDurationSeconds}s</dd>
           </div>
           <div className="flex items-baseline justify-between gap-3">
-            <dt className="text-muted-foreground">Format</dt>
+            <dt className="text-muted-foreground">Aspect ratio (all scenes)</dt>
             <dd className="font-mono font-medium">{plan.aspectRatio}</dd>
           </div>
           <div className="flex items-baseline justify-between gap-3">

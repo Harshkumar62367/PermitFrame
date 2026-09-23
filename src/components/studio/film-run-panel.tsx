@@ -10,6 +10,8 @@ import { useFilmRunProgress } from "@/lib/use-film-run-progress";
 import { cn } from "@/lib/utils";
 import type { Campaign } from "@/server/types";
 import { FILM_RUN_LABELS, type FilmRun, type FilmRunStatus } from "@/server/livepeer/film-run";
+import { FilmCaptionPanel } from "./film-caption-panel";
+import { FilmNarrationPanel } from "./film-narration-panel";
 
 interface FilmRunPanelProps {
   campaign: Campaign;
@@ -169,11 +171,13 @@ export function FilmRunPanel({ campaign, allowed, onChanged }: FilmRunPanelProps
           {runs.map((run) => (
             <FilmRunCard
               key={run.id}
+              campaignId={campaign.id}
               run={run}
               allowed={allowed}
               busy={busy}
               onRetry={() => void retry(run.id)}
               onCancel={() => void cancel(run.id)}
+              onChanged={onChanged}
             />
           ))}
         </ol>
@@ -196,17 +200,21 @@ export function FilmRunPanel({ campaign, allowed, onChanged }: FilmRunPanelProps
 }
 
 function FilmRunCard({
+  campaignId,
   run,
   allowed,
   busy,
   onRetry,
-  onCancel
+  onCancel,
+  onChanged
 }: {
+  campaignId: string;
   run: FilmRun;
   allowed: boolean;
   busy: string | null;
   onRetry: () => void;
   onCancel: () => void;
+  onChanged: () => Promise<void>;
 }) {
   const active = !isTerminalStatus(run.status);
   const retryable = run.status === "failed" && !run.providerJobId;
@@ -304,6 +312,13 @@ function FilmRunCard({
       {run.status === "failed" && run.providerJobId && (
         <p className="mt-1.5 text-[11.5px] leading-relaxed text-muted-foreground">
           The provider job ended - resuming cannot recover it. Submit a new film run for a fresh provider job.
+        </p>
+      )}
+      <FilmCaptionPanel campaignId={campaignId} run={run} allowed={allowed} onChanged={onChanged} />
+      <FilmNarrationPanel campaignId={campaignId} run={run} allowed={allowed} onChanged={onChanged} />
+      {run.status === "ready" && typeof run.reelUrl === "string" && (
+        <p className="mt-1.5 text-[11.5px] leading-relaxed text-muted-foreground">
+          After delivery: use Add narration or Burn captions above for this reel. Music and soundtrack mixing are not available yet.
         </p>
       )}
     </li>

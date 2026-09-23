@@ -1,7 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { PermissionPassport } from "@/server/types";
 import { loadInviteContext, newId, nowIso, updateWorkspaceDb } from "@/server/store";
-import { validateAttestation } from "@/server/consent-validation";
+import {
+  attestGuard,
+  buildConsentPublicView,
+  consentLifecycle,
+  validateAttestation,
+  validateAttestationAcks
+} from "@/server/consent-validation";
+import { markConsentViewed, withConsentTransitionLock } from "@/server/platform";
 import { withIdempotencyLock } from "@/server/idempotency";
 import { getDkg } from "@/server/dkg";
 import { logDkgError, sanitizeDkgError } from "@/server/dkg/public-errors";
@@ -15,20 +22,30 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   if (!ctx) return NextResponse.json({ error: "Consent link not found" }, { status: 404 });
   const invite = ctx.db.consentInvites.find((i) => i.token === token) ?? null;
   if (!invite) return NextResponse.json({ error: "Consent link not found" }, { status: 404 });
-  // Deliberately narrow: the offered terms plus the creator's public name.
-  // No workspace ids, owner identity, other creators, source-media internals,
-  // contacts, notes, or secrets ever leave this endpoint.
+  // First open marks the request viewed: idempotent, publishes nothing.
+  // Read reliability: a viewed-write failure never fails the GET, but the
+  // normal path genuinely persists through the token's own workspace.
+  if (invite.status === "pending") await markConsentViewed(token, ctx.workspaceId).catch(() => undefined);
+  const fresh = (await loadInviteContext(token))?.db.consentInvites.find((i) => i.token === token) ?? invite;
+  // Deliberately narrow: the offered terms, purpose, covered media previews,
+  // and the creator's public name - plus, for approved links, the proof
+  // status of this exact link's passport. No workspace ids, owner identity,
+  // other creator records, raw media internals (hashes, UALs), passport ids,
+  // UALs, or secrets ever leave this endpoint.
   const creator = ctx.db.creators.find((c) => c.id === invite.creatorId);
-  return NextResponse.json({
-    status: invite.status,
-    draft: {
-      platforms: invite.draft.platforms,
-      countries: invite.draft.countries,
-      allowedTransformations: invite.draft.allowedTransformations,
-      validUntil: invite.draft.validUntil
-    },
-    creator: creator ? { name: creator.name, handle: creator.handle } : null
-  });
+  const mediaById = new Map(ctx.db.sourceMedia.map((m) => [m.id, m]));
+  const media = (invite.draft.sourceMediaIds ?? [])
+    .map((id) => mediaById.get(id))
+    .filter((m): m is NonNullable<typeof m> => Boolean(m))
+    .map((m) => ({ title: m.title, type: m.type, url: m.url }));
+  return NextResponse.json(
+    buildConsentPublicView(
+      fresh,
+      media,
+      ctx.db.passports,
+      creator ? { name: creator.name, handle: creator.handle } : null
+    )
+  );
 }
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ token: string }> }) {
@@ -38,32 +55,47 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     countries?: unknown;
     allowedTransformations?: unknown;
     validUntil?: unknown;
+    acknowledgements?: unknown;
   };
   const ctx = await loadInviteContext(token);
   const invite = ctx?.db.consentInvites.find((i) => i.token === token) ?? null;
   if (!ctx || !invite) return NextResponse.json({ error: "Consent link not found" }, { status: 404 });
-  if (invite.status === "completed") return NextResponse.json({ error: "Consent already attested" }, { status: 400 });
+  const gate = attestGuard(consentLifecycle(invite));
+  if (!gate.ok) return NextResponse.json({ error: gate.error }, { status: 400 });
+  const acks = validateAttestationAcks(body);
+  if (!acks.ok) return NextResponse.json({ error: acks.error }, { status: 400 });
   const validated = validateAttestation(body, invite.draft);
   if (!validated.ok) return NextResponse.json({ error: validated.error }, { status: 400 });
 
   // One-time attestation, race-safe: concurrent double-submits serialize on
-  // the token lock and the second sees "completed" instead of minting a
-  // second passport. Validation above runs lock-free (no writes involved).
+  // the token lock and the second sees an already-decided link instead of
+  // minting a second passport. Validation above runs lock-free (no writes).
+  // The transition lock serializes against a racing decline: whichever
+  // decision runs first wins, and the loser re-checks inside the lock and
+  // returns its own honest outcome (no shared payload, no second passport,
+  // no decline event on an approval win).
   try {
     return await withIdempotencyLock(`consent:${token}`, async () => {
     const fresh = await loadInviteContext(token);
     const live = fresh?.db.consentInvites.find((i) => i.token === token) ?? null;
     if (!fresh || !live) return NextResponse.json({ error: "Consent link not found" }, { status: 404 });
-    if (live.status === "completed") return NextResponse.json({ error: "Consent already attested" }, { status: 400 });
+    const innerGate = attestGuard(consentLifecycle(live));
+    if (!innerGate.ok) return NextResponse.json({ error: innerGate.error }, { status: 400 });
+    return withConsentTransitionLock(token, async () => {
+    const guarded = await loadInviteContext(token);
+    const current = guarded?.db.consentInvites.find((i) => i.token === token) ?? null;
+    if (!guarded || !current) return NextResponse.json({ error: "Consent link not found" }, { status: 404 });
+    const transitionGate = attestGuard(consentLifecycle(current));
+    if (!transitionGate.ok) return NextResponse.json({ error: transitionGate.error }, { status: 400 });
 
     const creatorName =
-      fresh.db.creators.find((c) => c.id === live.creatorId)?.name ?? "Creator";
+      guarded.db.creators.find((c) => c.id === current.creatorId)?.name ?? "Creator";
     const attested = validated.value;
   const passport: PermissionPassport = {
     id: newId("passport"),
-    creatorId: live.creatorId,
+    creatorId: current.creatorId,
     creatorName,
-    sourceMediaIds: live.draft.sourceMediaIds,
+    sourceMediaIds: current.draft.sourceMediaIds,
     platforms: attested.platforms,
     countries: attested.countries,
     allowedTransformations: attested.allowedTransformations,
@@ -89,10 +121,16 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     // publication failure shouldn't lose the attestation; passport is stored locally
   }
 
-  await updateWorkspaceDb(fresh.workspaceId, (d) => {
+  await updateWorkspaceDb(guarded.workspaceId, (d) => {
     d.passports.push({ ...passport, ual });
     const invite2 = d.consentInvites.find((i) => i.token === token);
-    if (invite2) invite2.status = "completed";
+    if (invite2) {
+      invite2.status = "approved";
+      // Exact link: later reads resolve publication status from this
+      // passport only, never from sibling passports of the same creator.
+      invite2.passportId = passport.id;
+      invite2.decision = { outcome: "approved", at: nowIso() };
+    }
     d.events.push({
       id: newId("evt"),
       at: nowIso(),
@@ -103,6 +141,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   });
 
   return NextResponse.json({ attested: true, passportId: passport.id, ual, explorerUrl });
+    });
     });
   } catch (error) {
     logDkgError("consent-attest", error);

@@ -82,6 +82,17 @@ export interface FilmRun {
   reelUrl?: string;
   /** Actual scene outputs - provider-reported rows only, never planned stills. */
   sceneOutputs: FilmSceneOutput[];
+  /**
+   * Burn-captions finishing jobs for the delivered reel (newest last).
+   * Optional - runs delivered before finishing existed carry none.
+   */
+  captionJobs?: import("./film-captions").FilmCaptionJob[];
+  /**
+   * Narrated-reel finishing jobs for the delivered reel (newest last).
+   * Optional - runs delivered before narration existed carry none.
+   * Separate records from caption jobs, generation jobs, and receipts.
+   */
+  narrationJobs?: import("./narration-policy").FilmNarrationJob[];
   preservation: FilmPreservation;
   error?: string;
   /** Client-generated key: repeats replay this run, never a second paid job. */

@@ -7,7 +7,7 @@ export interface Deliverable {
   platforms: string;
   stages: ProductionStagePlan[];
 }
-export type DeliverableState = "ready" | "queued" | "running" | "partial" | "done" | "failed";
+export type DeliverableState = "ready" | "queued" | "running" | "partial" | "done" | "failed" | "review";
 
 /**
  * Groups the approved plan stages into the three selectable deliverables.
@@ -75,8 +75,17 @@ export function receiptsForStages(receipts: DerivativeReceipt[], jobs: Productio
   return receipts.filter((r) => jobIds.has(r.jobId));
 }
 
-/** Aggregate deliverable state from its stage jobs. No jobs yet = ready. */
-export function deliverableState(jobs: ProductionJob[], stageIds: string[]): DeliverableState {
+/**
+ * Aggregate deliverable state from its stage jobs. No jobs yet = ready. A
+ * fully generated deliverable with a delivery-blocked stage (e.g. ratio
+ * mismatch) is "review", never "done" - the output is stored and editable
+ * but not deliverable. Partial/active states keep existing behavior.
+ */
+export function deliverableState(
+  jobs: ProductionJob[],
+  stageIds: string[],
+  blockedStageIds: Set<string> = new Set()
+): DeliverableState {
   const mine = jobsForStages(jobs, stageIds);
   if (mine.length === 0) return "ready";
   const states = new Set(mine.map((j) => j.status));
@@ -86,8 +95,32 @@ export function deliverableState(jobs: ProductionJob[], stageIds: string[]): Del
     const settled = mine.every((j) => j.status === "failed" || j.status === "cancelled" || j.status === "storage_retry_needed" || j.status === "ready_to_share");
     return settled && mine.some((j) => j.status !== "ready_to_share") ? "failed" : "partial";
   }
-  if (mine.every((j) => j.status === "ready_to_share")) return "done";
+  if (mine.every((j) => j.status === "ready_to_share")) {
+    return stageIds.some((id) => blockedStageIds.has(id)) ? "review" : "done";
+  }
   return "partial";
+}
+
+/**
+ * Queue badge state for one job: a delivery-blocked ready_to_share output
+ * (stored, reviewable, generation succeeded) shows as needs-review, never
+ * Ready. All other statuses pass through untouched.
+ */
+export function queueStatusForJob(status: string, blocked: boolean): string {
+  return blocked && status === "ready_to_share" ? "needs_review" : status;
+}
+
+/**
+ * Variation eligibility: completed stored images, unchanged by delivery
+ * blocking - a ratio-mismatched output remains a valid variations source
+ * (the server re-verifies before dispatch). Generation status is the only
+ * input; the receipt's delivery state never removes eligibility.
+ */
+export function canCreateVariations(
+  receipt: Pick<DerivativeReceipt, "mediaType">,
+  jobStatus: ProductionJob["status"] | undefined
+): boolean {
+  return receipt.mediaType === "image" && jobStatus === "ready_to_share";
 }
 
 /** Honest cost estimate for stages, same price map the workspace uses. */

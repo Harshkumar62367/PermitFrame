@@ -11,8 +11,9 @@ import { useInvalidateWorkspaceSnapshot } from "@/lib/use-workspace-snapshot";
 import { useRunProgress } from "@/lib/use-run-progress";
 import { cn } from "@/lib/utils";
 import type { Campaign, ProductionJob, ProductionStagePlan } from "@/server/types";
-import { isActiveJobStatus } from "@/server/types";
-import { formatUsd, plainActivity, displayCapability } from "./studio-model";
+import { deliveryBlockedJobIds, isActiveJobStatus } from "@/server/types";
+import { deriveQualityReview } from "@/server/livepeer/quality-review";
+import { formatUsd, plainActivity, displayCapability, queueStatusForJob } from "./studio-model";
 
 interface QueuePanelProps {
   campaign: Campaign;
@@ -29,6 +30,7 @@ const STATUS_META: Record<string, { label: string; className: string }> = {
   storage_retry_needed: { label: "Retry needed", className: "bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-800" },
   retrying: { label: "Retrying soon", className: "bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-800" },
   ready_to_share: { label: "Ready", className: "bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-950/40 dark:text-emerald-300 dark:ring-emerald-800" },
+  needs_review: { label: "Needs ratio review", className: "bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-800" },
   failed: { label: "Failed", className: "bg-rose-50 text-rose-700 ring-rose-600/20 dark:bg-rose-950/40 dark:text-rose-300 dark:ring-rose-800" },
   cancelled: { label: "Cancelled", className: "bg-muted text-muted-foreground ring-border" }
 };
@@ -68,9 +70,20 @@ export function QueuePanel({ campaign, allowed, onChanged }: QueuePanelProps) {
   const [cancelNote, setCancelNote] = useState<string | null>(null);
   const invalidateSnapshot = useInvalidateWorkspaceSnapshot();
 
-  const done = campaign.jobs.filter((j) => j.status === "ready_to_share").length;
   const total = campaign.jobs.length;
   const failed = campaign.jobs.filter((j) => j.status === "failed");
+  // Delivery-blocked outputs (ratio mismatch) stay stored and reviewable
+  // but never count as Ready/Complete: the job status is untouched
+  // (generation settled), only the display derivation changes. Dependency
+  // gating still uses the stored output, so readyStages is unchanged.
+  const blockedJobIds = deliveryBlockedJobIds(campaign.receipts);
+  const done = campaign.jobs.filter((j) => j.status === "ready_to_share" && !blockedJobIds.has(j.id)).length;
+  // Advisory critique attention: subtle marker only, never a status change.
+  const attentionJobIds = new Set(
+    campaign.jobs
+      .filter((j) => deriveQualityReview(j, campaign.receipts.find((r) => r.jobId === j.id)).state === "needs_attention")
+      .map((j) => j.id)
+  );
   const readyStages = new Set(
     campaign.jobs.filter((j) => j.status === "ready_to_share").map((j) => j.stageId)
   );
@@ -82,7 +95,7 @@ export function QueuePanel({ campaign, allowed, onChanged }: QueuePanelProps) {
   // assets appear as each job row refreshes. Leave and return anytime -
   // the run record resumes from durable state.
   const runStatus = useRunProgress(campaign.id, activeRun?.id ?? null, onChanged);
-  const runReady = runStatus?.progress.ready ?? campaign.jobs.filter((j) => j.status === "ready_to_share" && (activeRun ? activeRun.stageIds.includes(j.stageId) : true)).length;
+  const runReady = runStatus?.progress.ready ?? campaign.jobs.filter((j) => j.status === "ready_to_share" && !blockedJobIds.has(j.id) && (activeRun ? activeRun.stageIds.includes(j.stageId) : true)).length;
   const runTotal = runStatus?.progress.total ?? activeRun?.stageIds.length ?? total;
   const spent = campaign.jobs.filter((j) => j.status === "ready_to_share").reduce((s, j) => s + (j.costUsd ?? 0), 0);
 
@@ -149,6 +162,7 @@ export function QueuePanel({ campaign, allowed, onChanged }: QueuePanelProps) {
         {total > 0 && (
           <span className="font-mono text-[11px] text-muted-foreground" role="status">
             {activeRun ? `${runReady} of ${runTotal} ready` : `${done}/${total} stages complete`}
+            {attentionJobIds.size > 0 ? ` · ${attentionJobIds.size} need${attentionJobIds.size === 1 ? "s" : ""} attention` : ""}
           </span>
         )}
       </div>
@@ -173,7 +187,8 @@ export function QueuePanel({ campaign, allowed, onChanged }: QueuePanelProps) {
         <ul className="pf-pane-scroll mt-3 space-y-2 xl:min-h-0 xl:flex-1 xl:overflow-y-auto xl:pr-1">
           {campaign.jobs.map((job) => {
             const stage = campaign.preflight?.plan.find((s) => s.id === job.stageId);
-            const shown = displayStatus(job, plan, readyStages);
+            const blocked = blockedJobIds.has(job.id);
+            const shown = queueStatusForJob(displayStatus(job, plan, readyStages), blocked);
             const meta = STATUS_META[shown] ?? STATUS_META.queued;
             const refining = refineFor === job.id;
             const cancellable = job.status === "queued" && !job.livepeerJobId;
@@ -187,13 +202,21 @@ export function QueuePanel({ campaign, allowed, onChanged }: QueuePanelProps) {
                   {job.status === "queued" && shown === "waiting" && <Hourglass className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />}
                   {job.status === "queued" && shown !== "waiting" && <CircleDashed className="h-3.5 w-3.5 shrink-0 text-amber-600" aria-hidden />}
                   {job.status === "storage_pending" && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-amber-600" aria-hidden />}
-                  {job.status === "ready_to_share" && <Check className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" aria-hidden />}
+                  {job.status === "ready_to_share" && !blocked && <Check className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" aria-hidden />}
                   {job.status === "failed" && <X className="h-3.5 w-3.5 shrink-0 text-rose-600 dark:text-rose-300" aria-hidden />}
                   {job.status === "cancelled" && <X className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />}
                   <p className="min-w-0 flex-1 truncate text-[12.5px] font-medium">{stage?.label ?? job.stageId}</p>
                   <span className={cn("shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ring-1", meta.className)}>
                     {meta.label}
                   </span>
+                  {attentionJobIds.has(job.id) && (
+                    <span
+                      className="shrink-0 text-[10px] font-medium text-amber-700 dark:text-amber-300"
+                      title="The automated visual check flagged this output - see Review & deliver. Advisory only: nothing failed or blocked."
+                    >
+                      needs attention
+                    </span>
+                  )}
                   {cancellable && allowed && (
                     <button
                       type="button"
@@ -239,6 +262,11 @@ export function QueuePanel({ campaign, allowed, onChanged }: QueuePanelProps) {
                 {job.status === "storage_retry_needed" && (
                   <p className="mt-1.5 text-[11px] text-amber-700 dark:text-amber-300">
                     Preview kept - secure storage needs a retry. Use “Retry secure storage” in Review &amp; deliver.
+                  </p>
+                )}
+                {blocked && job.status === "ready_to_share" && (
+                  <p className="mt-1.5 text-[11px] text-amber-700 dark:text-amber-300" role="status">
+                    Stored and reviewable below - not deliverable to clients until the ratio matches the planned placement. Generation succeeded; nothing was deleted.
                   </p>
                 )}
                 {job.requestMeta?.fallbackReason && (

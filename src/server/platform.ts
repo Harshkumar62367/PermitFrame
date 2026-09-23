@@ -10,7 +10,7 @@ import type {
   Transformation
 } from "./types";
 import { CAPABILITY_PRICE_MAP, hasSharableReceipt } from "./types";
-import { loadDb, newId, nowIso, sha256, updateDb } from "./store";
+import { loadDb, loadWorkspaceDb, newId, nowIso, sha256, updateDb, updateWorkspaceDb } from "./store";
 import { preflightEvent } from "./campaign-status";
 import { getDkg } from "./dkg";
 import { amendmentKa, passportKa, productFactsKa, sourceMediaKa } from "./dkg/schemas";
@@ -113,59 +113,235 @@ export async function registerSourceMedia(input: {
   return { ...media, ual };
 }
 
-/* ------------------------- consent invites ------------------------ */
+/* ------------------------- consent requests ------------------------ */
 
-const INVITE_PLATFORMS: Platform[] = ["instagram", "tiktok", "youtube", "linkedin"];
-const DEFAULT_TRANSFORMATIONS: Transformation[] = ["edit", "animate", "upscale", "crop"];
+import {
+  CONSENT_LINK_LIFETIME_DAYS,
+  DECLINE_NOTE_MAX,
+  attestGuard,
+  cancelGuard,
+  consentLifecycle,
+  declineGuard,
+  validateConsentRequest
+} from "./consent-validation";
+
+/** YYYY-MM-DD plus N days (request-link lifetime). */
+function addDays(dateIso: string, days: number): string {
+  const d = new Date(`${dateIso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
 
 /**
- * Create a creator consent invite. The creator opens the link, confirms or
- * narrows the draft, and attests - only the attestation creates the passport.
- * No DKG write happens here, so this works fully offline.
+ * Create a source-linked Creator Consent Request. The agency picks existing
+ * approved media of exactly one existing creator - no Creator record is
+ * ever minted here - plus explicit scope, permission expiry, and purpose.
+ * Scope is immutable once sent; creators may only narrow it at attest
+ * time. Optionally supersedes an older link (replacement). No DKG write
+ * happens here, so this works fully offline.
  */
-export async function createConsentInvite(input: {
-  creatorName: string;
-  handle?: string;
+export async function createConsentRequest(input: {
+  creatorId: string;
+  sourceMediaIds: string[];
   platforms: Platform[];
   countries: string[];
+  allowedTransformations: Transformation[];
   validUntil: string;
+  purpose: string;
+  replacesToken?: string;
 }): Promise<{ token: string; creatorId: string }> {
-  const name = input.creatorName.trim();
-  if (!name) throw new Error("Creator name is required.");
-  const platforms = input.platforms.filter((p): p is Platform => INVITE_PLATFORMS.includes(p));
-  if (platforms.length === 0) throw new Error("Select at least one platform.");
-  const countries = [...new Set(input.countries.map((c) => c.trim().toUpperCase()).filter((c) => c.length === 2))];
-  if (countries.length === 0) throw new Error("Add at least one 2-letter country code.");
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.validUntil) || input.validUntil <= new Date().toISOString().slice(0, 10)) {
-    throw new Error("Expiry must be a future date.");
-  }
-  const creatorId = newId("creator");
+  const db = await loadDb();
+  // Replacement clones the superseded row's creator, scope, and purpose -
+  // the caller sends only the old token; a fresh link lifetime applies.
+  const effective = input.replacesToken
+    ? (() => {
+        const old = db.consentInvites.find((i) => i.token === input.replacesToken);
+        if (!old) throw new Error("Request to replace was not found.");
+        return {
+          creatorId: old.creatorId,
+          sourceMediaIds: old.draft.sourceMediaIds ?? [],
+          platforms: old.draft.platforms,
+          countries: old.draft.countries,
+          allowedTransformations: old.draft.allowedTransformations,
+          validUntil: old.draft.validUntil,
+          purpose: old.purpose ?? ""
+        };
+      })()
+    : input;
+  const validated = validateConsentRequest(effective, db);
+  if (!validated.ok) throw new Error(validated.error);
+  const v = validated.value;
+  const creator = db.creators.find((c) => c.id === v.creatorId);
+  if (!creator) throw new Error("Creator not found - the selected media has no known creator.");
+  const today = new Date().toISOString().slice(0, 10);
   const token = newId("invite");
   await updateDb((d) => {
-    d.creators.push({ id: creatorId, name, handle: input.handle?.trim() || name.toLowerCase().replace(/[^a-z0-9]+/g, "") });
+    if (input.replacesToken) {
+      const old = d.consentInvites.find((i) => i.token === input.replacesToken);
+      if (!old) throw new Error("Request to replace was not found.");
+      if (old.creatorId !== v.creatorId) throw new Error("A replacement link must stay with the same creator.");
+      const oldLifecycle = consentLifecycle(old, today);
+      if (oldLifecycle !== "pending" && oldLifecycle !== "viewed" && oldLifecycle !== "expired" && oldLifecycle !== "cancelled") {
+        throw new Error("Only pending, viewed, expired, or cancelled requests can be replaced.");
+      }
+      if (oldLifecycle !== "cancelled") old.status = "cancelled";
+      old.replacedBy = token;
+    }
     d.consentInvites.push({
       token,
-      creatorId,
+      creatorId: v.creatorId,
       draft: {
-        creatorId,
-        platforms,
-        countries,
-        allowedTransformations: [...DEFAULT_TRANSFORMATIONS],
-        validUntil: input.validUntil,
-        sourceMediaIds: []
+        creatorId: v.creatorId,
+        platforms: v.platforms,
+        countries: v.countries,
+        allowedTransformations: v.allowedTransformations,
+        validUntil: v.validUntil,
+        sourceMediaIds: v.sourceMediaIds
       },
-      status: "pending"
+      status: "pending",
+      purpose: v.purpose,
+      linkExpiresAt: addDays(today, CONSENT_LINK_LIFETIME_DAYS),
+      createdAt: nowIso(),
+      version: 1
     });
     d.events.push({
       id: newId("evt"),
       at: nowIso(),
       kind: "consent.invited",
-      summary: `Consent invite created for ${name} (${platforms.join(", ")} · ${countries.join(", ")}).`,
-      refs: [creatorId]
+      summary: `Consent request created for ${creator.name} (${v.platforms.join(", ")} · ${v.countries.join(", ")} · ${v.sourceMediaIds.length} asset${v.sourceMediaIds.length === 1 ? "" : "s"}).`,
+      refs: [v.creatorId]
     });
   });
-  return { token, creatorId };
+  return { token, creatorId: v.creatorId };
 }
+
+/**
+ * Owner cancellation of a live request. Approved/declined rows are terminal
+ * (revocation / fresh requests are the controls); cancelled rows stay for
+ * audit and can be replaced.
+ */
+export async function cancelConsentRequest(token: string): Promise<void> {
+  const db = await loadDb();
+  const invite = db.consentInvites.find((i) => i.token === token);
+  if (!invite) throw new Error("Consent request not found.");
+  const guard = cancelGuard(consentLifecycle(invite));
+  if (!guard.ok) throw new Error(guard.error);
+  await updateDb((d) => {
+    const row = d.consentInvites.find((i) => i.token === token);
+    if (!row) throw new Error("Consent request not found.");
+    const inner = cancelGuard(consentLifecycle(row));
+    if (!inner.ok) throw new Error(inner.error);
+    row.status = "cancelled";
+    d.events.push({
+      id: newId("evt"),
+      at: nowIso(),
+      kind: "consent.cancelled",
+      summary: `Consent request for ${row.creatorId} cancelled by the agency.`,
+      refs: [row.creatorId]
+    });
+  });
+}
+
+/* ----------------- sessionless consent lifecycle writes ----------------- */
+
+/**
+ * Explicit workspace-scoped store for the public consent lifecycle writes
+ * (viewed-marking, decline). Production resolves the workspace from the
+ * token itself (loadInviteContext) - no agency session involved. Tests
+ * inject an in-memory implementation.
+ */
+export interface ConsentWorkspaceStore {
+  loadWorkspace(workspaceId: string): Promise<Database>;
+  writeWorkspace(workspaceId: string, mutator: (db: Database) => void): Promise<void>;
+}
+
+const liveConsentStore: ConsentWorkspaceStore = {
+  loadWorkspace: (workspaceId: string) => loadWorkspaceDb(workspaceId),
+  writeWorkspace: (workspaceId: string, mutator: (db: Database) => void) =>
+    updateWorkspaceDb(workspaceId, mutator).then(() => undefined)
+};
+
+const consentTransitionLocks = new Map<string, Promise<void>>();
+
+/**
+ * Serialize consent terminal transitions (attest vs decline) per token
+ * within this server instance. Unlike the idempotency single-flight - which
+ * shares one result between duplicate same-operation calls - each waiter
+ * runs its own work in turn, so the loser re-checks the lifecycle and
+ * returns its own honest outcome instead of the winner's payload.
+ */
+export async function withConsentTransitionLock<T>(token: string, work: () => Promise<T>): Promise<T> {
+  const previous = consentTransitionLocks.get(token) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  consentTransitionLocks.set(token, current);
+  await previous.catch(() => undefined);
+  try {
+    return await work();
+  } finally {
+    release();
+    if (consentTransitionLocks.get(token) === current) consentTransitionLocks.delete(token);
+  }
+}
+
+/**
+ * Idempotent viewed-marking for token reads. First open flips
+ * pending → viewed (with timestamp); every other state is untouched and
+ * nothing is ever published here. Explicitly workspace-scoped so the
+ * sessionless public token route can persist it - never loadDb/updateDb.
+ */
+export async function markConsentViewed(
+  token: string,
+  workspaceId: string,
+  store: ConsentWorkspaceStore = liveConsentStore
+): Promise<void> {
+  await store.writeWorkspace(workspaceId, (d) => {
+    const row = d.consentInvites.find((i) => i.token === token);
+    if (!row || row.status !== "pending") return;
+    row.status = "viewed";
+    row.viewedAt = nowIso();
+  });
+}
+
+/**
+ * Creator decline with optional local note. Creates no passport and never
+ * touches DKG - the note stays local audit data, out of public proof.
+ * Explicitly workspace-scoped so the sessionless public decline route can
+ * persist it - never loadDb/updateDb.
+ */
+export async function declineConsentRequest(
+  token: string,
+  note: string | undefined,
+  workspaceId: string,
+  store: ConsentWorkspaceStore = liveConsentStore
+): Promise<void> {
+  const db = await store.loadWorkspace(workspaceId);
+  const invite = db.consentInvites.find((i) => i.token === token);
+  if (!invite) throw new Error("Consent link not found");
+  const guard = declineGuard(consentLifecycle(invite));
+  if (!guard.ok) throw new Error(guard.error);
+  const clean = typeof note === "string" ? note.trim().slice(0, DECLINE_NOTE_MAX) : "";
+  await store.writeWorkspace(workspaceId, (d) => {
+    const row = d.consentInvites.find((i) => i.token === token);
+    if (!row) throw new Error("Consent link not found");
+    const inner = declineGuard(consentLifecycle(row));
+    if (!inner.ok) throw new Error(inner.error);
+    row.status = "declined";
+    row.decision = { outcome: "declined", ...(clean ? { note: clean } : {}), at: nowIso() };
+    d.events.push({
+      id: newId("evt"),
+      at: nowIso(),
+      kind: "consent.declined",
+      summary: `Consent request declined by the creator.`,
+      refs: [row.creatorId]
+    });
+  });
+}
+
+/** Guard helpers re-exported for the token routes (single source of truth). */
+export { attestGuard, declineGuard };
 
 /* ------------------------- passport revoke / amend ------------------------ */
 

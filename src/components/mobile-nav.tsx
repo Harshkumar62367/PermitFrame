@@ -21,7 +21,7 @@ interface Health {
  * account slot, theme toggle. Drawer (not a 3-link topbar).
  * Fully theme-aware, mirroring the desktop sidebar.
  */
-export function MobileNav({ health }: { health: Health | null }) {
+export function MobileNav({ health, isSlow = false, onRetry }: { health: Health | null; isSlow?: boolean; onRetry?: () => void }) {
   const { workspace } = useWorkspace();
   const [open, setOpen] = useState(false);
 
@@ -99,7 +99,7 @@ export function MobileNav({ health }: { health: Health | null }) {
             <SidebarNavigation onNavigate={() => setOpen(false)} />
 
             <div className="shrink-0 space-y-2 border-t border-border p-3 dark:border-white/[0.06]">
-              <IntegrationStatusStrip health={health} onNavigate={() => setOpen(false)} />
+              <IntegrationStatusStrip health={health} onNavigate={() => setOpen(false)} isSlow={isSlow} onRetry={onRetry} />
               <AccountMenu />
             </div>
           </div>

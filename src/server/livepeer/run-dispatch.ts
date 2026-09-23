@@ -90,6 +90,18 @@ export function shouldDispatchUnderCap(
   return { ok: true };
 }
 
+/**
+ * Dispatch eligibility (pure): only unclaimed queued work, or a generating
+ * row with no output and no provider id (a submit that never landed). Every
+ * settled status - including ready_to_share with a delivery-blocked output -
+ * is never re-dispatched. Both dispatchSlot and the claim path read this.
+ */
+export function isDispatchableJob(
+  job: Pick<ProductionJob, "status" | "outputUrl" | "livepeerJobId">
+): boolean {
+  return job.status === "queued" || (job.status === "generating" && !job.outputUrl && !job.livepeerJobId);
+}
+
 function jobIdempotencyKey(campaignId: string, job: ProductionJob): string {
   return `pf_${campaignId}_${job.stageId}_${job.id}`;
 }
@@ -236,7 +248,7 @@ export async function dispatchSlot(
   const stage = fresh?.preflight?.plan.find((s) => s.id === slot.job.stageId);
   const job = fresh?.jobs.find((j) => j.id === slot.job.id);
   if (!fresh || !stage || !job) return false;
-  if (job.status !== "queued" && !(job.status === "generating" && !job.outputUrl && !job.livepeerJobId)) {
+  if (!isDispatchableJob(job)) {
     return false; // claimed by a concurrent pump - serialized writes decide
   }
   const isVideo = job.kind === "image-to-video";
@@ -323,7 +335,7 @@ export async function dispatchSlot(
       const c = d.campaigns.find((x) => x.id === campaign.id);
       const j = c?.jobs.find((x) => x.id === job.id);
       if (!c || !j) return;
-      if (j.status !== "queued" && !(j.status === "generating" && !j.outputUrl && !j.livepeerJobId)) return;
+      if (!isDispatchableJob(j)) return;
       c.status = "generating";
       j.status = "generating";
       j.startedAt = nowIso();

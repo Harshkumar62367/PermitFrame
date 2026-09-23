@@ -1,14 +1,16 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
 import { ChevronDown, Clapperboard } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { FILM_FINISHING_UNAVAILABLE, FILM_TARGET_DURATIONS } from "@/server/livepeer/film-plan";
-import type { FilmTargetDuration } from "@/server/livepeer/film-plan";
+import { FILM_MAX_SCENES, FILM_MIN_SCENES, FILM_PLAN_UNSUPPORTED_FINISHING, FILM_TARGET_DURATIONS } from "@/server/livepeer/film-plan";
+import type { FilmFinishingKind, FilmTargetDuration } from "@/server/livepeer/film-plan";
 import type { TemplateFormat } from "@/server/livepeer/template-catalogue";
 import type { FilmPlanViewModel } from "./use-film-plan";
 import { FilmReviewModal } from "./film-review-modal";
 import { FilmRunPanel } from "./film-run-panel";
+import { FilmSceneCard } from "./film-scene-card";
 import type { Campaign } from "@/server/types";
 
 interface FilmPanelProps {
@@ -25,12 +27,67 @@ const FILM_DISABLED_FORMATS: TemplateFormat[] = ["4:5"];
 
 /**
  * Campaign film planner (first half: plan + confirm only). Total-duration
- * chips load deterministic starter scenes; every card stays editable;
- * the summary states the separate-shots reality; finishing options render
- * disabled with the muted note. "Review film plan" opens the confirmation
- * modal - confirming only persists the plan, never generates.
+ * chips load deterministic starter scenes on untouched plans and ask for
+ * explicit confirmation on custom or saved storyboards; one plan-level
+ * aspect applies to every scene. The storyboard below is compact by
+ * default - one scene editor open at a time - with safe add, remove, and
+ * reorder actions; the summary states the separate-shots reality;
+ * finishing renders as non-interactive availability labels
+ * (post-delivery vs not-available-yet). "Review film plan" opens the
+ * confirmation modal - confirming only persists the plan, never generates.
  */
 export function FilmPanel({ vm, allowed, campaignId, campaign, onChanged }: FilmPanelProps) {
+  // UI-local only: which scene editor is open. Draft state stays in the vm.
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const headingRefs = useRef(new Map<string, HTMLHeadingElement>());
+
+  // Never render a dangling editor (e.g. after a confirmed target switch
+  // replaces the scenes): fall back to fully collapsed.
+  const activeId = vm.scenes.some((s) => s.id === expandedId) ? expandedId : null;
+
+  // Move focus into the editor heading whenever a scene opens - ref +
+  // effect only, no timeouts. The Edit button already holds focus on
+  // manual toggle; this announces the new editing context.
+  useEffect(() => {
+    if (activeId) headingRefs.current.get(activeId)?.focus();
+  }, [activeId]);
+
+  function toggleScene(id: string) {
+    setExpandedId((prev) => (prev === id ? null : id));
+  }
+
+  function handleAddScene() {
+    const id = vm.addScene();
+    // addScene returns the new scene id, or null when refused (at maximum).
+    if (id) setExpandedId(id);
+  }
+
+  function handleConfirmTargetChange() {
+    // Starter ids repeat across targets (film-scene-1, ...), so an old
+    // expanded id can still exist in the replacement storyboard - collapse
+    // explicitly instead of relying on the dangling-id guard.
+    setExpandedId(null);
+    vm.confirmTargetChange();
+  }
+
+  function handleRemoveScene(id: string) {
+    const at = vm.scenes.findIndex((s) => s.id === id);
+    vm.removeScene(id);
+    // Removal below the minimum is refused with no mutation; otherwise
+    // expand the nearest remaining scene so focus never dangles.
+    if (id === expandedId && at !== -1 && vm.scenes.length > FILM_MIN_SCENES) {
+      const rest = vm.scenes.filter((s) => s.id !== id);
+      const next = rest[Math.min(at, rest.length - 1)];
+      setExpandedId(next ? next.id : null);
+    }
+  }
+
+  function registerHeading(id: string) {
+    return (el: HTMLHeadingElement | null) => {
+      if (el) headingRefs.current.set(id, el);
+      else headingRefs.current.delete(id);
+    };
+  }
   return (
     <div className="space-y-4">
       <div className="rounded-xl border border-border p-4">
@@ -57,6 +114,26 @@ export function FilmPanel({ vm, allowed, campaignId, campaign, onChanged }: Film
             </button>
           ))}
         </div>
+        {vm.pendingTarget !== null && (
+          <div role="alertdialog" aria-label="Confirm storyboard replacement" className="mt-2 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3">
+            <p className="text-[12.5px] leading-relaxed">
+              Changing total duration replaces this storyboard with the new starter scenes. Unsaved scene edits will
+              be discarded.
+            </p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <Button
+                type="button"
+                onClick={handleConfirmTargetChange}
+                className="rounded-full bg-amber-600 font-medium text-white hover:bg-amber-500"
+              >
+                Replace storyboard
+              </Button>
+              <Button type="button" variant="outline" onClick={() => vm.cancelTargetChange()} className="rounded-full">
+                Keep editing
+              </Button>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
@@ -105,8 +182,9 @@ export function FilmPanel({ vm, allowed, campaignId, campaign, onChanged }: Film
             })}
           </div>
           <p className="mt-1.5 text-[11.5px] leading-relaxed text-muted-foreground">
-            4:5 is not supported for Campaign Film (provider film aspects: 9:16, 1:1, 16:9). 4:5 stays available
-            for short image packs.
+            One aspect ratio per Campaign Film - every scene uses this aspect; there is no per-scene format. 4:5 is
+            not supported for Campaign Film (provider film aspects: 9:16, 1:1, 16:9). 4:5 stays available for short
+            image packs.
           </p>
         </div>
       </div>
@@ -128,102 +206,96 @@ export function FilmPanel({ vm, allowed, campaignId, campaign, onChanged }: Film
       </div>
 
       <div>
-        <p className="text-[12px] font-medium text-muted-foreground">
-          Planned scenes · {vm.scenes.length} scenes · {vm.totalSeconds}s of {vm.target}s planned
+        <div className="flex flex-wrap items-end justify-between gap-2">
+          <div className="min-w-0">
+            <p className="text-[12px] font-medium text-muted-foreground">
+              Storyboard · {vm.scenes.length} scenes · {vm.totalSeconds}s of {vm.target}s planned
+              {vm.durationState.status === "exact"
+                ? " · matches the target exactly"
+                : vm.durationState.status === "under"
+                  ? ` · under by ${vm.durationState.differenceSeconds} ${vm.durationState.differenceSeconds === 1 ? "second" : "seconds"}`
+                  : ` · over by ${vm.durationState.differenceSeconds} ${vm.durationState.differenceSeconds === 1 ? "second" : "seconds"} - reduce scene durations to match`}
+            </p>
+            <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
+              Each scene renders later as a separate short shot - never one long render. Edit one scene at a time.
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={handleAddScene}
+            disabled={vm.scenes.length >= FILM_MAX_SCENES}
+            title={vm.scenes.length >= FILM_MAX_SCENES ? `Campaign films hold at most ${FILM_MAX_SCENES} planned scenes.` : undefined}
+            className="shrink-0 rounded-full"
+          >
+            Add scene
+          </Button>
+        </div>
+        <p className="mt-1 text-[11.5px] text-muted-foreground">
+          New scenes start at 3 seconds with empty fields - fill every beat before review. Removing never
+          redistributes time.
         </p>
-        <ol className="mt-2 space-y-2">
-          {vm.scenes.map((scene) => (
-            <li key={scene.id} className="rounded-xl border border-border p-3">
-              <div className="flex items-baseline justify-between gap-2">
-                <p className="min-w-0 truncate text-[13px] font-semibold">
-                  <span className="mr-1.5 font-mono text-[11px] text-muted-foreground">Scene {scene.order}</span>
-                  {scene.title || <span className="font-normal text-muted-foreground">Untitled beat</span>}
-                </p>
-                <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{scene.durationSeconds}s</span>
-              </div>
-              <div className="mt-2 grid gap-2 sm:grid-cols-[minmax(0,1fr)_96px]">
-                <label className="block">
-                  <span className="text-[11px] font-medium text-muted-foreground">Story beat</span>
-                  <input
-                    type="text"
-                    value={scene.title}
-                    maxLength={120}
-                    aria-label={`Scene ${scene.order} story beat`}
-                    onChange={(e) => vm.updateScene(scene.id, { title: e.target.value })}
-                    className="mt-0.5 w-full rounded-lg border border-border bg-card px-2.5 py-1.5 text-[12.5px] focus:border-emerald-500/50 focus:outline-none"
-                  />
-                </label>
-                <label className="block">
-                  <span className="text-[11px] font-medium text-muted-foreground">Seconds (3–15)</span>
-                  <input
-                    type="number"
-                    min={3}
-                    max={15}
-                    step={1}
-                    value={scene.durationSeconds}
-                    aria-label={`Scene ${scene.order} duration in seconds`}
-                    onChange={(e) => vm.updateScene(scene.id, { durationSeconds: Number(e.target.value) })}
-                    className="mt-0.5 w-full rounded-lg border border-border bg-card px-2.5 py-1.5 font-mono text-[12.5px] focus:border-emerald-500/50 focus:outline-none"
-                  />
-                </label>
-              </div>
-              <label className="mt-2 block">
-                <span className="text-[11px] font-medium text-muted-foreground">Visual direction</span>
-                <input
-                  type="text"
-                  value={scene.visualDirection}
-                  aria-label={`Scene ${scene.order} visual direction`}
-                  onChange={(e) => vm.updateScene(scene.id, { visualDirection: e.target.value })}
-                  className="mt-0.5 w-full rounded-lg border border-border bg-card px-2.5 py-1.5 text-[12.5px] focus:border-emerald-500/50 focus:outline-none"
-                />
-              </label>
-              <div className="mt-2 grid gap-2 sm:grid-cols-[minmax(0,1fr)_110px]">
-                <label className="block">
-                  <span className="text-[11px] font-medium text-muted-foreground">Source / reference intent</span>
-                  <input
-                    type="text"
-                    value={scene.sourceIntent}
-                    aria-label={`Scene ${scene.order} source intent`}
-                    onChange={(e) => vm.updateScene(scene.id, { sourceIntent: e.target.value })}
-                    className="mt-0.5 w-full rounded-lg border border-border bg-card px-2.5 py-1.5 text-[12.5px] focus:border-emerald-500/50 focus:outline-none"
-                  />
-                </label>
-                <label className="block">
-                  <span className="text-[11px] font-medium text-muted-foreground">Format</span>
-                  <select
-                    value={scene.format}
-                    aria-label={`Scene ${scene.order} format`}
-                    onChange={(e) => vm.updateScene(scene.id, { format: e.target.value as TemplateFormat })}
-                    className="mt-0.5 w-full rounded-lg border border-border bg-card px-2 py-1.5 font-mono text-[12.5px] focus:border-emerald-500/50 focus:outline-none"
-                  >
-                    {FILM_FORMATS.map((f) => (
-                      <option key={f} value={f} disabled={FILM_DISABLED_FORMATS.includes(f)}>
-                        {f}{FILM_DISABLED_FORMATS.includes(f) ? " (unsupported)" : ""}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-            </li>
+        {vm.durationState.status === "under" && (
+          <div className="mt-1.5">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => vm.distributeRemaining()}
+              disabled={!vm.canDistribute}
+              title={vm.distributeBlockedReason ?? undefined}
+              className="rounded-full"
+            >
+              Distribute remaining {vm.durationState.differenceSeconds} {vm.durationState.differenceSeconds === 1 ? "second" : "seconds"}
+            </Button>
+            {vm.distributeBlockedReason && (
+              <p className="mt-1 text-[11.5px] text-muted-foreground">{vm.distributeBlockedReason}</p>
+            )}
+          </div>
+        )}
+        <ol className="mt-2 space-y-2" aria-label="Campaign film storyboard">
+          {vm.scenes.map((scene, index) => (
+            <FilmSceneCard
+              key={scene.id}
+              scene={scene}
+              index={index}
+              isLast={index === vm.scenes.length - 1}
+              expanded={scene.id === activeId}
+              panelId={`film-scene-editor-${campaignId}-${scene.id}`}
+              headingId={`film-scene-editor-heading-${campaignId}-${scene.id}`}
+              registerHeading={registerHeading(scene.id)}
+              onToggle={toggleScene}
+              onPatch={vm.updateScene}
+              onMove={vm.moveScene}
+              onRemove={handleRemoveScene}
+            />
           ))}
         </ol>
+        {vm.sceneOpError && (
+          <p role="alert" className="mt-1.5 break-words text-[12.5px] text-rose-600 dark:text-rose-300">
+            {vm.sceneOpError}
+          </p>
+        )}
       </div>
 
       <div className="rounded-lg bg-muted/60 p-3 ring-1 ring-border">
         <p className="text-[11.5px] font-medium">Finishing</p>
-        <div className="mt-1.5 flex flex-wrap gap-2" aria-label="Audio finishing (unavailable)">
-          {FILM_FINISHING_UNAVAILABLE.map((kind) => (
+        <div className="mt-1.5 flex flex-wrap gap-2" aria-label="Finishing availability (plan only)">
+          {FILM_PLAN_UNSUPPORTED_FINISHING.map((kind: FilmFinishingKind) => (
             <span
               key={kind}
               aria-disabled="true"
-              className="cursor-not-allowed rounded-full px-3 py-1.5 text-[12px] capitalize text-muted-foreground ring-1 ring-border"
+              className="cursor-not-allowed rounded-full px-3 py-1.5 text-[12px] text-muted-foreground ring-1 ring-border"
             >
-              {kind}
+              {kind === "narration"
+                ? "Narration — after delivery"
+                : kind === "subtitles"
+                  ? "Burned captions — after delivery"
+                  : "Music — not available yet"}
             </span>
           ))}
         </div>
         <p className="mt-1.5 text-[11.5px] leading-relaxed text-muted-foreground">
-          Audio finishing will be added after the film workflow is connected.
+          Narration and burned captions are available only after a reel is delivered. Music and soundtrack mixing are not available yet.
         </p>
       </div>
 
@@ -237,10 +309,17 @@ export function FilmPanel({ vm, allowed, campaignId, campaign, onChanged }: Film
             Saved plan: {vm.persisted.title} · {vm.persisted.targetDurationSeconds}s · {vm.persisted.scenes.length} scenes.
           </p>
         )}
-        {vm.filmError && (
-          <p role="alert" className="mt-1.5 break-words text-[12.5px] text-rose-600 dark:text-rose-300">
-            {vm.filmError}
-          </p>
+        {!vm.canReview && vm.reviewBlockers.length > 0 && (
+          <div role="alert" className="mt-1.5 rounded-lg bg-rose-500/10 p-2.5 ring-1 ring-rose-500/30">
+            <p className="text-[12px] font-medium text-rose-700 dark:text-rose-200">Before review:</p>
+            <ul className="mt-0.5 list-disc space-y-0.5 pl-5 text-[12px] leading-snug text-rose-700 dark:text-rose-200">
+              {vm.reviewBlockers.map((blocker) => (
+                <li key={blocker} className="break-words">
+                  {blocker}
+                </li>
+              ))}
+            </ul>
+          </div>
         )}
         {vm.savedNotice && !vm.filmError && (
           <p role="status" className="mt-1.5 text-[12.5px] text-emerald-800 dark:text-emerald-200">
@@ -293,8 +372,9 @@ function FilmDetails() {
         </span>
       </summary>
       <p className="mt-1.5 leading-relaxed text-muted-foreground">
-        Pick a total to load its starter scenes, edit each beat, then review and save. Saved plans wait on this
-        page - each scene renders later as a separate short shot before final assembly.
+        Pick a total for its starter scenes (a custom storyboard asks before replacing), edit each beat, then review
+        and save. One plan-level aspect applies to every scene. Saved plans wait on this page - each scene renders
+        later as a separate short shot before final assembly.
       </p>
     </details>
   );

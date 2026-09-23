@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { getDb } from "./db/client";
 import { workspaceState } from "./db/schema";
 import type { Campaign } from "./types";
+import { deliveryBlockReason } from "./types";
 
 /**
  * Public client-review reads and writes. Session-free by design: share links
@@ -68,7 +69,26 @@ function toPublicView(campaign: Campaign): PublicShareView {
       text: c.text,
       disclosure: c.disclosure
     })),
-    outputs: campaign.receipts.map((r) => ({
+    outputs: publicOutputsForShare(campaign, verificationRef),
+    verificationRef
+  };
+}
+
+/**
+ * Client-delivery outputs (pure): every receipt except private ones and
+ * delivery-blocked ones. Private derivatives (e.g. burn-caption outputs)
+ * never reach client delivery; ratio-mismatched outputs (stored reason or
+ * legacy `aspectVerdict: "mismatch"`) are excluded on read even when their
+ * historical job state says ready_to_share - so newly generated,
+ * already-approved, and legacy campaigns all behave the same with no
+ * migration. Shared and legacy durable outputs keep their current behavior.
+ * The share API and page both read through here; excluded URLs are never
+ * selected into the view, so they cannot leak.
+ */
+export function publicOutputsForShare(campaign: Campaign, verificationRef: string | null): PublicShareOutput[] {
+  return campaign.receipts
+    .filter((r) => r.visibility !== "private" && deliveryBlockReason(r) === null)
+    .map((r) => ({
       id: r.id,
       label: r.label,
       mediaType: r.mediaType,
@@ -80,9 +100,7 @@ function toPublicView(campaign: Campaign): PublicShareView {
       ...(r.aspectVerdict ? { aspectVerdict: r.aspectVerdict } : {}),
       claimsUsed: r.claimsUsed,
       verifyUrl: verificationRef ? `/verify/${verificationRef}#output-${r.id}` : null
-    })),
-    verificationRef
-  };
+    }));
 }
 
 /**

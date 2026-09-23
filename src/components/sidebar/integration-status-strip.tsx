@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { HEALTH_SLOW_COPY } from "@/lib/use-integration-health";
 import { IntegrationStatusPopover } from "./integration-status-popover";
 import { cn } from "@/lib/utils";
 
@@ -29,11 +30,15 @@ function dotClass(state: DotState): string {
 export function IntegrationStatusStrip({
   health,
   collapsed = false,
-  onNavigate
+  onNavigate,
+  isSlow = false,
+  onRetry
 }: {
   health: StripHealth | null;
   collapsed?: boolean;
   onNavigate?: () => void;
+  isSlow?: boolean;
+  onRetry?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -56,7 +61,13 @@ export function IntegrationStatusStrip({
   }
   const dkgShort = !health ? "checking" : shortFor(health.dkg.state, health.dkg.healthy);
   const livepeerShort = !health ? "checking" : shortFor(health.livepeer.state, health.livepeer.reachable === true);
-  const label = `Services: proof ledger ${dkgShort}; asset production ${livepeerShort}. Open service status.`;
+  // Slow is neutral: dots keep pulsing, nothing turns red, and the label
+  // carries the slow copy instead of the open-ended "checking" wording.
+  const showSlow =
+    isSlow && (!health || health.dkg.state === "checking" || health.livepeer.state === "checking");
+  const label = showSlow
+    ? `Services: ${HEALTH_SLOW_COPY}`
+    : `Services: proof ledger ${dkgShort}; asset production ${livepeerShort}. Open service status.`;
 
   const popover = (
     <IntegrationStatusPopover
@@ -66,8 +77,25 @@ export function IntegrationStatusStrip({
       triggerRef={triggerRef}
       health={health}
       rail={collapsed}
+      isSlow={isSlow}
+      onRetry={onRetry}
     />
   );
+
+  const slowNotice = showSlow ? (
+    <span className="flex w-full flex-col gap-1.5 rounded-xl border border-border bg-muted/40 px-3.5 py-2 text-[11.5px] dark:border-white/[0.07] dark:bg-white/[0.03]">
+      <span className="leading-relaxed text-muted-foreground dark:text-white/65">{HEALTH_SLOW_COPY}</span>
+      {onRetry && (
+        <button
+          type="button"
+          onClick={onRetry}
+          className="self-start rounded-full px-2 py-0.5 font-medium text-emerald-700 underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600 dark:text-emerald-300"
+        >
+          Retry
+        </button>
+      )}
+    </span>
+  ) : null;
 
   if (collapsed) {
     return (
@@ -113,6 +141,7 @@ export function IntegrationStatusStrip({
           </span>
         </span>
       </button>
+      {slowNotice}
       {popover}
     </>
   );

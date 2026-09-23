@@ -103,8 +103,15 @@ export interface SnapshotCreator {
 export interface SnapshotInvite {
   token: string;
   creatorId: string;
-  status: "pending" | "completed";
+  status: import("@/server/types").ConsentInviteStatus;
   draft: ConsentDraft;
+  passportId?: string;
+  purpose?: string;
+  linkExpiresAt?: string;
+  createdAt?: string;
+  viewedAt?: string;
+  decision?: import("@/server/types").ConsentInviteDecision;
+  replacedBy?: string;
 }
 
 export interface OperationalMetrics {

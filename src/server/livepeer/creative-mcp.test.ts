@@ -442,8 +442,7 @@ describe("film cancellation note safety", () => {
     assertNoteClean(result.note, "Provider cancel request failed before confirmation.");
   });
 
-  it("older cancel_job path uses the same stable notes", async () => {
-    stubFetch((tool) => {
+  it("older cancel_job path uses the same stable notes", async () => {  stubFetch((tool) => {
       assert.equal(tool, "cancel_job");
       return okTool(
         { status: "running", job_id: "mjob_42" },
@@ -468,5 +467,184 @@ describe("film cancellation note safety", () => {
     const failed = await new LivepeerMcpClient(livepeerConfig()).cancelProviderJob("mjob_42");
     assert.equal(failed.cancelled, false);
     assertNoteClean(failed.note, "Provider cancel request failed before confirmation.");
+  });
+});
+
+describe("critique note safety", () => {
+  afterEach(() => restoreFetch());
+
+  /**
+   * critique_shot notes are fixed product-owned messages derived from safe
+   * values only (score, threshold, parseability). Hostile provider text in
+   * pass_fail / verdict / free-text content - SSH paths, bearer/JWT text,
+   * signed URLs, stack traces, provider error strings - never reaches the
+   * returned note, and therefore never reaches qualityNote, Review, Queue,
+   * the plan, API responses, or stored job metadata. Pass semantics stay
+   * exactly as before.
+   */
+  const HOSTILE_BITS = [
+    "/home/deployer/.ssh/id_ed25519_dkg_ec2",
+    "https://vision.example/signed/critique?token=tok_abc123&expires=99",
+    "Bearer eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature",
+    "at critiqueShot (node:internal/vision:99:5)",
+    "PROVIDER_ERROR: vision backend quota exhausted (code 429)"
+  ];
+
+  const CRITIQUE_INPUT = {
+    generatedUrl: "https://cdn.example/k.png",
+    referenceUrl: "https://s.example/p.png"
+  };
+
+  function assertNoteClean(note: string, expected: string): void {
+    assert.equal(note, expected);
+    for (const bit of HOSTILE_BITS) {
+      assert.ok(!note.includes(bit), `critique note must not contain ${JSON.stringify(bit.slice(0, 40))}`);
+    }
+  }
+
+  it("failed score uses the fixed message despite hostile verdict text", async () => {
+    stubFetch((tool) => {
+      assert.equal(tool, "critique_shot");
+      return okTool(
+        {
+          weighted_total: 0.42,
+          pass_fail: `FAIL ssh -i ${HOSTILE_BITS[0]} ${HOSTILE_BITS[4]}`,
+          verdict: `fail ${HOSTILE_BITS[1]} ${HOSTILE_BITS[2]}`
+        },
+        `verdict text ${HOSTILE_BITS[3]} ${HOSTILE_BITS[4]}`
+      );
+    });
+    const critique = await new LivepeerMcpClient(livepeerConfig()).critiqueShot(CRITIQUE_INPUT);
+    assert.equal(critique.score, 0.42);
+    assert.equal(critique.passed, false);
+    assertNoteClean(critique.note, "Automated visual check scored 0.42 below the 0.70 review threshold.");
+  });
+
+  it("passed score uses the fixed message and keeps pass semantics", async () => {
+    stubFetch((tool) => {
+      assert.equal(tool, "critique_shot");
+      return okTool({ weighted_total: 0.86, pass_fail: "pass" });
+    });
+    const critique = await new LivepeerMcpClient(livepeerConfig()).critiqueShot(CRITIQUE_INPUT);
+    assert.equal(critique.score, 0.86);
+    assert.equal(critique.passed, true);
+    assertNoteClean(critique.note, "Automated visual check scored 0.86 against the 0.70 review threshold.");
+  });
+
+  it("missing score uses the fixed no-score message and keeps advisory-pass semantics", async () => {
+    stubFetch((tool) => {
+      assert.equal(tool, "critique_shot");
+      return okTool(
+        { pass_fail: `error ${HOSTILE_BITS[4]} ${HOSTILE_BITS[0]}` },
+        `no score ${HOSTILE_BITS[1]} ${HOSTILE_BITS[2]} ${HOSTILE_BITS[3]}`
+      );
+    });
+    const critique = await new LivepeerMcpClient(livepeerConfig()).critiqueShot(CRITIQUE_INPUT);
+    assert.equal(critique.score, null);
+    assert.equal(critique.passed, true);
+    assertNoteClean(critique.note, "Automated visual check did not return a usable score.");
+  });
+
+  it("custom threshold is reflected in the fixed message", async () => {
+    stubFetch((tool) => {
+      assert.equal(tool, "critique_shot");
+      return okTool({ total: 0.75, verdict: `borderline ${HOSTILE_BITS[1]}` });
+    });
+    const critique = await new LivepeerMcpClient(livepeerConfig()).critiqueShot({ ...CRITIQUE_INPUT, threshold: 0.8 });
+    assert.equal(critique.score, 0.75);
+    assert.equal(critique.passed, false);
+    assertNoteClean(critique.note, "Automated visual check scored 0.75 below the 0.80 review threshold.");
+  });
+});
+
+describe("transcribe call shape", () => {
+  afterEach(() => restoreFetch());
+
+  it("sends only source_url, burn:true, and language", async () => {
+    stubFetch((tool, args) => {
+      assert.equal(tool, "transcribe");
+      assert.deepEqual(args, {
+        source_url: "https://cdn.example/film-reel.mp4",
+        burn: true,
+        language: "en"
+      });
+      return okTool(
+        { captioned_url: "https://cdn.example/film-reel-captions.mp4", transcript: "hello", status: "completed" },
+        "done"
+      );
+    });
+    const parsed = await new LivepeerMcpClient(livepeerConfig()).transcribeForCaptions({
+      sourceUrl: "https://cdn.example/film-reel.mp4",
+      language: "en"
+    });
+    assert.equal(parsed.outputUrl, "https://cdn.example/film-reel-captions.mp4");
+    assert.equal(parsed.transcriptText, "hello");
+  });
+
+  it("provider rejections throw for honest failure handling", async () => {
+    stubFetch((tool) => {
+      assert.equal(tool, "transcribe");
+      return errTool("transcribe refused: unsupported source host");
+    });
+    await assert.rejects(
+      () =>
+        new LivepeerMcpClient(livepeerConfig()).transcribeForCaptions({
+          sourceUrl: "https://cdn.example/film-reel.mp4",
+          language: "en"
+        }),
+      /unsupported source host/
+    );
+  });
+});
+
+describe("narration call shape", () => {
+  afterEach(() => restoreFetch());
+
+  it("sends exactly the contract TTS fields - no voice, no extras", async () => {
+    stubFetch((tool, args) => {
+      assert.equal(tool, "create_media");
+      assert.deepEqual(args, {
+        action: "tts",
+        prompt: "Say this",
+        async: true,
+        session_id: "s1",
+        idempotency_key: "k1",
+        max_cost_usd: 5
+      });
+      return okTool({ job_id: "mjob_tts1", status: "processing" });
+    });
+    const parsed = await new LivepeerMcpClient(livepeerConfig()).submitNarrationTts({
+      prompt: "Say this",
+      sessionId: "s1",
+      idempotencyKey: "k1",
+      maxCostUsd: 5,
+      excludeUrls: ["https://cdn.example/reel.mp4"]
+    });
+    assert.equal(parsed.providerJobId, "mjob_tts1");
+  });
+
+  it("sends exactly the contract mux fields with audio_fill none", async () => {
+    stubFetch((tool, args) => {
+      assert.equal(tool, "create_media");
+      assert.deepEqual(args, {
+        action: "mux_audio",
+        source_url: "https://cdn.example/reel.mp4",
+        audio_url: "https://cdn.example/voice.mp3",
+        audio_fill: "none",
+        async: true,
+        session_id: "s2",
+        idempotency_key: "k2",
+        max_cost_usd: 3.9
+      });
+      return okTool({ job_id: "mjob_mux1", status: "processing" });
+    });
+    const parsed = await new LivepeerMcpClient(livepeerConfig()).submitMuxAudio({
+      sourceUrl: "https://cdn.example/reel.mp4",
+      audioUrl: "https://cdn.example/voice.mp3",
+      sessionId: "s2",
+      idempotencyKey: "k2",
+      maxCostUsd: 3.9
+    });
+    assert.equal(parsed.providerJobId, "mjob_mux1");
   });
 });

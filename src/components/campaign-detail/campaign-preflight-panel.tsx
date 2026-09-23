@@ -17,7 +17,7 @@ export function CampaignPreflightPanel({ checking, disabled, status, onRun }: Ca
     <section className="rounded-2xl border border-amber-200 bg-amber-50/70 p-6 dark:border-amber-900 dark:bg-amber-950/30">
       <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-amber-800 dark:text-amber-300">Ready for permission check</p>
       <h2 className="mt-2 text-[16px] font-semibold">Run the permission check before production</h2>
-      <p className="mt-2 max-w-2xl text-[13px] leading-relaxed text-muted-foreground">This workspace loaded from Neon. Running this check now verifies creator rights and brand rules, then stores the decision for this campaign.</p>
+      <p className="mt-2 max-w-2xl text-[13px] leading-relaxed text-muted-foreground">Running this check verifies creator rights and brand rules, then records the decision for this campaign.</p>
       <Button
         size="sm"
         onClick={onRun}

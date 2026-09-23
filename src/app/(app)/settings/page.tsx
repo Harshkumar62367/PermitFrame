@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/page-header";
 import { SectionCard } from "@/components/ui/section-card";
 import { apiGet } from "@/lib/api";
-import type { DkgHealth } from "@/server/dkg/adapter";
+import { HEALTH_SLOW_COPY, useIntegrationHealth } from "@/lib/use-integration-health";
 
 interface CapabilitiesResponse {
   ok: boolean;
@@ -27,15 +27,12 @@ type CapsState =
   | { status: "failed"; at: string; error: string };
 
 export default function SettingsPage() {
-  const [health, setHealth] = useState<{ dkg: DkgHealth & { state?: string }; livepeer: { endpoint: string; keyless: boolean; reachable?: boolean; detail?: string; state?: string } } | null>(null);
+  const { health, isSlow, retry } = useIntegrationHealth();
   const [caps, setCaps] = useState<CapsState>({ status: "idle" });
   const [storage, setStorage] = useState<{ configured: boolean; reachable: boolean; detail: string } | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
-    apiGet<{ dkg: DkgHealth & { state?: string }; livepeer: { endpoint: string; keyless: boolean; reachable?: boolean; detail?: string; state?: string } }>("/api/health", controller.signal)
-      .then(setHealth)
-      .catch(() => undefined);
     apiGet<{ configured: boolean; reachable: boolean; detail: string }>("/api/storage/health", controller.signal)
       .then(setStorage)
       .catch(() => undefined);
@@ -69,6 +66,11 @@ export default function SettingsPage() {
 
   const capCount = caps.status === "ready" ? Object.keys(caps.capabilities).length : null;
   const priceCount = caps.status === "ready" ? Object.keys(caps.pricing).length : null;
+  const dkgPending = !health || health.dkg.state === "checking";
+  const livepeerPending = !health || health.livepeer.state === "checking";
+  // Slow is neutral: badges stay muted, never red, and copy is the exact
+  // slow-check wording. Settled Healthy/Degraded/Unavailable always wins.
+  const showSlow = isSlow && (dkgPending || livepeerPending);
 
   return (
     <div className="pf-page space-y-6">
@@ -83,16 +85,26 @@ export default function SettingsPage() {
 
       <div>
         <div className="grid max-w-3xl gap-4 md:grid-cols-2">
+          {showSlow && (
+            <div role="status" className="rounded-xl bg-muted/50 p-3 ring-1 ring-border md:col-span-2">
+              <p className="text-[12.5px] leading-relaxed text-muted-foreground">{HEALTH_SLOW_COPY}</p>
+              <Button variant="outline" size="sm" onClick={retry} className="mt-2 h-7 rounded-full px-2.5 text-[11.5px]">
+                Retry
+              </Button>
+            </div>
+          )}
           <SectionCard title="Proof ledger">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="font-mono text-[11px] text-muted-foreground">mode</span>
               <Badge variant="outline" className={health?.dkg.mode === "edge-node" ? "rounded-full bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-950/40 dark:text-emerald-300 dark:ring-emerald-800" : "rounded-full bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-800"}>
-                {health ? (health.dkg.mode === "edge-node" ? "shared ledger" : "workspace only") : "checking"}
+                {health ? (health.dkg.mode === "edge-node" ? "shared ledger" : "workspace only") : showSlow ? "Slow" : "checking"}
               </Badge>
             </div>
             <p className="mt-2.5 break-words text-[12.5px] leading-relaxed text-muted-foreground">
               {!health || health.dkg.state === "checking"
-                ? "Checking proof-ledger diagnostics in the background. Workspace data does not depend on this check."
+                ? showSlow
+                  ? HEALTH_SLOW_COPY
+                  : "Checking proof-ledger diagnostics in the background. Workspace data does not depend on this check."
                 : health.dkg.mode === "edge-node" && health.dkg.healthy
                   ? "Shared proof ledger connected - approvals can publish public verification."
                   : health.dkg.mode === "edge-node"
@@ -104,12 +116,16 @@ export default function SettingsPage() {
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="font-mono text-[11px] text-muted-foreground">auth</span>
               <Badge variant="outline" className="rounded-full bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-950/40 dark:text-emerald-300 dark:ring-emerald-800">
-                {health?.livepeer.keyless ? "hosted access" : health ? "api key" : "checking"}
+                {health?.livepeer.keyless ? "hosted access" : health ? "api key" : showSlow ? "Slow" : "checking"}
               </Badge>
             </div>
             <p className="mt-2.5 break-all font-mono text-[11.5px] leading-relaxed text-muted-foreground">{health?.livepeer.endpoint ?? "Loading integration details…"}</p>
-            {health?.livepeer.detail && (
+            {health?.livepeer.detail ? (
               <p className="mt-2 break-words text-[12.5px] leading-relaxed text-muted-foreground">{health.livepeer.detail}</p>
+            ) : (
+              livepeerPending && showSlow && (
+                <p role="status" className="mt-2 break-words text-[12.5px] leading-relaxed text-muted-foreground">{HEALTH_SLOW_COPY}</p>
+              )
             )}
             <div className="mt-2.5 rounded-xl bg-muted/50 p-3 ring-1 ring-border">
               <p className="font-mono text-[9.5px] uppercase tracking-[0.14em] text-muted-foreground">Campaign roles · live discovery</p>

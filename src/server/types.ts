@@ -185,6 +185,36 @@ export function hasSharableReceipt(receipt: Pick<DerivativeReceipt, "storageStat
   return receipt.storageStatus === "stored";
 }
 
+/**
+ * Structured delivery block: generation succeeded, but the output must not
+ * reach client delivery. Stored on the receipt at finalization; legacy rows
+ * that only carry `aspectVerdict: "mismatch"` derive the same reason on
+ * read (no migration). Absent verdict/dimensions never invent a block.
+ */
+export type DeliveryBlockReason = "aspect_ratio_mismatch";
+
+export function deliveryBlockReason(
+  receipt: Pick<DerivativeReceipt, "deliveryBlocked" | "aspectVerdict">
+): DeliveryBlockReason | null {
+  if (receipt.deliveryBlocked) return receipt.deliveryBlocked;
+  if (receipt.aspectVerdict === "mismatch") return "aspect_ratio_mismatch";
+  return null;
+}
+
+/** Delivery-ready: durably stored AND not blocked. Pure read-time gate. */
+export function isDeliverableReceipt(
+  receipt: Pick<DerivativeReceipt, "storageStatus" | "deliveryBlocked" | "aspectVerdict">
+): boolean {
+  return hasSharableReceipt(receipt) && deliveryBlockReason(receipt) === null;
+}
+
+/** Job ids whose stored receipt blocks delivery (queue/plan derivation). */
+export function deliveryBlockedJobIds(
+  receipts: Pick<DerivativeReceipt, "jobId" | "deliveryBlocked" | "aspectVerdict">[]
+): Set<string> {
+  return new Set(receipts.filter((r) => deliveryBlockReason(r) !== null).map((r) => r.jobId));
+}
+
 export interface PreflightBlocker {
   code:
     | "PLATFORM_NOT_PERMITTED"
@@ -410,6 +440,13 @@ export interface DerivativeReceipt {
    */
   aspectVerdict?: "match" | "mismatch" | "unknown";
   /**
+   * Structured delivery block persisted at receipt finalization (see
+   * deliveryBlockReason). Present only when the output must not reach
+   * client delivery despite generation succeeding. Never backfilled onto
+   * legacy rows — those derive the reason from `aspectVerdict` on read.
+   */
+  deliveryBlocked?: DeliveryBlockReason;
+  /**
    * Fingerprint of the provider URL string (correlation/debugging only).
    * NOT a content hash: no bytes are hashed, so it proves nothing about the
    * media itself. Never publish or display as content evidence. Durable
@@ -444,6 +481,14 @@ export interface DerivativeReceipt {
     /** Dependency stage whose output fed this run (stage-output inputs). */
     sourceStageId?: string;
   };
+  /**
+   * Caption finishing linkage: the film run this captioned derivative was
+   * burned from, the original reel URL (never overwritten), and the
+   * explicit caption language. Present only on burn-caption receipts.
+   */
+  derivedFromFilmRunId?: string;
+  sourceReelUrl?: string;
+  captionLanguage?: string;
   /**
    * Preservation provenance copied from the rendering job (structured -
    * cards show what actually ran, not what was planned). Missing on legacy
@@ -645,13 +690,55 @@ export interface IdempotencyRecord {
   updatedAt: string;
 }
 
+/**
+ * Creator consent request lifecycle. New rows move pending → viewed →
+ * approved/declined; owners may cancel pending/viewed rows. "completed" is
+ * the legacy stored value and always reads as approved. Link expiry is
+ * derived on read from linkExpiresAt (never a stored transition).
+ */
+export type ConsentInviteStatus =
+  | "draft"
+  | "pending"
+  | "viewed"
+  | "approved"
+  | "declined"
+  | "expired"
+  | "cancelled"
+  | "completed";
+
+export interface ConsentInviteDecision {
+  outcome: "approved" | "declined";
+  /** Creator's optional decline note (local audit only - never published). */
+  note?: string;
+  at: string;
+}
+
+export interface ConsentInvite {
+  token: string;
+  creatorId: string;
+  draft: ConsentDraft;
+  status: ConsentInviteStatus;
+  /** Exact passport minted by this link's attestation (absent until approved). */
+  passportId?: string;
+  /** Agency's campaign/use purpose, capped server-side. Immutable once sent. */
+  purpose: string;
+  /** Request-link expiry (YYYY-MM-DD) - separate from permission expiry. */
+  linkExpiresAt: string;
+  createdAt: string;
+  viewedAt?: string;
+  decision?: ConsentInviteDecision;
+  /** Replacement link token when this row was superseded. */
+  replacedBy?: string;
+  version: 1;
+}
+
 export interface Database {
   creators: Creator[];
   passports: PermissionPassport[];
   sourceMedia: SourceMedia[];
   productFacts: ProductFacts[];
   campaigns: Campaign[];
-  consentInvites: { token: string; creatorId: string; draft: ConsentDraft; status: "pending" | "completed" }[];
+  consentInvites: ConsentInvite[];
   events: AuditEvent[];
   /** Idempotency slots for campaign creation. Missing on legacy rows - treated as empty. */
   idempotencyKeys: Record<string, IdempotencyRecord>;

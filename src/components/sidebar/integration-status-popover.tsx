@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { ArrowUpRight } from "lucide-react";
+import { HEALTH_SLOW_COPY } from "@/lib/use-integration-health";
 import { SidebarPopover } from "./sidebar-popover";
 import { useWorkspaceSnapshot } from "@/lib/use-workspace-snapshot";
 import type { StripHealth } from "./integration-status-strip";
@@ -35,7 +36,9 @@ export function IntegrationStatusPopover({
   onNavigate,
   triggerRef,
   health,
-  rail = false
+  rail = false,
+  isSlow = false,
+  onRetry
 }: {
   open: boolean;
   onClose: () => void;
@@ -43,6 +46,8 @@ export function IntegrationStatusPopover({
   triggerRef: React.RefObject<HTMLButtonElement | null>;
   health: StripHealth | null;
   rail?: boolean;
+  isSlow?: boolean;
+  onRetry?: () => void;
 }) {
   const snapshot = useWorkspaceSnapshot();
   const activity = snapshot.data?.activity;
@@ -55,15 +60,24 @@ export function IntegrationStatusPopover({
   // The `=== null` checks keep TypeScript narrowing intact below.
   const dkgPending = dkg === null || dkg.state === "checking";
   const livepeerPending = livepeer === null || livepeer.state === "checking";
-  const dkgState = dkgPending ? "Checking…" : dkg.healthy ? "Healthy" : "Degraded";
-  const livepeerState = livepeerPending ? "Checking…" : livepeer.reachable ? "Healthy" : "Degraded";
-  const dkgCopy = dkgPending
-    ? "Checking service health - permission-check evidence will cite the exact proof records it used."
-    : dkg.mode === "edge-node" && dkg.healthy
-      ? "Shared proof ledger connected - approvals can publish public verification."
-      : dkg.mode === "edge-node"
-        ? "Shared proof ledger unreachable - campaigns keep working with workspace records."
-        : "Workspace proof records - public verification needs the shared ledger (Settings › Advanced).";
+  // Slow stays neutral: a "Slow" badge with muted checking styling, never a
+  // red Degraded, and the exact slow copy instead of the checking copy.
+  const dkgSlow = isSlow && dkgPending;
+  const livepeerSlow = isSlow && livepeerPending;
+  const dkgState = dkgSlow ? "Slow" : dkgPending ? "Checking…" : dkg.healthy ? "Healthy" : "Degraded";
+  const livepeerState = livepeerSlow ? "Slow" : livepeerPending ? "Checking…" : livepeer.reachable ? "Healthy" : "Degraded";
+  const dkgCopy = dkgSlow
+    ? HEALTH_SLOW_COPY
+    : dkgPending
+      ? "Checking service health - permission-check evidence will cite the exact proof records it used."
+      : dkg.mode === "edge-node" && dkg.healthy
+        ? "Shared proof ledger connected - approvals can publish public verification."
+        : dkg.mode === "edge-node"
+          ? "Shared proof ledger unreachable - campaigns keep working with workspace records."
+          : "Workspace proof records - public verification needs the shared ledger (Settings › Advanced).";
+  const livepeerCopy = livepeerSlow
+    ? HEALTH_SLOW_COPY
+    : (livepeer?.detail ?? "Checking service health - only approved campaigns may start production jobs.");
 
   return (
     <SidebarPopover
@@ -125,7 +139,7 @@ export function IntegrationStatusPopover({
           </p>
           <p className="mt-0.5 font-mono text-[10.5px] text-muted-foreground dark:text-white/50">Production service</p>
           <p className="mt-1.5 text-[12px] leading-relaxed text-muted-foreground dark:text-white/65">
-            {livepeer?.detail ?? "Checking service health - only approved campaigns may start production jobs."}
+            {livepeerCopy}
           </p>
           {livepeer?.endpoint && (
             <p className="mt-1 truncate font-mono text-[10.5px] text-muted-foreground dark:text-white/50" title={livepeer.endpoint}>
@@ -144,6 +158,17 @@ export function IntegrationStatusPopover({
         >
           Open settings for endpoints and retries <ArrowUpRight className="h-3.5 w-3.5" aria-hidden />
         </Link>
+        {(dkgSlow || livepeerSlow) && onRetry && (
+          <div className="px-2.5 pb-1">
+            <button
+              type="button"
+              onClick={onRetry}
+              className="rounded-full px-2.5 py-1 text-[12.5px] font-medium text-emerald-700 underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600 dark:text-emerald-300"
+            >
+              Retry
+            </button>
+          </div>
+        )}
       </div>
     </SidebarPopover>
   );

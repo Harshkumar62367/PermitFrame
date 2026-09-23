@@ -6,32 +6,44 @@ import { useEffect, useId, useState } from "react";
 import { ArrowLeft, BadgeCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Label } from "@/components/ui/label";
 import { FadeIn } from "@/components/motion-primitives";
 import { PermitFrameMark } from "@/components/logo";
+import { CountryMultiSelect } from "@/components/country-multi-select";
 import { ErrorState } from "@/components/ui/error-state";
 import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
 import { CopyableIdentifier } from "@/components/ui/identifier";
-import { apiGet, apiPost, describeRecord } from "@/lib/api";
-import { COUNTRIES, countryName } from "@/lib/countries";
+import { apiGet, apiPost } from "@/lib/api";
+import { consentCompletionCopy } from "@/server/consent-validation";
 import { useLongAction } from "@/lib/use-long-action";
 import { cn } from "@/lib/utils";
 
+interface ConsentMedia {
+  title: string;
+  type: "image" | "video";
+  url: string;
+}
+
 interface ConsentData {
-  status: "pending" | "completed";
+  status: "pending" | "viewed" | "approved" | "declined" | "expired" | "cancelled";
   draft: {
     platforms: string[];
     countries: string[];
     allowedTransformations: string[];
     validUntil: string;
   };
+  purpose: string;
+  media: ConsentMedia[];
+  linkExpiresAt?: string;
+  /** Present on approved links only: proof status of this exact link's passport. */
+  publicationStatus?: "published" | "saved" | "unknown";
   creator: { name: string; handle: string } | null;
 }
 const ALL_PLATFORMS = ["instagram", "tiktok", "youtube", "linkedin"];
 
 // Full ISO territory list (values stay 2-letter codes — the server contract
 // is unchanged); the five-country shortlist used to hide valid options.
-const ALL_COUNTRIES = COUNTRIES.map((c) => c.code);
 const ALL_TRANSFORMS = ["edit", "animate", "crop", "upscale"];
 
 export default function ConsentPage() {
@@ -54,6 +66,13 @@ export default function ConsentPage() {
   const [form, setForm] = useState({ platforms: [] as string[], countries: [] as string[], transforms: [] as string[], validUntil: "" });
   const [fieldErrors, setFieldErrors] = useState<{ platforms?: string; countries?: string; validUntil?: string }>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
+  // Two explicit acknowledgements, both required before approval.
+  const [acks, setAcks] = useState({ rights: false, use: false });
+  const [ackError, setAckError] = useState<string | null>(null);
+  const [declining, setDeclining] = useState(false);
+  const [declineNote, setDeclineNote] = useState("");
+  const [declineBusy, setDeclineBusy] = useState(false);
+  const [declinedDone, setDeclinedDone] = useState(false);
 
   function requestConsent(signal?: AbortSignal) {
     return apiGet<ConsentData>(`/api/consent/${params.token}`, signal);
@@ -106,16 +125,22 @@ export default function ConsentPage() {
     if (form.countries.length === 0) errors.countries = "Choose at least one territory.";
     if (!/^\d{4}-\d{2}-\d{2}$/.test(form.validUntil)) errors.validUntil = "Pick an expiry date from the calendar.";
     else if (form.validUntil <= new Date().toISOString().slice(0, 10)) errors.validUntil = "Expiry must be in the future.";
+    // Mirror of the authoritative server rule: the offered expiry can only
+    // be shortened, never extended. Never silently clamped.
+    else if (data && form.validUntil > data.draft.validUntil) errors.validUntil = "Attestation can only shorten the offered expiry, not extend it.";
     setFieldErrors(errors);
+    const acksOk = acks.rights && acks.use;
+    setAckError(acksOk ? null : "Please confirm both acknowledgement statements to attest.");
     setSubmitError(null);
-    if (errors.platforms || errors.countries || errors.validUntil) return;
+    if (errors.platforms || errors.countries || errors.validUntil || !acksOk) return;
 
     const result = await attestAction.execute(() =>
       apiPost<{ passportId: string; ual?: string; explorerUrl?: string }>(`/api/consent/${params.token}`, {
         platforms: form.platforms,
         countries: form.countries,
         allowedTransformations: form.transforms,
-        validUntil: form.validUntil
+        validUntil: form.validUntil,
+        acknowledgements: [true, true]
       }, undefined, attestAction.timeoutMs)
     );
     if (!result.ok || !result.value) {
@@ -124,6 +149,22 @@ export default function ConsentPage() {
       return;
     }
     setResult({ passportId: result.value.passportId, ual: result.value.ual, explorerUrl: result.value.explorerUrl });
+  }
+
+  async function decline() {
+    if (declineBusy) return;
+    setDeclineBusy(true);
+    setSubmitError(null);
+    try {
+      await apiPost(`/api/consent/${params.token}/decline`, declineNote.trim() ? { note: declineNote.trim() } : {});
+      setDeclining(false);
+      setDeclinedDone(true);
+      await reloadConsent();
+    } catch (e) {
+      setSubmitError(e instanceof Error ? e.message : "Decline failed - nothing was changed.");
+    } finally {
+      setDeclineBusy(false);
+    }
   }
 
   if (loadError && !data) {
@@ -144,8 +185,19 @@ export default function ConsentPage() {
     );
   }
 
-  if (result || data.status === "completed") {
-    const record = describeRecord(result?.ual);
+  if (result || data.status === "approved") {
+    // Publication-status-aware wording per exact link: a fresh UAL earns
+    // published; a fresh local save is saved; a reload trusts the GET
+    // status (derived from this link's passport only), defaulting to
+    // unknown for legacy links that carry no proof state.
+    const completionState = result?.ual
+      ? "published"
+      : result
+        ? "saved"
+        : data.status === "approved"
+          ? (data.publicationStatus ?? "unknown")
+          : "unknown";
+    const copy = consentCompletionCopy(completionState);
     return (
       <div className="pf-page mx-auto w-full max-w-xl px-4 py-14 sm:px-6">
         <FadeIn>
@@ -155,11 +207,11 @@ export default function ConsentPage() {
             </span>
             <h1 className="font-display mt-5 text-2xl font-semibold tracking-tight">Permission attested</h1>
             <p className="mx-auto mt-2 max-w-sm text-[13.5px] leading-relaxed text-white/55">
-              Your Permission Passport is live. Agencies can now produce campaigns inside
+              {copy.lead} Agencies can now produce campaigns inside
               exactly the rights you granted - nothing more.
             </p>
             <p role="status" className="mx-auto mt-4 max-w-sm text-[12px] leading-relaxed text-white/70">
-              {record.headline}. {record.detail}
+              {copy.status}
             </p>
             {result && (
               <div className="mx-auto mt-3 max-w-sm">
@@ -175,11 +227,51 @@ export default function ConsentPage() {
                 )}
               </p>
             )}
-            {data.status === "completed" && !result && (
+            {data.status === "approved" && !result && (
               <p className="mx-auto mt-4 max-w-sm text-[12px] text-white/55">
                 This link was already used - the passport is recorded in the evidence layer.
               </p>
             )}
+          </div>
+        </FadeIn>
+      </div>
+    );
+  }
+
+  if (declinedDone || data.status === "declined") {
+    return (
+      <div className="pf-page mx-auto w-full max-w-xl px-4 py-14 sm:px-6">
+        <FadeIn>
+          <div className="rounded-3xl border border-border bg-card p-6 text-center sm:p-10">
+            <h1 className="font-display text-2xl font-semibold tracking-tight">Request declined</h1>
+            <p className="mx-auto mt-2 max-w-sm text-[13.5px] leading-relaxed text-muted-foreground">
+              You declined this permission request. No permission was recorded and nothing was published.
+            </p>
+            <Link href="/" className="mt-5 inline-flex items-center gap-1.5 text-[12.5px] text-muted-foreground hover:text-foreground">
+              <ArrowLeft className="h-3.5 w-3.5" aria-hidden /> Back to PermitFrame
+            </Link>
+          </div>
+        </FadeIn>
+      </div>
+    );
+  }
+
+  if (data.status === "expired" || data.status === "cancelled") {
+    return (
+      <div className="pf-page mx-auto w-full max-w-xl px-4 py-14 sm:px-6">
+        <FadeIn>
+          <div className="rounded-3xl border border-border bg-card p-6 text-center sm:p-10">
+            <h1 className="font-display text-2xl font-semibold tracking-tight">
+              {data.status === "expired" ? "Request link expired" : "Request cancelled"}
+            </h1>
+            <p className="mx-auto mt-2 max-w-sm text-[13.5px] leading-relaxed text-muted-foreground">
+              {data.status === "expired"
+                ? "This request link has expired - ask the agency for a fresh link."
+                : "This request was cancelled - ask the agency for a fresh link."}
+            </p>
+            <Link href="/" className="mt-5 inline-flex items-center gap-1.5 text-[12.5px] text-muted-foreground hover:text-foreground">
+              <ArrowLeft className="h-3.5 w-3.5" aria-hidden /> Back to PermitFrame
+            </Link>
           </div>
         </FadeIn>
       </div>
@@ -202,10 +294,60 @@ export default function ConsentPage() {
             {data.creator?.name} <span className="text-muted-foreground">{data.creator?.handle}</span>
           </h1>
           <p className="mt-2.5 text-[13.5px] leading-relaxed text-muted-foreground">
-            Choose exactly what the agency may do with your content. This attests your
-            declaration and its integrity - minimized data is published, never your personal
-            details.
+            An agency using PermitFrame is requesting permission to use your material.
+            Review exactly what is covered below. You may narrow these terms, or decline.
           </p>
+        </FadeIn>
+
+        <FadeIn delay={0.05}>
+          <div className="mt-5 space-y-2 rounded-3xl border border-border bg-card p-5 sm:p-6">
+            <h2 className="text-[14px] font-semibold tracking-tight">Requested use</h2>
+            {data.purpose && <p className="text-[13px] leading-relaxed">{data.purpose}</p>}
+            {data.media.length > 0 ? (
+              <div className="grid grid-cols-3 gap-2 pt-1 sm:grid-cols-4">
+                {data.media.map((m, index) => (
+                  <div key={`consent-media-${index}`} className="overflow-hidden rounded-lg ring-1 ring-border">
+                    {m.type === "image" ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={m.url} alt={m.title} loading="lazy" className="aspect-square w-full object-cover" />
+                    ) : (
+                      <span className="grid aspect-square w-full place-items-center bg-black font-mono text-[10px] text-white">video</span>
+                    )}
+                    <p className="truncate bg-card px-1.5 py-1 text-[10.5px] text-muted-foreground" title={m.title}>{m.title}</p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-[12px] font-medium text-muted-foreground">Legacy request — no media was attached.</p>
+            )}
+            <dl className="space-y-1 pt-1 text-[12.5px]">
+              <div className="flex gap-2">
+                <dt className="shrink-0 text-muted-foreground">Platforms</dt>
+                <dd className="font-medium capitalize">{data.draft.platforms.join(", ")}</dd>
+              </div>
+              <div className="flex gap-2">
+                <dt className="shrink-0 text-muted-foreground">Territories</dt>
+                <dd className="font-medium">{data.draft.countries.join(", ")}</dd>
+              </div>
+              <div className="flex gap-2">
+                <dt className="shrink-0 text-muted-foreground">Transformations</dt>
+                <dd className="font-medium">{data.draft.allowedTransformations.length > 0 ? data.draft.allowedTransformations.join(", ") : "display only"}</dd>
+              </div>
+              <div className="flex gap-2">
+                <dt className="shrink-0 text-muted-foreground">Permission ends</dt>
+                <dd className="font-medium">{data.draft.validUntil}</dd>
+              </div>
+              {data.linkExpiresAt && (
+                <div className="flex gap-2">
+                  <dt className="shrink-0 text-muted-foreground">This link expires</dt>
+                  <dd className="font-medium">{data.linkExpiresAt}</dd>
+                </div>
+              )}
+            </dl>
+            <p className="break-words pt-1 text-[12px] leading-relaxed text-muted-foreground">
+              This is a link-based creator attestation. PermitFrame records your declaration and the approved scope; it does not independently verify your identity or legal ownership.
+            </p>
+          </div>
         </FadeIn>
 
         <FadeIn delay={0.08}>
@@ -218,14 +360,17 @@ export default function ConsentPage() {
               error={fieldErrors.platforms}
               onToggle={(v) => toggle("platforms", v)}
             />
-            <ChoiceGroup
+            <CountryMultiSelect
               label="Territories"
               hint="Countries the campaigns may target."
-              options={ALL_COUNTRIES}
               selected={form.countries}
+              allowedCodes={data.draft.countries}
               error={fieldErrors.countries}
               onToggle={(v) => toggle("countries", v)}
-              optionLabel={(v) => `${countryName(v)} · ${v}`}
+              onClear={() => {
+                setForm((current) => ({ ...current, countries: [] }));
+                setFieldErrors((current) => ({ ...current, countries: undefined }));
+              }}
             />
             <ChoiceGroup
               label="Allowed transformations"
@@ -236,18 +381,18 @@ export default function ConsentPage() {
             />
             <div>
               <Label htmlFor={dateId} className="text-[12px] text-muted-foreground">Valid until</Label>
-              <Input
+              <DatePicker
                 id={dateId}
-                type="date"
                 value={form.validUntil}
                 min={new Date().toISOString().slice(0, 10)}
+                max={data.draft.validUntil}
                 aria-invalid={Boolean(fieldErrors.validUntil)}
                 aria-describedby={fieldErrors.validUntil ? `${dateId}-error` : undefined}
-                onChange={(e) => {
-                  setForm((f) => ({ ...f, validUntil: e.target.value }));
+                onValueChange={(nextValue) => {
+                  setForm((f) => ({ ...f, validUntil: nextValue }));
                   setFieldErrors((p) => ({ ...p, validUntil: undefined }));
                 }}
-                className="mt-1.5 rounded-xl"
+                className="mt-1.5"
               />
               {fieldErrors.validUntil && (
                 <p id={`${dateId}-error`} role="alert" className="mt-1 text-[12px] text-rose-600 dark:text-rose-300">{fieldErrors.validUntil}</p>
@@ -262,7 +407,7 @@ export default function ConsentPage() {
                 title={!canSubmit ? "Choose at least one platform and one territory to enable attestation" : undefined}
                 className="w-full rounded-full bg-emerald-700 py-2.5 font-medium text-emerald-50 hover:bg-emerald-600 dark:bg-emerald-500 dark:text-emerald-950 dark:hover:bg-emerald-400"
               >
-                {busy ? "Attesting…" : "Attest & publish my Permission Passport"}
+                {busy ? "Attesting…" : "Attest my permission"}
               </Button>
               <p id={`${uid}-attest-hint`} className="mt-2 text-[11.5px] text-muted-foreground">
                 {!canSubmit
@@ -271,6 +416,74 @@ export default function ConsentPage() {
                     ? attestAction.status
                     : "One click, one passport. Re-attesting the same link is rejected by the server."}
               </p>
+            </div>
+            <fieldset>
+              <legend className="text-[12px] text-muted-foreground">Before you attest</legend>
+              <div className="mt-2 space-y-2">
+                {(
+                  [
+                    ["rights", "I control the rights to the listed material."],
+                    ["use", "I approve the selected use until the stated expiry."]
+                  ] as const
+                ).map(([key, label]) => (
+                  <label key={key} className="flex cursor-pointer items-start gap-2.5 text-[12.5px] leading-relaxed">
+                    <input
+                      type="checkbox"
+                      checked={acks[key]}
+                      onChange={(e) => {
+                        setAcks((a) => ({ ...a, [key]: e.target.checked }));
+                        setAckError(null);
+                      }}
+                      className="mt-0.5 h-4 w-4 shrink-0 accent-emerald-700"
+                    />
+                    <span>{label}</span>
+                  </label>
+                ))}
+              </div>
+              {ackError && <p role="alert" className="mt-1 text-[12px] text-rose-600 dark:text-rose-300">{ackError}</p>}
+            </fieldset>
+            <div className="border-t border-border pt-4">
+              {!declining ? (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setDeclining(true)}
+                  disabled={busy || declineBusy}
+                  className="h-8 rounded-full px-3 text-[12px] text-muted-foreground hover:text-foreground"
+                >
+                  Decline request
+                </Button>
+              ) : (
+                <div className="space-y-2">
+                  <Label htmlFor={`${uid}-decline-note`} className="text-[12px] text-muted-foreground">
+                    Decline note (optional, stays with the agency record)
+                  </Label>
+                  <Input
+                    id={`${uid}-decline-note`}
+                    value={declineNote}
+                    maxLength={520}
+                    onChange={(e) => setDeclineNote(e.target.value)}
+                    placeholder="Why this use does not work for you."
+                    className="rounded-xl"
+                  />
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void decline()}
+                      disabled={declineBusy}
+                      aria-busy={declineBusy}
+                      className="h-8 rounded-full border-rose-300 px-3 text-[12px] text-rose-700 hover:bg-rose-50 dark:border-rose-800 dark:text-rose-300 dark:hover:bg-rose-950"
+                    >
+                      {declineBusy ? "Declining…" : "Confirm decline"}
+                    </Button>
+                    <Button variant="ghost" size="sm" onClick={() => setDeclining(false)} disabled={declineBusy} className="h-8 rounded-full px-3 text-[12px]">
+                      Back
+                    </Button>
+                  </div>
+                  <p className="text-[11.5px] text-muted-foreground">Declining records no permission and publishes nothing.</p>
+                </div>
+              )}
             </div>
             {submitError && <p role="alert" className="break-words text-[13px] text-rose-600 dark:text-rose-300">{submitError}</p>}
           </div>

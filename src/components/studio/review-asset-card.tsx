@@ -2,12 +2,15 @@ import Link from "next/link";
 import { ArrowRight, Download, Maximize2, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { describeActualSize } from "@/server/livepeer/aspect";
+import { deriveQualityReview, qualityReviewCopy } from "@/server/livepeer/quality-review";
 import { preservationIndicator } from "@/lib/preservation";
 import { downloadHrefFor } from "@/lib/proof-links";
-import type { DerivativeReceipt } from "@/server/types";
+import type { DerivativeReceipt, ProductionJob } from "@/server/types";
 
 interface ReviewAssetCardProps {
   receipt: DerivativeReceipt;
+  /** Owning production job (null for legacy rows); supplies advisory critique fields. */
+  job: ProductionJob | null;
   /** Position in the receipts grid; reported back so the parent owns lightbox selection. */
   index: number;
   /** Pre-computed by the parent: completed stored image whose job is ready_to_share. */
@@ -31,6 +34,7 @@ interface ReviewAssetCardProps {
  */
 export function ReviewAssetCard({
   receipt: r,
+  job,
   index,
   canVary,
   active,
@@ -41,6 +45,9 @@ export function ReviewAssetCard({
   onRequestVary,
   onOpen
 }: ReviewAssetCardProps) {
+  // Reviewer state: hard delivery block dominates; advisory critique only
+  // informs (never approves/rejects); missing data means not assessed.
+  const review = deriveQualityReview(job, r);
   return (
     <div className="group overflow-hidden rounded-xl bg-muted/60 ring-1 ring-border transition hover:ring-emerald-600/40">
       {r.mediaType === "image" ? (
@@ -100,15 +107,44 @@ export function ReviewAssetCard({
             </p>
           );
         })()}
+        {r.visibility === "private" && r.derivedFromFilmRunId && (
+          <p className="break-words text-[10.5px] font-medium leading-snug text-muted-foreground">
+            Private derivative — not included in client delivery.
+          </p>
+        )}
         {r.aspectVerdict === "mismatch" && r.actualWidth !== undefined && r.actualHeight !== undefined ? (
           <p role="status" className="break-words text-[11px] font-medium leading-snug text-amber-700 dark:text-amber-300">
-            Needs review — requested {r.format}, received {describeActualSize(r.actualWidth, r.actualHeight)}.
+            Needs ratio review — requested {r.format}, received {describeActualSize(r.actualWidth, r.actualHeight)}. Stored and editable, but not deliverable to clients until regenerated.
           </p>
         ) : (
           <p className="text-[10.5px] text-muted-foreground" title={r.storageStatus === "stored" ? "Persisted to PermitFrame durable storage; the provider original stays on record" : "Provider-hosted legacy output - previewable, but not share-ready until stored securely"}>
             {r.storageStatus === "stored" ? "Stored in PermitFrame" : r.storageStatus === "failed" ? "Storage failed" : "Provider-hosted legacy asset"}
           </p>
         )}
+        <div
+          className={
+            review.state === "delivery_blocked" || review.state === "needs_attention"
+              ? "rounded-lg bg-amber-50/70 px-2 py-1.5 ring-1 ring-amber-600/20 dark:bg-amber-950/30 dark:ring-amber-800/50"
+              : "rounded-lg bg-muted/60 px-2 py-1.5 ring-1 ring-border"
+          }
+        >
+          <p className="font-mono text-[9px] uppercase tracking-[0.12em] text-muted-foreground">Quality review</p>
+          <p
+            role="status"
+            className={
+              review.state === "delivery_blocked" || review.state === "needs_attention"
+                ? "mt-0.5 break-words text-[11px] font-medium leading-snug text-amber-700 dark:text-amber-300"
+                : "mt-0.5 break-words text-[11px] leading-snug text-muted-foreground"
+            }
+          >
+            {qualityReviewCopy(review.state)}
+          </p>
+          {review.note && (
+            <p className="mt-0.5 break-words text-[10.5px] leading-snug text-muted-foreground" title="Note from the automated visual check - advisory only">
+              {review.note}
+            </p>
+          )}
+        </div>
         <div className="mt-1 flex flex-wrap gap-1.5">
         {r.aspectVerdict === "mismatch" && (
           <Button
