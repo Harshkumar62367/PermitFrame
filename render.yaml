@@ -6,7 +6,7 @@ services:
     runtime: docker
     dockerfilePath: ./Dockerfile
     plan: starter # always-on; free sleeps and would kill DKG polling
-    healthCheckPath: /api/health # stale-while-revalidate: answers instantly
+    healthCheckPath: /api/healthz # public process liveness; /api/health remains signed-in integration status
     envVars:
       - key: NODE_ENV
         value: production
