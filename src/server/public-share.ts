@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { getDb } from "./db/client";
 import { workspaceState } from "./db/schema";
 import type { Campaign } from "./types";
-import { deliveryBlockReason } from "./types";
+import { isPublicDeliverableReceipt } from "./types";
 
 /**
  * Public client-review reads and writes. Session-free by design: share links
@@ -75,19 +75,19 @@ function toPublicView(campaign: Campaign): PublicShareView {
 }
 
 /**
- * Client-delivery outputs (pure): every receipt except private ones and
- * delivery-blocked ones. Private derivatives (e.g. burn-caption outputs)
- * never reach client delivery; ratio-mismatched outputs (stored reason or
- * legacy `aspectVerdict: "mismatch"`) are excluded on read even when their
- * historical job state says ready_to_share - so newly generated,
- * already-approved, and legacy campaigns all behave the same with no
- * migration. Shared and legacy durable outputs keep their current behavior.
- * The share API and page both read through here; excluded URLs are never
- * selected into the view, so they cannot leak.
+ * Client-delivery outputs (pure): only public deliverable receipts -
+ * non-private, durably stored, and not delivery-blocked. Private
+ * derivatives (e.g. burn-caption outputs), ratio-mismatched outputs
+ * (stored reason or legacy `aspectVerdict: "mismatch"`), and not-yet-stored
+ * outputs are excluded on read even when their historical job state says
+ * ready_to_share - so newly generated, already-approved, and legacy
+ * campaigns all behave the same with no migration. Shared durable outputs
+ * keep their current behavior. The share API and page both read through
+ * here; excluded URLs are never selected into the view, so they cannot leak.
  */
 export function publicOutputsForShare(campaign: Campaign, verificationRef: string | null): PublicShareOutput[] {
   return campaign.receipts
-    .filter((r) => r.visibility !== "private" && deliveryBlockReason(r) === null)
+    .filter((r) => isPublicDeliverableReceipt(r))
     .map((r) => ({
       id: r.id,
       label: r.label,
@@ -124,11 +124,44 @@ export interface ShareReviewInput {
   comment?: string;
 }
 
+export interface ShareReviewUpdate {
+  /** Campaign status is never carried here - the reviewer does not own it. */
+  comment: { id: string; author: string; text: string; at: string };
+  eventKind: string;
+  eventSummary: string;
+}
+
 /**
- * Anonymous client review submit. Token-gated, campaign-scoped, comments-only:
- * appends one client note (and the same status transitions as the signed-in
- * path) to exactly the workspace row holding the token. No session, no
- * workspace enumeration, no other fields touched.
+ * Pure reviewer-decision recording. An external share-link decision is
+ * feedback only: it appends one client note and names its event, but NEVER
+ * transitions campaign status in either direction. Only the authenticated
+ * owner approval flow (approveCampaign) may finalize a campaign to
+ * approved; only owner flows move it otherwise. Unit-tested; the DB-backed
+ * appendShareReview below is a thin persistence wrapper around this.
+ */
+export function applyShareReviewDecision(
+  campaign: Pick<Campaign, "id" | "title">,
+  input: ShareReviewInput,
+  at: string = new Date().toISOString()
+): ShareReviewUpdate {
+  return {
+    comment: {
+      id: `cmt_${crypto.randomBytes(6).toString("hex")}`,
+      author: input.clientName?.trim().slice(0, 80) || "client",
+      text: `[${input.decision}] ${(input.comment ?? "").trim().slice(0, 2000)}`.trim(),
+      at
+    },
+    eventKind: `share.${input.decision}`,
+    eventSummary: `Client review: ${input.decision} on "${campaign.title}".`
+  };
+}
+
+/**
+ * Anonymous client review submit. Token-gated, campaign-scoped,
+ * comments-only: appends one client note to exactly the workspace row
+ * holding the token. The recorded decision never changes campaign status -
+ * approval stays exclusively with the authenticated owner flow. No session,
+ * no workspace enumeration, no other fields touched.
  */
 export async function appendShareReview(token: string, input: ShareReviewInput): Promise<{ status: string }> {
   if (!SHARE_TOKEN_PATTERN.test(token)) throw new ShareNotFoundError();
@@ -144,21 +177,14 @@ export async function appendShareReview(token: string, input: ShareReviewInput):
   if (campaign.status === "archived") {
     throw new Error("This campaign is archived - reviews are closed, but the record stays readable.");
   }
-  const entry = {
-    id: `cmt_${crypto.randomBytes(6).toString("hex")}`,
-    author: input.clientName?.trim().slice(0, 80) || "client",
-    text: `[${input.decision}] ${(input.comment ?? "").trim().slice(0, 2000)}`.trim(),
-    at: new Date().toISOString()
-  };
-  campaign.comments = [...(campaign.comments ?? []), entry];
-  if (input.decision === "approved" && campaign.status === "review") campaign.status = "approved";
-  if (input.decision === "changes_requested") campaign.status = "review";
-  campaign.updatedAt = entry.at;
+  const update = applyShareReviewDecision(campaign, input);
+  campaign.comments = [...(campaign.comments ?? []), update.comment];
+  campaign.updatedAt = update.comment.at;
   data.events.push({
     id: `evt_${crypto.randomBytes(6).toString("hex")}`,
-    at: entry.at,
-    kind: `share.${input.decision}`,
-    summary: `Client review: ${input.decision} on "${campaign.title}".`,
+    at: update.comment.at,
+    kind: update.eventKind,
+    summary: update.eventSummary,
     refs: [campaign.id]
   });
   await db

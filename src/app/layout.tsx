@@ -1,22 +1,10 @@
 import type { Metadata } from "next";
-import { Inter, IBM_Plex_Mono } from "next/font/google";
+import "@fontsource-variable/inter/wght.css";
+import "@fontsource/ibm-plex-mono/400.css";
+import "@fontsource/ibm-plex-mono/500.css";
+import "@fontsource/ibm-plex-mono/600.css";
 import { ThemeProvider } from "@/components/theme-provider";
-import { PermitFramePrivyProvider } from "@/components/privy-provider";
-import { QueryProvider } from "@/components/query-provider";
 import "./globals.css";
-
-const inter = Inter({
-  variable: "--font-inter",
-  subsets: ["latin"],
-  display: "swap"
-});
-
-const plexMono = IBM_Plex_Mono({
-  variable: "--font-plex-mono",
-  weight: ["400", "500", "600"],
-  subsets: ["latin"],
-  display: "swap"
-});
 
 export const metadata: Metadata = {
   title: "PermitFrame - verified AI campaign production",
@@ -26,13 +14,9 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${inter.variable} ${plexMono.variable}`} suppressHydrationWarning>
+    <html lang="en" suppressHydrationWarning>
       <body className="min-h-screen bg-background font-sans text-foreground antialiased">
-        <QueryProvider>
-          <PermitFramePrivyProvider>
-            <ThemeProvider>{children}</ThemeProvider>
-          </PermitFramePrivyProvider>
-        </QueryProvider>
+        <ThemeProvider>{children}</ThemeProvider>
       </body>
     </html>
   );

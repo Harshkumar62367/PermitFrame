@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { AuthenticationRequiredError } from "@/server/auth";
 import { approveCampaign } from "@/server/campaigns";
 import { logDkgError, sanitizeDkgError } from "@/server/dkg/public-errors";
 
@@ -17,6 +18,9 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
       verificationWarning: result.verificationWarning ?? null
     });
   } catch (error) {
+    if (error instanceof AuthenticationRequiredError) {
+      return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+    }
     logDkgError("approve", error);
     const safe = sanitizeDkgError(error, "approve");
     return NextResponse.json({ error: safe.message, code: safe.code }, { status: safe.status });

@@ -54,7 +54,7 @@ export function ReviewAssetCard({
         <button
           type="button"
           onClick={() => onOpen(index)}
-          title={`${r.label} — click to view full size`}
+          title={`${r.label} - click to view full size`}
           aria-label={`View ${r.label} full size`}
           className="block w-full cursor-zoom-in focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600"
         >
@@ -72,7 +72,7 @@ export function ReviewAssetCard({
           <button
             type="button"
             onClick={() => onOpen(index)}
-            title={`${r.label} — click to view full size`}
+            title={`${r.label} - click to view full size`}
             aria-label={`View ${r.label} full size`}
             className="absolute right-2 top-2 grid h-7 w-7 place-items-center rounded-full bg-black/60 text-white opacity-0 transition hover:bg-black/80 focus-visible:opacity-100 group-focus-within:opacity-100 group-hover:opacity-100"
           >
@@ -109,12 +109,12 @@ export function ReviewAssetCard({
         })()}
         {r.visibility === "private" && r.derivedFromFilmRunId && (
           <p className="break-words text-[10.5px] font-medium leading-snug text-muted-foreground">
-            Private derivative — not included in client delivery.
+            Private derivative - not included in client delivery.
           </p>
         )}
         {r.aspectVerdict === "mismatch" && r.actualWidth !== undefined && r.actualHeight !== undefined ? (
           <p role="status" className="break-words text-[11px] font-medium leading-snug text-amber-700 dark:text-amber-300">
-            Needs ratio review — requested {r.format}, received {describeActualSize(r.actualWidth, r.actualHeight)}. Stored and editable, but not deliverable to clients until regenerated.
+            Needs ratio review - requested {r.format}, received {describeActualSize(r.actualWidth, r.actualHeight)}. Stored and editable, but not deliverable to clients until regenerated.
           </p>
         ) : (
           <p className="text-[10.5px] text-muted-foreground" title={r.storageStatus === "stored" ? "Persisted to PermitFrame durable storage; the provider original stays on record" : "Provider-hosted legacy output - previewable, but not share-ready until stored securely"}>
@@ -153,7 +153,7 @@ export function ReviewAssetCard({
             onClick={() => void onRegenerate(r.id)}
             disabled={regenFor !== null || varyFor !== null || active}
             aria-busy={regenFor === r.id}
-            title="Generate this stage again for the planned placement — a new paid run; nothing retries automatically"
+            title="Generate this stage again for the planned placement - a new paid run; nothing retries automatically"
             className="h-7 rounded-full px-2.5 text-[11px]"
           >
             {regenFor === r.id ? "Regenerating…" : `Regenerate ${r.format}`}

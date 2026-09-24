@@ -27,15 +27,19 @@ export async function lookupVerification(ref: string): Promise<VerificationLooku
   return { found: true, snapshot: payload };
 }
 
-/** Persist (upsert) the snapshot. Called at approval; content reflects latest approval. */
+/**
+ * Append-only snapshot persistence. Every approval mints a fresh ref (see
+ * approveCampaign/refreshVerificationSnapshot), so inserts never collide;
+ * a repeated ref is a no-op that preserves history instead of overwriting
+ * it. Old snapshots stay retrievable by their refs forever - persistence
+ * never mutates a published row, so no immutability beyond append-only is
+ * claimed or needed.
+ */
 export async function saveVerificationSnapshot(snapshot: PublicVerificationSnapshot): Promise<void> {
   await getDb()
     .insert(verificationSnapshots)
     .values({ ref: snapshot.ref, campaignId: snapshot.campaignId, payload: snapshot, updatedAt: new Date() })
-    .onConflictDoUpdate({
-      target: verificationSnapshots.ref,
-      set: { campaignId: snapshot.campaignId, payload: snapshot, updatedAt: new Date() }
-    });
+    .onConflictDoNothing({ target: verificationSnapshots.ref });
 }
 
 export type VerificationResult = VerificationLookup;

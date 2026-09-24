@@ -54,6 +54,13 @@ export interface PumpOptions {
    * pump the route triggers alongside.
    */
   allowPreviewResume?: boolean;
+  /**
+   * Source-delivery resolver for one pump pass. Defaults to the production
+   * resolver (URL passthrough, time-limited download URLs for uploads).
+   * Test-only override point: a counting fake proves the pass resolves an
+   * uploaded source exactly once and threads that exact value everywhere.
+   */
+  resolveSourceUrl?: (media: import("../types").SourceMedia) => string;
 }
 
 /**

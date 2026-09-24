@@ -113,11 +113,6 @@ export function IntegrationStatusPopover({
           <p className="mt-1.5 text-[12px] leading-relaxed text-muted-foreground dark:text-white/65">
             {dkgCopy}
           </p>
-          {dkg?.endpoint && (
-            <p className="mt-0.5 truncate font-mono text-[10.5px] text-muted-foreground dark:text-white/50" title={dkg.endpoint}>
-              {dkg.endpoint}
-            </p>
-          )}
           {lastEvidenceLabel(activity) && (
             <p className="mt-1 text-[11.5px] text-muted-foreground dark:text-white/55">{lastEvidenceLabel(activity)}</p>
           )}
@@ -141,11 +136,6 @@ export function IntegrationStatusPopover({
           <p className="mt-1.5 text-[12px] leading-relaxed text-muted-foreground dark:text-white/65">
             {livepeerCopy}
           </p>
-          {livepeer?.endpoint && (
-            <p className="mt-1 truncate font-mono text-[10.5px] text-muted-foreground dark:text-white/50" title={livepeer.endpoint}>
-              {livepeer.endpoint} · {livepeer.keyless ? "hosted access" : "API key"}
-            </p>
-          )}
           {lastGenerationLabel(activity) && (
             <p className="mt-1 text-[11.5px] text-muted-foreground dark:text-white/55">{lastGenerationLabel(activity)}</p>
           )}
@@ -156,7 +146,7 @@ export function IntegrationStatusPopover({
           onClick={onNavigate}
           className="mt-1 inline-flex items-center gap-1 px-2.5 py-2 text-[12.5px] font-medium text-emerald-700 hover:underline dark:text-emerald-300"
         >
-          Open settings for endpoints and retries <ArrowUpRight className="h-3.5 w-3.5" aria-hidden />
+          Open settings for services and retries <ArrowUpRight className="h-3.5 w-3.5" aria-hidden />
         </Link>
         {(dkgSlow || livepeerSlow) && onRetry && (
           <div className="px-2.5 pb-1">

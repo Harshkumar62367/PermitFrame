@@ -119,7 +119,13 @@ export default function SettingsPage() {
                 {health?.livepeer.keyless ? "hosted access" : health ? "api key" : showSlow ? "Slow" : "checking"}
               </Badge>
             </div>
-            <p className="mt-2.5 break-all font-mono text-[11.5px] leading-relaxed text-muted-foreground">{health?.livepeer.endpoint ?? "Loading integration details…"}</p>
+            <p className="mt-2.5 break-words text-[12.5px] leading-relaxed text-muted-foreground">
+              {health?.livepeer.keyless
+                ? "Hosted production access - no key needed on this workspace."
+                : health
+                  ? "Production access uses a server-side API key - the key itself is never shown here."
+                  : "Loading integration details…"}
+            </p>
             {health?.livepeer.detail ? (
               <p className="mt-2 break-words text-[12.5px] leading-relaxed text-muted-foreground">{health.livepeer.detail}</p>
             ) : (

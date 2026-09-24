@@ -64,9 +64,11 @@ function seedCampaign(): Campaign {
         derivedFrom: { sourceMediaId: "med_secret", passportId: "pp_secret", productFactsId: "pf_secret" },
         generatedAt: "2026-01-01T00:00:00.000Z",
         costUsd: 0.0032,
-        // Client-visible outputs are shared: private receipts never reach
-        // the share view (see publicOutputsForShare), so the probe pack -
-        // which the tests below expect to be listed - is shared.
+        // Client-visible outputs are shared AND durably stored: private,
+        // blocked, and not-yet-stored receipts never reach the share view
+        // (see publicOutputsForShare), so the probe pack - which the tests
+        // below expect to be listed - is shared and stored.
+        storageStatus: "stored",
         visibility: "shared"
       }
     ],
@@ -175,13 +177,16 @@ describe("public share links", () => {
       body: JSON.stringify({ decision: "approved", clientName: "Probe Client", comment: "Looks good" })
     });
     assert.equal(r.status, 200);
-    assert.equal((await r.json()).status, "approved");
+    // External reviewer decisions are feedback only: the recorded status
+    // stays "review" - only the authenticated owner flow may approve.
+    assert.equal((await r.json()).status, "review");
     // Read back raw: exactly one new client comment, internal note untouched.
     const rows = await db()
       .select({ data: workspaceState.data })
       .from(workspaceState)
       .where(eq(workspaceState.workspaceId, WS_ID));
     const campaign = rows[0].data.campaigns.find((c) => c.shareToken === SHARE_TOKEN);
+    assert.equal(campaign?.status, "review");
     const last = campaign?.comments.at(-1);
     assert.equal(last?.author, "Probe Client");
     assert.ok((last?.text ?? "").startsWith("[approved]"));

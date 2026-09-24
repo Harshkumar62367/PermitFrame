@@ -12,6 +12,7 @@ import { requestedPreservationMode } from "./preservation-policy";
 import { normalizeQualityProfile, normalizeStagePlan } from "./plan-dag";
 import { getCampaignAssets, persistJobAsset } from "../asset-store";
 import { isCloudinaryConfigured } from "../cloudinary";
+import { baseSepoliaTransactionUrl } from "@/lib/proof-links";
 
 /**
  * Executes the permitted production plan through the Livepeer Agent MCP,
@@ -225,7 +226,7 @@ export async function runProduction(campaignId: string, onlyStageIds?: string[],
   const { submitRun, pumpRun } = await import("./runner");
   const submitted = await submitRun({ campaignId, stageIds: onlyStageIds, workspaceId });
   if (!submitted.run) return { finished: true, error: submitted.error };
-  if (!submitted.workspaceId) return { finished: true, error: "Workspace unknown — cannot execute." };
+  if (!submitted.workspaceId) return { finished: true, error: "Workspace unknown - cannot execute." };
   await pumpRun(submitted.workspaceId, campaignId, {
     runId: submitted.run.id,
     budgetMs: 10 * 60 * 1000
@@ -638,7 +639,7 @@ export async function finalizeStoredDelivery(input: {
 
 export async function publishCampaignRecord(
   campaignId: string
-): Promise<{ ual?: string; publicationStatus: PublicationStatus }> {
+): Promise<{ ual?: string; txHash?: string; publicationStatus: PublicationStatus }> {
   const db = await loadDb();
   const campaign = db.campaigns.find((c) => c.id === campaignId);
   if (!campaign) return { publicationStatus: "failed" };
@@ -646,18 +647,33 @@ export async function publishCampaignRecord(
     // Campaign approval is the explicit moment we anchor minimized evidence
     // on-chain. Earlier facts/consents stay in WM/SWM unless separately chosen.
     const record = await getDkg().publishVerifiable(campaignKa(campaign), "shared");
+    // A finalization hash is public only when it is tied to the genuine Base
+    // Sepolia UAL returned by the finalized publish. Do not retain arbitrary
+    // adapter output or hashes from local/shared records.
+    const transaction = record.publicationStatus === "anchored"
+      ? baseSepoliaTransactionUrl(record.ual, record.txHash)
+      : null;
     await updateDb((d) => {
       const c = d.campaigns.find((x) => x.id === campaignId);
       if (c) {
         c.campaignUAL = record.ual;
         c.publicationStatus = record.publicationStatus;
+        if (transaction && record.txHash) c.campaignTxHash = record.txHash.trim();
+        else delete c.campaignTxHash;
       }
     });
-    return { ual: record.ual, publicationStatus: record.publicationStatus };
+    return {
+      ual: record.ual,
+      ...(transaction && record.txHash ? { txHash: record.txHash.trim() } : {}),
+      publicationStatus: record.publicationStatus
+    };
   } catch {
     await updateDb((d) => {
       const c = d.campaigns.find((x) => x.id === campaignId);
-      if (c) c.publicationStatus = "failed";
+      if (c) {
+        c.publicationStatus = "failed";
+        delete c.campaignTxHash;
+      }
     }).catch(() => undefined);
     return { publicationStatus: "failed" };
   }

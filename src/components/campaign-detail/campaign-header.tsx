@@ -1,7 +1,9 @@
 import { FadeIn } from "@/components/motion-primitives";
+import { Lock } from "lucide-react";
 import { campaignOutcome, OutcomeBadge } from "@/components/campaign-outcome";
 import { cn, displayText } from "@/lib/utils";
 import type { Campaign, PermissionPassport, ProductFacts, SourceMedia } from "@/server/types";
+import { mediaTileKind } from "@/server/types";
 
 interface CampaignHeaderProps {
   campaign: Campaign;
@@ -35,9 +37,25 @@ export function CampaignHeader({ campaign, sourceMedia, passport, productFacts }
           </p>
           <p className="mt-3 text-[14px] italic leading-relaxed text-muted-foreground">“{displayText(campaign.request.creativeBrief)}”</p>
         </div>
-        {sourceMedia && (
+        {sourceMedia && mediaTileKind(sourceMedia) === "private" && sourceMedia.type === "image" && (
+          <span className="relative block h-30 w-24 shrink-0 overflow-hidden rounded-xl bg-muted ring-1 ring-border" title="Source (private workspace copy - workspace-only preview)">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={`/api/media/${sourceMedia.id}/preview`} alt="source media" className="h-30 w-24 object-cover" />
+            <span className="absolute bottom-1 left-1 flex items-center gap-0.5 rounded-full bg-black/70 px-1.5 py-px text-[8.5px] font-medium text-white">
+              <Lock className="h-2.5 w-2.5" aria-hidden /> Private
+            </span>
+          </span>
+        )}
+        {sourceMedia && mediaTileKind(sourceMedia) !== "private" && (
           // eslint-disable-next-line @next/next/no-img-element
           <img src={sourceMedia.url} alt="source media" className="h-30 w-24 shrink-0 rounded-xl object-cover ring-1 ring-border" />
+        )}
+        {sourceMedia && mediaTileKind(sourceMedia) === "private" && sourceMedia.type !== "image" && (
+          <span className="grid h-30 w-24 shrink-0 place-items-center rounded-xl bg-muted px-1 text-center ring-1 ring-border" title="Source (private workspace copy - video previews are not available)">
+            <span className="flex items-center gap-1 rounded-full bg-card px-2 py-0.5 text-[9.5px] font-medium text-muted-foreground ring-1 ring-border">
+              <Lock className="h-3 w-3" aria-hidden /> Private workspace copy
+            </span>
+          </span>
         )}
       </div>
       <div className="mt-4 flex flex-wrap gap-2">

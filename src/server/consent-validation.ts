@@ -1,4 +1,4 @@
-import type { ConsentDraft, ConsentInviteStatus, CountryCode, Platform, Transformation } from "./types";
+import type { ConsentDraft, ConsentInviteStatus, CountryCode, Platform, SourceMedia, Transformation } from "./types";
 
 const PLATFORMS: readonly Platform[] = ["instagram", "tiktok", "youtube", "linkedin"];
 const TRANSFORMATIONS: readonly Transformation[] = ["edit", "animate", "crop", "upscale"];
@@ -131,14 +131,14 @@ export function consentCompletionCopy(state: ConsentPublicationState): ConsentCo
     return {
       state,
       lead: "Your Permission Passport is published to the proof ledger.",
-      status: "Published — public proof is available for this permission record."
+      status: "Published - public proof is available for this permission record."
     };
   }
   if (state === "saved") {
     return {
       state,
       lead: "Your permission record was saved.",
-      status: "Saved — public proof is not available yet."
+      status: "Saved - public proof is not available yet."
     };
   }
   return {
@@ -175,7 +175,37 @@ export interface ConsentPublicDraft {
 export interface ConsentPublicMedia {
   title: string;
   type: "image" | "video";
-  url: string;
+  /** Preview URL for URL references only - absent for private uploads. */
+  url?: string;
+  /**
+   * Opaque position in this consent request's covered-media list. Present
+   * only for private uploaded images, so the bearer token can request a
+   * scoped same-origin preview without exposing a source-media identifier.
+   */
+  previewIndex?: number;
+  /** True for uploaded private workspace copies. */
+  isPrivateUpload: boolean;
+}
+
+/**
+ * Project one source-media row onto its anonymous consent-link shape.
+ * Uploaded originals are stripped to presentation data only: no url,
+ * no Cloudinary public id, no storage metadata, no hash, no controlled
+ * reference ever leaves. URL registrations keep their preview URL.
+ */
+export function toConsentPublicMedia(
+  media: Pick<SourceMedia, "title" | "type" | "url" | "source">,
+  previewIndex?: number
+): ConsentPublicMedia {
+  if (media.source === "upload") {
+    return {
+      title: media.title,
+      type: media.type,
+      isPrivateUpload: true,
+      ...(media.type === "image" && Number.isSafeInteger(previewIndex) && (previewIndex as number) >= 0 ? { previewIndex } : {})
+    };
+  }
+  return { title: media.title, type: media.type, url: media.url, isPrivateUpload: false };
 }
 
 export interface ConsentPublicView {
@@ -196,9 +226,11 @@ export interface ConsentPublicView {
 /**
  * Minimal public consent view (pure, unit-tested). Exposes the offered
  * terms, purpose, covered media previews, the creator's public name, and -
- * for approved links - the publication status only. Passport ids, UALs,
- * workspace identifiers, owner identity, other records, hashes, and
- * diagnostics never leave.
+ * for approved links - the publication status only. Uploaded image previews
+ * use only an opaque, token-scoped position; they never expose a source id
+ * or storage reference. Passport ids, UALs,
+ * workspace identifiers, owner identity, other records, hashes, storage
+ * metadata, controlled references, and diagnostics never leave.
  */
 export function buildConsentPublicView(
   invite: {

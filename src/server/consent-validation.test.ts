@@ -8,6 +8,7 @@ import {
   consentLifecycle,
   declineGuard,
   invitePublicationStatus,
+  toConsentPublicMedia,
   validateAttestation,
   validateAttestationAcks,
   validateConsentRequest
@@ -109,14 +110,14 @@ describe("consentCompletionCopy", () => {
     const copy = consentCompletionCopy("published");
     assert.equal(copy.state, "published");
     assert.equal(copy.lead, "Your Permission Passport is published to the proof ledger.");
-    assert.equal(copy.status, "Published — public proof is available for this permission record.");
+    assert.equal(copy.status, "Published - public proof is available for this permission record.");
   });
 
   it("uses saved/local wording without live/published claims when no UAL exists", () => {
     const copy = consentCompletionCopy("saved");
     assert.equal(copy.state, "saved");
     assert.equal(copy.lead, "Your permission record was saved.");
-    assert.equal(copy.status, "Saved — public proof is not available yet.");
+    assert.equal(copy.status, "Saved - public proof is not available yet.");
     for (const text of [copy.lead, copy.status]) {
       assert.ok(!/live/i.test(text), "must not say live without ledger proof");
       assert.ok(!/publish/i.test(text), "must not imply publication without a UAL");
@@ -169,7 +170,7 @@ describe("buildConsentPublicView", () => {
     validUntil: "2027-03-01"
   };
   const CREATOR = { name: "Maya", handle: "@maya" };
-  const MEDIA = [{ title: "Maya portrait", type: "image" as const, url: "https://cdn.example/m1.png" }];
+  const MEDIA = [{ title: "Maya portrait", type: "image" as const, url: "https://cdn.example/m1.png", isPrivateUpload: false }];
 
   it("approved links expose only the status, never passport ids or UALs", () => {
     const view = buildConsentPublicView(
@@ -204,11 +205,11 @@ describe("buildConsentPublicView", () => {
       CREATOR,
       "2027-01-10"
     );
-    // Exact shape proof: media items carry only title/type/url - the store
-    // row's internal id has nowhere to hide (deepEqual would fail on it).
+    // Exact shape proof: media items carry only title/type/url/flag - the
+    // store row's internal id has nowhere to hide (deepEqual would fail on it).
     assert.deepEqual(view.media, MEDIA);
     for (const item of view.media) {
-      assert.deepEqual(Object.keys(item).sort(), ["title", "type", "url"]);
+      assert.deepEqual(Object.keys(item).sort(), ["isPrivateUpload", "title", "type", "url"]);
     }
     assert.deepEqual(Object.keys(view).sort(), ["creator", "draft", "linkExpiresAt", "media", "purpose", "status"]);
   });
@@ -247,6 +248,53 @@ describe("buildConsentPublicView", () => {
     );
     assert.equal(view.status, "expired");
     assert.ok(!("publicationStatus" in view));
+  });
+});
+
+describe("toConsentPublicMedia", () => {
+  it("passes URL references through with a preview url", () => {
+    assert.deepEqual(
+      toConsentPublicMedia({ title: "t", type: "image", url: "https://cdn.example/m.png", source: "url" }),
+      { title: "t", type: "image", url: "https://cdn.example/m.png", isPrivateUpload: false }
+    );
+  });
+
+  it("strips uploads to presentation data only, retaining only an opaque image position", () => {
+    const out = toConsentPublicMedia({
+      title: "t",
+      type: "video",
+      url: "private:cloudinary:src_abcdef123456",
+      source: "upload"
+    });
+    assert.deepEqual(out, { title: "t", type: "video", isPrivateUpload: true });
+    assert.deepEqual(Object.keys(out).sort(), ["isPrivateUpload", "title", "type"]);
+    const dump = JSON.stringify(out);
+    for (const banned of ["private:cloudinary", "src_abcdef123456", "cloudinary", "storage", "hash", "http"]) {
+      assert.ok(!dump.includes(banned), `leaks ${banned}`);
+    }
+    assert.deepEqual(
+      toConsentPublicMedia({ title: "image", type: "image", url: "private:cloudinary:src_abcdef123456", source: "upload" }, 2),
+      { title: "image", type: "image", isPrivateUpload: true, previewIndex: 2 }
+    );
+  });
+
+  it("buildConsentPublicView carries an upload flag item with no url key", () => {
+    const view = buildConsentPublicView(
+      {
+        status: "pending",
+        draft: {
+          platforms: ["instagram"],
+          countries: ["GR"],
+          allowedTransformations: ["edit"],
+          validUntil: "2027-03-01"
+        }
+      },
+      [{ title: "t", type: "image", isPrivateUpload: true }],
+      [],
+      { name: "Maya", handle: "@maya" },
+      "2027-01-10"
+    );
+    assert.deepEqual(view.media, [{ title: "t", type: "image", isPrivateUpload: true }]);
   });
 });
 

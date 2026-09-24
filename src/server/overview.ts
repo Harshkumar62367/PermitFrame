@@ -163,8 +163,11 @@ export function buildWorkspaceOverview(db: Database, workspaceName: string | nul
   const toOverviewCampaign = (c: Campaign): OverviewCampaign => {
     const rollup = campaignCostRollup(c);
     const latestReceipt = c.receipts.at(-1) ?? null;
+    // Thumbnails need a directly renderable URL: URL registrations qualify,
+    // uploaded private copies do not (their stored reference is
+    // non-routable), so uploads fall back to the latest generated output.
     const sourceUrl = mediaById.get(c.sourceMediaId) ?? null;
-    const thumbnailUrl = sourceUrl ?? latestReceipt?.outputUrl ?? null;
+    const thumbnailUrl = sourceUrl?.startsWith("http") ? sourceUrl : (latestReceipt?.outputUrl ?? null);
     const preflight = c.preflight;
     const queriedRights = preflight?.queriedRights ?? [];
     const queriedFacts = preflight?.queriedFacts ?? [];

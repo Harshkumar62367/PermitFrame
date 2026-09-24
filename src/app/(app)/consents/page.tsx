@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useId, useState } from "react";
-import { AlertTriangle, ArrowRight, CalendarClock, ShieldOff } from "lucide-react";
+import { AlertTriangle, ArrowRight, CalendarClock, Lock, ShieldOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DatePicker } from "@/components/ui/date-picker";
@@ -16,9 +16,10 @@ import { CopyableIdentifier } from "@/components/ui/identifier";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
 import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
-import { apiPost } from "@/lib/api";
+import { ApiError, apiPost } from "@/lib/api";
 import { CONSENT_PURPOSE_MAX } from "@/server/consent-validation";
 import { consentLifecycle } from "@/server/consent-validation";
+import { mediaTileKind } from "@/server/types";
 import type { SnapshotInvite } from "@/lib/use-workspace-snapshot";
 import { useLongAction } from "@/lib/use-long-action";
 import { useInvalidateDkgGraph } from "@/lib/use-dkg-graph";
@@ -82,14 +83,18 @@ export default function ConsentsPage() {
   const [reqError, setReqError] = useState<string | null>(null);
   const [reqLink, setReqLink] = useState<string | null>(null);
   const [reqCopied, setReqCopied] = useState(false);
+  // Kept across a failed request so Retry returns a link that may already
+  // have been created before a network response was lost.
+  const [reqAttemptKey, setReqAttemptKey] = useState<string | null>(null);
   const [reqNotice, setReqNotice] = useState<string | null>(null);
   const [copiedToken, setCopiedToken] = useState<string | null>(null);
   const [cancelConfirm, setCancelConfirm] = useState<string | null>(null);
   const [rowBusy, setRowBusy] = useState<string | null>(null);
-  // Revocation and renewal both await ledger writes (amendment / republished
-  // passport) plus permission re-evaluation, so they can legitimately
-  // outlast the default 30s browser budget - 120s with slow status and
-  // refresh-first recovery. The invite itself is database-only and keeps the
+  const [showArchivedRequests, setShowArchivedRequests] = useState(false);
+  // Revocation awaits ledger writes (amendment) plus permission
+  // re-evaluation, so it can legitimately outlast the default 30s browser
+  // budget - 120s with slow status and refresh-first recovery. Consent
+  // invites (including renewal requests) are database-only and keep the
   // normal timeout with no proof wording.
   const revokeAction = useLongAction({
     working: "Revoking permission…",
@@ -97,17 +102,12 @@ export default function ConsentsPage() {
     timedOut:
       "Revoking is taking longer than expected. Refresh this page once before retrying - the revocation may already have completed."
   });
-  const renewAction = useLongAction({
-    working: "Renewing permission…",
-    slow: "Still renewing and recording the change. Please keep this page open - proof services can take a little longer.",
-    timedOut:
-      "Renewal is taking longer than expected. Refresh this page once before retrying - the renewal may already have completed."
-  });
   const invalidateSnapshot = useInvalidateWorkspaceSnapshot();
   const invalidateDkgGraph = useInvalidateDkgGraph();
 
   function toggleList(setter: (v: string[]) => void, current: string[], value: string) {
     setter(current.includes(value) ? current.filter((x) => x !== value) : [...current, value]);
+    setReqAttemptKey(null);
     setReqError(null);
   }
 
@@ -131,6 +131,7 @@ export default function ConsentsPage() {
         setReqNotice(null);
       }
     }
+    setReqAttemptKey(null);
     setReqError(null);
   }
 
@@ -144,6 +145,7 @@ export default function ConsentsPage() {
     setReqTransforms([]);
     setReqExpiry("");
     setReqPurpose("");
+    setReqAttemptKey(null);
     setReqError(null);
     setReqNotice(null);
   }
@@ -166,7 +168,7 @@ export default function ConsentsPage() {
       return;
     }
     if (!reqPurpose.trim() || reqPurpose.trim().length > CONSENT_PURPOSE_MAX) {
-      setReqError(`Describe the campaign or use purpose (1–${CONSENT_PURPOSE_MAX} characters).`);
+      setReqError(`Describe the campaign or use purpose (1-${CONSENT_PURPOSE_MAX} characters).`);
       setReqStep(2);
       return;
     }
@@ -174,6 +176,8 @@ export default function ConsentsPage() {
     setReqError(null);
     setReqLink(null);
     setReqCopied(false);
+    const idempotencyKey = reqAttemptKey ?? crypto.randomUUID();
+    if (!reqAttemptKey) setReqAttemptKey(idempotencyKey);
     try {
       const j = await apiPost<{ token: string; url: string }>("/api/consents", {
         creatorId: reqCreatorId,
@@ -182,13 +186,24 @@ export default function ConsentsPage() {
         countries: reqCountries,
         allowedTransformations: reqTransforms,
         validUntil: reqExpiry,
-        purpose: reqPurpose.trim()
+        purpose: reqPurpose.trim(),
+        idempotencyKey
       });
       setReqLink(j.url);
       resetRequestForm();
+      setRequestOpen(false);
       await invalidateSnapshot();
     } catch (e) {
-      setReqError(e instanceof Error ? e.message : "Request creation failed. Your input is preserved.");
+      // A timeout can mean the server completed after the browser's
+      // 30-second budget. Reloading retrieves the durable request and link
+      // without making a second attempt.
+      setReqError(
+        e instanceof ApiError && e.status === 0
+          ? "Creating the link is taking longer than expected. Refresh this page to check whether the request was created."
+          : e instanceof Error
+            ? e.message
+            : "Request creation failed. Your input is preserved."
+      );
     } finally {
       setReqBusy(false);
     }
@@ -274,8 +289,12 @@ export default function ConsentsPage() {
       invalidateDkgGraph();
   }
 
+  // Renewal never extends a permission directly: this creates a fresh
+  // consent request prefilled from the old scope (same creator, media,
+  // platforms, territories, transformations; new expiry). The creator must
+  // approve it - the current permission stays unchanged until then.
   async function renew(id: string) {
-    if (busyId || renewAction.busy) return;
+    if (busyId) return;
     if (!/^\d{4}-\d{2}-\d{2}$/.test(renewDate)) {
       setRenewError("Pick a renewal date from the calendar.");
       return;
@@ -287,25 +306,35 @@ export default function ConsentsPage() {
     setRenewError(null);
     setNotice(null);
     setBusyId(id);
-    const result = await renewAction.execute(() =>
-      apiPost(`/api/passports/${id}/renew`, { validUntil: renewDate }, undefined, renewAction.timeoutMs)
-    );
-    setBusyId(null);
-    if (!result.ok) {
-      setRenewError(result.message ?? "Renewal failed. The date you picked is preserved.");
-      return;
+    try {
+      const j = await apiPost<{ token: string; url: string }>(`/api/passports/${id}/renew`, { validUntil: renewDate });
+      setNotice({
+        ok: true,
+        text: `Renewal consent request created - send the link to the creator. The current permission stays unchanged until they approve.`
+      });
+      setRenewFor(null);
+      setRenewDate("");
+      setReqLink(j.url);
+      setRequestOpen(true);
+      await invalidateSnapshot();
+    } catch (e) {
+      setRenewError(e instanceof Error ? e.message : "Renewal request failed. The date you picked is preserved.");
+    } finally {
+      setBusyId(null);
     }
-    setNotice({ ok: true, text: `Rights for ${id} renewed until ${renewDate} - status is active again.` });
-    setRenewFor(null);
-    setRenewDate("");
-    // Renewal republishes the passport Knowledge Asset: same treatment.
-    await invalidateSnapshot();
-    invalidateDkgGraph();
   }
 
   const revokeWarning = revokeTarget
     ? (warnings.find((w) => w.passportId === revokeTarget.id)?.affectedCampaigns.length ?? null)
     : null;
+  const archivedRequests = (invites ?? []).filter((invite) => {
+    const lifecycle = consentLifecycle(invite);
+    return lifecycle === "cancelled" || lifecycle === "expired";
+  });
+  const visibleRequests = (invites ?? []).filter((invite) => {
+    const lifecycle = consentLifecycle(invite);
+    return showArchivedRequests || (lifecycle !== "cancelled" && lifecycle !== "expired");
+  });
 
   return (
     <div className="pf-page space-y-6">
@@ -315,7 +344,15 @@ export default function ConsentsPage() {
           title="Creator permissions"
           description="Consent, territories, expiry, and permitted usage - who can appear, where, and for how long. Campaigns re-check automatically."
           actions={
-            <Button onClick={() => setRequestOpen((v) => !v)} aria-expanded={requestOpen} className="rounded-full bg-emerald-700 font-medium text-emerald-50 hover:bg-emerald-600 dark:bg-emerald-500 dark:text-emerald-950 dark:hover:bg-emerald-400">
+            <Button onClick={() => {
+              if (requestOpen) {
+                setRequestOpen(false);
+              } else {
+                setReqLink(null);
+                resetRequestForm();
+                setRequestOpen(true);
+              }
+            }} aria-expanded={requestOpen} className="rounded-full bg-emerald-700 font-medium text-emerald-50 hover:bg-emerald-600 dark:bg-emerald-500 dark:text-emerald-950 dark:hover:bg-emerald-400">
               {requestOpen ? "Close form" : "New consent request"}
             </Button>
           }
@@ -324,6 +361,27 @@ export default function ConsentsPage() {
       <FadeIn delay={0.02}>
         <RightsTabs />
       </FadeIn>
+
+      {reqLink && !requestOpen && (
+        <FadeIn>
+          <div role="status" className="rounded-2xl border border-emerald-200 bg-emerald-50 p-5 dark:border-emerald-900 dark:bg-emerald-950/40">
+            <h3 className="text-[15px] font-semibold tracking-tight text-emerald-950 dark:text-emerald-100">Consent link ready</h3>
+            <p className="mt-1 text-[12.5px] text-emerald-900/80 dark:text-emerald-100/75">Send this secure request link to the creator.</p>
+            <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl bg-background/60 px-3 py-2 ring-1 ring-emerald-800/15 dark:bg-black/10">
+              <Link href={reqLink} className="min-w-0 flex-1 truncate font-mono text-[12px] text-emerald-800 hover:underline dark:text-emerald-200">{reqLink}</Link>
+              <Button variant="outline" size="sm" onClick={() => void copyText(reqLink, () => setReqCopied(true))} className="h-7 rounded-full px-2.5 text-[11.5px]">
+                {reqCopied ? "Copied" : "Copy link"}
+              </Button>
+            </div>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Button size="sm" onClick={() => { setReqLink(null); resetRequestForm(); setRequestOpen(true); }} className="rounded-full bg-emerald-700 font-medium text-emerald-50 hover:bg-emerald-600 dark:bg-emerald-500 dark:text-emerald-950 dark:hover:bg-emerald-400">
+                New consent request
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => setReqLink(null)} className="rounded-full">Done</Button>
+            </div>
+          </div>
+        </FadeIn>
+      )}
 
       {requestOpen && (
         <FadeIn>
@@ -341,7 +399,9 @@ export default function ConsentsPage() {
                 </p>
                 {allMedia.length === 0 && (
                   <p className="mt-2 text-[12.5px] text-muted-foreground">
-                    No approved media yet - register source media first, then request consent against it.
+                    {allCreators.length === 0
+                      ? "This workspace has no creators yet - add one in the Media library, then register their media."
+                      : "No approved media yet - register source media first, then request consent against it."}
                   </p>
                 )}
                 <div className="mt-2 grid max-h-60 grid-cols-4 gap-2 overflow-y-auto rounded-xl border border-border bg-muted/30 p-2.5">
@@ -359,7 +419,21 @@ export default function ConsentsPage() {
                           selected ? "ring-2 ring-emerald-600" : "ring-border hover:ring-emerald-600/50"
                         )}
                       >
-                        {m.type === "image" ? (
+                        {mediaTileKind(m) === "private" && m.type === "image" ? (
+                          <span className="relative block h-44 w-full overflow-hidden bg-muted" title={`${m.title} (private workspace copy - workspace-only preview)`}>
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={`/api/media/${m.id}/preview`} alt={m.title} loading="lazy" className="h-44 w-full object-contain" />
+                            <span className="absolute left-1.5 top-1.5 flex items-center gap-1 rounded-full bg-black/70 px-2 py-0.5 text-[9.5px] font-medium text-white">
+                              <Lock className="h-3 w-3" aria-hidden /> Private upload
+                            </span>
+                          </span>
+                        ) : mediaTileKind(m) === "private" ? (
+                          <span className="grid h-44 w-full place-items-center bg-muted px-2 text-center" title={`${m.title} (private workspace copy - video previews are not available)`}>
+                            <span className="flex items-center gap-1.5 rounded-full bg-card px-3 py-1 text-[11px] font-medium text-muted-foreground ring-1 ring-border">
+                              <Lock className="h-3.5 w-3.5" aria-hidden /> Private workspace copy
+                            </span>
+                          </span>
+                        ) : m.type === "image" ? (
                           // eslint-disable-next-line @next/next/no-img-element
                           <img src={m.url} alt={m.title} loading="lazy" className="h-44 w-full bg-black/40 object-contain" />
                         ) : (
@@ -428,7 +502,7 @@ export default function ConsentsPage() {
                   label="Territories"
                   selected={reqCountries}
                   onToggle={(value) => toggleList(setReqCountries, reqCountries, value)}
-                  onClear={() => setReqCountries([])}
+                  onClear={() => { setReqCountries([]); setReqAttemptKey(null); }}
                 />
                 <div className="space-y-2">
                   <Label htmlFor={`${uid}-req-purpose`} className="text-[12px] text-muted-foreground">
@@ -438,7 +512,7 @@ export default function ConsentsPage() {
                     id={`${uid}-req-purpose`}
                     value={reqPurpose}
                     maxLength={CONSENT_PURPOSE_MAX + 20}
-                    onChange={(e) => { setReqPurpose(e.target.value); setReqError(null); }}
+                    onChange={(e) => { setReqPurpose(e.target.value); setReqAttemptKey(null); setReqError(null); }}
                     placeholder="Spring footwear launch across Instagram and TikTok."
                     className="h-9 rounded-md"
                   />
@@ -449,35 +523,29 @@ export default function ConsentsPage() {
                     id={`${uid}-req-expiry`}
                     value={reqExpiry}
                     min={new Date().toISOString().slice(0, 10)}
-                    onValueChange={(nextValue) => { setReqExpiry(nextValue); setReqError(null); }}
+                    onValueChange={(nextValue) => { setReqExpiry(nextValue); setReqAttemptKey(null); setReqError(null); }}
                   />
                 </div>
               </div>
             )}
             {reqStep === 3 && (
               <div className="mt-4 space-y-1.5 rounded-xl bg-muted/40 p-3 text-[12.5px] ring-1 ring-border">
-                <p><span className="text-muted-foreground">Creator: </span><span className="font-medium">{reqCreatorId ? creatorNameOf(reqCreatorId) : "—"}</span></p>
+                <p><span className="text-muted-foreground">Creator: </span><span className="font-medium">{reqCreatorId ? creatorNameOf(reqCreatorId) : "-"}</span></p>
                 <p><span className="text-muted-foreground">Media: </span>{reqMedia.length} asset{reqMedia.length === 1 ? "" : "s"}</p>
-                <p><span className="text-muted-foreground">Scope: </span>{reqPlatforms.join(", ") || "—"} · {reqCountries.join(", ") || "—"} · {reqTransforms.length > 0 ? reqTransforms.join(", ") : "display only"} · to {reqExpiry || "—"}</p>
-                <p><span className="text-muted-foreground">Purpose: </span>{reqPurpose.trim() || "—"}</p>
+                <p><span className="text-muted-foreground">Scope: </span>{reqPlatforms.join(", ") || "-"} · {reqCountries.join(", ") || "-"} · {reqTransforms.length > 0 ? reqTransforms.join(", ") : "display only"} · to {reqExpiry || "-"}</p>
+                <p><span className="text-muted-foreground">Purpose: </span>{reqPurpose.trim() || "-"}</p>
                 <p className="text-muted-foreground">Request link expires 14 days after sending. Scope is frozen once sent.</p>
               </div>
             )}
-            {reqError && <p role="alert" className="mt-3 break-words text-[12px] text-rose-600 dark:text-rose-300">{reqError}</p>}
-            {reqLink && (
-              <div role="status" className="mt-3 flex flex-wrap items-center gap-2 rounded-xl bg-emerald-50 px-4 py-3 ring-1 ring-emerald-200 dark:bg-emerald-950/40 dark:ring-emerald-900">
-                <Link href={reqLink} className="min-w-0 flex-1 truncate font-mono text-[12px] text-emerald-700 hover:underline dark:text-emerald-300">
-                  {reqLink}
-                </Link>
-                <Button variant="outline" size="sm" onClick={() => void copyText(reqLink, () => setReqCopied(true))} className="h-7 rounded-full px-2.5 text-[11.5px]">
-                  {reqCopied ? "Copied" : "Copy link"}
-                </Button>
+            {reqError && (
+              <div role="alert" className="mt-3 flex flex-wrap items-center gap-2 text-[12px] text-rose-600 dark:text-rose-300">
+                <p className="break-words">{reqError}</p>
+                {reqAttemptKey && reqStep === 3 && (
+                  <Button variant="outline" size="sm" onClick={() => window.location.reload()} disabled={reqBusy} className="h-7 rounded-full px-2.5 text-[11px]">
+                    Refresh page
+                  </Button>
+                )}
               </div>
-            )}
-            {reqLink && (
-              <p role="status" className="mt-2 text-[12px] font-medium text-emerald-800 dark:text-emerald-200">
-                Send this secure request link to the creator.
-              </p>
             )}
             <div className="mt-4 flex flex-wrap justify-end gap-2">
               {reqStep > 1 && (
@@ -531,9 +599,9 @@ export default function ConsentsPage() {
           </p>
         </FadeIn>
       )}
-      {(revokeAction.busy || renewAction.busy) && (revokeAction.status ?? renewAction.status) && (
+      {revokeAction.busy && revokeAction.status && (
         <p role="status" className="text-[13px] leading-relaxed text-muted-foreground">
-          {revokeAction.busy ? revokeAction.status : renewAction.status}
+          {revokeAction.status}
         </p>
       )}
       {loadError && <ErrorState message={loadError} onRetry={() => { void snapshot.refetch(); }} />}
@@ -578,7 +646,7 @@ export default function ConsentsPage() {
                 <span>{w.creatorName} · valid to {w.validUntil}</span>
                 <span className="font-mono text-[10.5px] opacity-70">{w.passportId}</span>
                 <Button variant="outline" size="sm" className="ml-auto h-7 rounded-full" onClick={() => { setRenewFor(w.passportId); setRenewDate(""); }}>
-                  Renew
+                  Request renewed consent
                 </Button>
               </div>
             ))}
@@ -617,7 +685,7 @@ export default function ConsentsPage() {
                         disabled={busyId !== null}
                         className="rounded-full"
                       >
-                        <CalendarClock className="h-3.5 w-3.5" aria-hidden /> {busyId === p.id ? "Working…" : "Renew"}
+                        <CalendarClock className="h-3.5 w-3.5" aria-hidden /> {busyId === p.id ? "Working…" : "Request renewed consent"}
                       </Button>
                     )}
                     {p.status === "active" && (
@@ -636,6 +704,10 @@ export default function ConsentsPage() {
                 </div>
                 {renewFor === p.id && (
                   <div className="mt-2 space-y-2 rounded-xl border border-dashed border-border p-3">
+                    <p className="text-[11.5px] leading-snug text-muted-foreground">
+                      Starts a fresh consent request prefilled from this permission. Nothing changes until the
+                      creator approves the new request.
+                    </p>
                     <div className="flex flex-wrap items-center gap-2">
                       <Label htmlFor={`${uid}-renew-${p.id}`} className="text-[12px] text-muted-foreground">New expiry date</Label>
                       <DatePicker
@@ -651,10 +723,10 @@ export default function ConsentsPage() {
                         onClick={() => renew(p.id)}
                         disabled={busyId !== null || !renewDate}
                         aria-busy={busyId === p.id}
-                        title={!renewDate ? "Pick a future date to enable renewal" : undefined}
+                        title={!renewDate ? "Pick a future date to enable the request" : undefined}
                         className="h-9 rounded-lg bg-emerald-700 font-medium text-emerald-50 hover:bg-emerald-600 dark:bg-emerald-500 dark:text-emerald-950 dark:hover:bg-emerald-400"
                       >
-                        {busyId === p.id ? "Renewing…" : "Confirm renewal"}
+                        {busyId === p.id ? "Requesting…" : "Send renewal request"}
                       </Button>
                       <Button variant="ghost" size="sm" onClick={() => { setRenewFor(null); setRenewError(null); }} disabled={busyId !== null} className="h-9 rounded-lg">
                         Cancel
@@ -670,9 +742,33 @@ export default function ConsentsPage() {
 
       {/* Consent requests */}
       <section>
-        <h2 className="mb-3 text-[15px] font-semibold tracking-tight">Consent requests</h2>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-[15px] font-semibold tracking-tight">Consent requests</h2>
+          {archivedRequests.length > 0 && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setShowArchivedRequests((shown) => !shown)}
+              aria-expanded={showArchivedRequests}
+              className="rounded-full"
+            >
+              {showArchivedRequests ? "Hide archived" : `Show archived (${archivedRequests.length})`}
+            </Button>
+          )}
+        </div>
+        {!showArchivedRequests && archivedRequests.length > 0 && (
+          <p className="mb-3 text-[12px] text-muted-foreground">
+            Cancelled and expired requests are kept as audit history. Show archived to review or replace them.
+          </p>
+        )}
+        {visibleRequests.length === 0 && invites !== null && (
+          <p className="rounded-xl border border-dashed border-border px-4 py-3 text-[12.5px] text-muted-foreground">
+            No active consent requests. Archived requests remain available for audit and replacement.
+          </p>
+        )}
         <Stagger className="space-y-3">
-          {(invites ?? []).map((invite) => {
+          {visibleRequests.map((invite) => {
             const lifecycle = consentLifecycle(invite);
             const mediaIds = invite.draft.sourceMediaIds ?? [];
             const legacyMedia = mediaIds.length === 0;
@@ -691,7 +787,7 @@ export default function ConsentsPage() {
                       <StatusBadge status={lifecycle} />
                       {legacyMedia && (
                         <span className="rounded-full bg-muted px-2 py-0.5 text-[10.5px] font-medium text-muted-foreground ring-1 ring-border">
-                          Legacy request — no media was attached.
+                          Legacy request - no media was attached.
                         </span>
                       )}
                       {invite.replacedBy && (
@@ -701,7 +797,11 @@ export default function ConsentsPage() {
                     {thumbs.length > 0 && (
                       <div className="mt-2 flex gap-1.5">
                         {thumbs.map((m) => (
-                          m.type === "image" ? (
+                          m.source === "upload" ? (
+                            <span key={m.id} title={`${m.title} (private upload - no public preview)`} className="grid h-11 w-11 place-items-center rounded-lg bg-muted font-mono text-[9px] text-muted-foreground ring-1 ring-border">
+                              private
+                            </span>
+                          ) : m.type === "image" ? (
                             // eslint-disable-next-line @next/next/no-img-element
                             <img key={m.id} src={m.url} alt={m.title} loading="lazy" title={m.title} className="h-11 w-11 rounded-lg object-cover ring-1 ring-border" />
                           ) : (

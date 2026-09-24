@@ -1,6 +1,7 @@
 import type {
   Campaign,
   CampaignCaption,
+  Creator,
   Database,
   PermissionPassport,
   Platform,
@@ -11,10 +12,17 @@ import type {
 } from "./types";
 import { CAPABILITY_PRICE_MAP, hasSharableReceipt } from "./types";
 import { loadDb, loadWorkspaceDb, newId, nowIso, sha256, updateDb, updateWorkspaceDb } from "./store";
+import { requireCurrentSession } from "./auth";
+import { UPLOAD_TITLE_MAX, sha256Bytes, validateUploadFile } from "./source-upload";
+import { isCloudinaryConfigured, uploadPrivateSource } from "./cloudinary";
+import { uploadReference } from "./types";
 import { preflightEvent } from "./campaign-status";
 import { getDkg } from "./dkg";
 import { amendmentKa, passportKa, productFactsKa, sourceMediaKa } from "./dkg/schemas";
 import { preflight } from "./policy/engine";
+import { validateRenewalAttestation } from "./policy/authorization";
+import { CONSENT_PURPOSE_MAX } from "./consent-validation";
+import { IDEMPOTENCY_KEY_PATTERN, withIdempotencyLock } from "./idempotency";
 
 /**
  * Platform services around the core production workflow -
@@ -78,6 +86,83 @@ export async function upsertProductFacts(input: {
   return { ...facts, ual };
 }
 
+/* --------------------------------- creators -------------------------------- */
+
+export const CREATOR_NAME_MAX = 80;
+const CREATOR_HANDLE_PATTERN = /^@?[A-Za-z0-9_.\-]{1,40}$/;
+
+export interface CreatorInput {
+  name?: unknown;
+  handle?: unknown;
+}
+
+/**
+ * Validate a new workspace creator record. A creator is a workspace-local
+ * label for who appears in registered media - creating one performs no
+ * identity check and proves no legal ownership; only a creator-attested
+ * consent link creates a permission. Pure (no session, no I/O) so the
+ * onboarding path is unit-testable.
+ */
+export function validateCreatorInput(
+  body: CreatorInput
+): { ok: true; value: { name: string; handle: string } } | { ok: false; error: string } {
+  const fail = (error: string): { ok: false; error: string } => ({ ok: false, error });
+  const name = typeof body.name === "string" ? body.name.trim() : "";
+  if (!name) return fail("Give the creator a name so media and requests can attach to them.");
+  if (name.length > CREATOR_NAME_MAX) {
+    return fail(`Creator name must be ${CREATOR_NAME_MAX} characters or fewer.`);
+  }
+  const handle = typeof body.handle === "string" ? body.handle.trim() : "";
+  if (handle && !CREATOR_HANDLE_PATTERN.test(handle)) {
+    return fail("Handle may only contain letters, numbers, and @ _ . - (40 characters or fewer).");
+  }
+  return { ok: true, value: { name, handle } };
+}
+
+/**
+ * Create a creator in the caller's workspace. Session-scoped via loadDb /
+ * updateDb (the workspace comes from the session cookie, never from client
+ * input). Database-only - no proof publication, no identity verification.
+ */
+export async function createCreator(input: CreatorInput): Promise<Creator> {
+  await loadDb();
+  const validated = validateCreatorInput(input);
+  if (!validated.ok) throw new Error(validated.error);
+  const creator: Creator = { id: newId("crt"), name: validated.value.name, handle: validated.value.handle };
+  await updateDb((d) => {
+    d.creators.push(creator);
+    d.events.push({
+      id: newId("evt"),
+      at: nowIso(),
+      kind: "creator.added",
+      summary: `Creator "${creator.name}" added.`,
+      refs: [creator.id]
+    });
+  });
+  return creator;
+}
+
+/**
+ * Resolve the explicit creator for a media registration. The caller must
+ * name a creator id - an empty or unknown id fails, and the server never
+ * falls back to the first workspace record (which would silently attach
+ * media to a creator the user did not choose). Pure (no session, no I/O).
+ */
+export function resolveMediaCreator(
+  db: Database,
+  creatorId: unknown
+): { ok: true; value: Creator } | { ok: false; error: string } {
+  const id = typeof creatorId === "string" ? creatorId : "";
+  if (!id) {
+    return { ok: false, error: "Choose a creator for this asset - add one in the Media library first." };
+  }
+  const creator = db.creators.find((c) => c.id === id);
+  if (!creator) {
+    return { ok: false, error: "The chosen creator no longer exists - pick another one." };
+  }
+  return { ok: true, value: creator };
+}
+
 /* ---------------------------------- media --------------------------------- */
 
 export async function registerSourceMedia(input: {
@@ -107,6 +192,76 @@ export async function registerSourceMedia(input: {
       at: nowIso(),
       kind: "media.registered",
       summary: `Source media "${media.title}" registered.`,
+      refs: [media.id]
+    });
+  });
+  return { ...media, ual };
+}
+
+/**
+ * Register an uploaded original as a private workspace source copy.
+ * Session-scoped (workspace comes from the session, creator must exist in
+ * it); bytes are validated, hashed, and stored with restricted Cloudinary
+ * delivery. No public proof content is created - the DKG record carries the
+ * byte hash and storage classification only. The existing public-URL path
+ * (registerSourceMedia) is unchanged.
+ */
+export async function registerUploadedSourceMedia(input: {
+  creatorId: unknown;
+  title?: unknown;
+  bytes: unknown;
+  mimeType?: unknown;
+  filename?: unknown;
+}): Promise<SourceMedia> {
+  const session = await requireCurrentSession();
+  const db = await loadDb();
+  const resolved = resolveMediaCreator(db, input.creatorId);
+  if (!resolved.ok) throw new Error(resolved.error);
+  const creator = resolved.value;
+  const validated = validateUploadFile({ bytes: input.bytes, mimeType: input.mimeType, filename: input.filename });
+  if (!validated.ok) throw new Error(validated.error);
+  const v = validated.value;
+  if (!isCloudinaryConfigured()) {
+    throw new Error("Upload storage is not configured - ask the workspace owner to connect durable storage first.");
+  }
+  const rawTitle = typeof input.title === "string" ? input.title.trim() : "";
+  const title = (rawTitle || v.title).slice(0, UPLOAD_TITLE_MAX);
+  const publicId = newId("src");
+  const stored = await uploadPrivateSource({
+    bytes: v.bytes,
+    workspaceId: session.workspaceId,
+    resourceType: v.kind,
+    publicId
+  });
+  const media: SourceMedia = {
+    id: newId("media"),
+    creatorId: creator.id,
+    title,
+    type: v.kind,
+    url: uploadReference(stored.publicId),
+    hash: sha256Bytes(v.bytes),
+    source: "upload",
+    storage: {
+      provider: "cloudinary",
+      publicId: stored.publicId,
+      resourceType: stored.resourceType,
+      format: stored.format,
+      bytes: stored.bytes
+    }
+  };
+  let ual: string | undefined;
+  try {
+    ual = (await getDkg().publish(sourceMediaKa(media), "private")).ual;
+  } catch {
+    // keep the record locally if publication fails
+  }
+  await updateDb((d) => {
+    d.sourceMedia.push({ ...media, ual });
+    d.events.push({
+      id: newId("evt"),
+      at: nowIso(),
+      kind: "media.registered",
+      summary: `Source media "${media.title}" uploaded as a private workspace copy.`,
       refs: [media.id]
     });
   });
@@ -149,33 +304,78 @@ export async function createConsentRequest(input: {
   validUntil: string;
   purpose: string;
   replacesToken?: string;
+  /** Stable client retry key. A repeated submission returns the original link. */
+  idempotencyKey?: string;
 }): Promise<{ token: string; creatorId: string }> {
-  const db = await loadDb();
-  // Replacement clones the superseded row's creator, scope, and purpose -
-  // the caller sends only the old token; a fresh link lifetime applies.
-  const effective = input.replacesToken
-    ? (() => {
-        const old = db.consentInvites.find((i) => i.token === input.replacesToken);
-        if (!old) throw new Error("Request to replace was not found.");
-        return {
-          creatorId: old.creatorId,
-          sourceMediaIds: old.draft.sourceMediaIds ?? [],
-          platforms: old.draft.platforms,
-          countries: old.draft.countries,
-          allowedTransformations: old.draft.allowedTransformations,
-          validUntil: old.draft.validUntil,
-          purpose: old.purpose ?? ""
-        };
-      })()
-    : input;
-  const validated = validateConsentRequest(effective, db);
-  if (!validated.ok) throw new Error(validated.error);
-  const v = validated.value;
-  const creator = db.creators.find((c) => c.id === v.creatorId);
-  if (!creator) throw new Error("Creator not found - the selected media has no known creator.");
+  const key = input.idempotencyKey?.trim();
+  if (key && !IDEMPOTENCY_KEY_PATTERN.test(key)) {
+    throw new Error("Request retry key is invalid - refresh the form and try again.");
+  }
+  const session = await requireCurrentSession();
+  if (!key) return createConsentRequestUnlocked(input, session.workspaceId);
+  return withIdempotencyLock(
+    `consent-create:${session.workspaceId}:${key}`,
+    () => createConsentRequestUnlocked(input, session.workspaceId, key)
+  );
+}
+
+async function createConsentRequestUnlocked(input: {
+  creatorId: string;
+  sourceMediaIds: string[];
+  platforms: Platform[];
+  countries: string[];
+  allowedTransformations: Transformation[];
+  validUntil: string;
+  purpose: string;
+  replacesToken?: string;
+  idempotencyKey?: string;
+}, workspaceId: string, idempotencyKey?: string): Promise<{ token: string; creatorId: string }> {
   const today = new Date().toISOString().slice(0, 10);
-  const token = newId("invite");
-  await updateDb((d) => {
+  let outcome: { token: string; creatorId: string } | null = null;
+  await updateWorkspaceDb(workspaceId, (d) => {
+    // Replacement clones the superseded row's creator, scope, and purpose -
+    // the caller sends only the old token; a fresh link lifetime applies.
+    const effective = input.replacesToken
+      ? (() => {
+          const old = d.consentInvites.find((i) => i.token === input.replacesToken);
+          if (!old) throw new Error("Request to replace was not found.");
+          return {
+            creatorId: old.creatorId,
+            sourceMediaIds: old.draft.sourceMediaIds ?? [],
+            platforms: old.draft.platforms,
+            countries: old.draft.countries,
+            allowedTransformations: old.draft.allowedTransformations,
+            validUntil: old.draft.validUntil,
+            purpose: old.purpose ?? ""
+          };
+        })()
+      : input;
+    const validated = validateConsentRequest(effective, d);
+    if (!validated.ok) throw new Error(validated.error);
+    const v = validated.value;
+    const fingerprint = sha256(JSON.stringify({
+      creatorId: v.creatorId,
+      sourceMediaIds: [...v.sourceMediaIds].sort(),
+      platforms: [...v.platforms].sort(),
+      countries: [...v.countries].sort(),
+      allowedTransformations: [...v.allowedTransformations].sort(),
+      validUntil: v.validUntil,
+      purpose: v.purpose,
+      replacesToken: input.replacesToken ?? ""
+    }));
+    if (idempotencyKey) {
+      const prior = d.consentInvites.find((invite) => invite.creationKey === idempotencyKey);
+      if (prior) {
+        if (prior.creationFingerprint !== fingerprint) {
+          throw new Error("This retry belongs to different request details - review the form and create a new request.");
+        }
+        outcome = { token: prior.token, creatorId: prior.creatorId };
+        return;
+      }
+    }
+    const creator = d.creators.find((c) => c.id === v.creatorId);
+    if (!creator) throw new Error("Creator not found - the selected media has no known creator.");
+    const token = newId("invite");
     if (input.replacesToken) {
       const old = d.consentInvites.find((i) => i.token === input.replacesToken);
       if (!old) throw new Error("Request to replace was not found.");
@@ -200,6 +400,7 @@ export async function createConsentRequest(input: {
       },
       status: "pending",
       purpose: v.purpose,
+      ...(idempotencyKey ? { creationKey: idempotencyKey, creationFingerprint: fingerprint } : {}),
       linkExpiresAt: addDays(today, CONSENT_LINK_LIFETIME_DAYS),
       createdAt: nowIso(),
       version: 1
@@ -211,8 +412,10 @@ export async function createConsentRequest(input: {
       summary: `Consent request created for ${creator.name} (${v.platforms.join(", ")} · ${v.countries.join(", ")} · ${v.sourceMediaIds.length} asset${v.sourceMediaIds.length === 1 ? "" : "s"}).`,
       refs: [v.creatorId]
     });
-  });
-  return { token, creatorId: v.creatorId };
+    outcome = { token, creatorId: v.creatorId };
+  }, { mirror: false });
+  if (!outcome) throw new Error("Consent request could not be created.");
+  return outcome;
 }
 
 /**
@@ -220,13 +423,8 @@ export async function createConsentRequest(input: {
  * (revocation / fresh requests are the controls); cancelled rows stay for
  * audit and can be replaced.
  */
-export async function cancelConsentRequest(token: string): Promise<void> {
-  const db = await loadDb();
-  const invite = db.consentInvites.find((i) => i.token === token);
-  if (!invite) throw new Error("Consent request not found.");
-  const guard = cancelGuard(consentLifecycle(invite));
-  if (!guard.ok) throw new Error(guard.error);
-  await updateDb((d) => {
+export async function cancelConsentRequestInWorkspace(token: string, workspaceId: string): Promise<void> {
+  await updateWorkspaceDb(workspaceId, (d) => {
     const row = d.consentInvites.find((i) => i.token === token);
     if (!row) throw new Error("Consent request not found.");
     const inner = cancelGuard(consentLifecycle(row));
@@ -239,7 +437,13 @@ export async function cancelConsentRequest(token: string): Promise<void> {
       summary: `Consent request for ${row.creatorId} cancelled by the agency.`,
       refs: [row.creatorId]
     });
-  });
+  }, { mirror: false });
+}
+
+/** Session-scoped convenience for in-app callers. */
+export async function cancelConsentRequest(token: string): Promise<void> {
+  const session = await requireCurrentSession();
+  return cancelConsentRequestInWorkspace(token, session.workspaceId);
 }
 
 /* ----------------- sessionless consent lifecycle writes ----------------- */
@@ -396,18 +600,83 @@ export async function revokePassport(passportId: string, note: string): Promise<
   return { revoked: true, blockedCampaigns: blocked };
 }
 
-export async function renewPassport(passportId: string, validUntil: string): Promise<PermissionPassport | undefined> {
+/**
+ * Build a renewal consent-request input prefilled from an existing
+ * permission. Pure and testable: the old passport row is never modified,
+ * nothing is extended, and no attestation is fabricated - the creator must
+ * still approve the new request before anything renews. The caller sends
+ * the result through createConsentRequest (which re-validates everything).
+ */
+export function buildRenewalConsentInput(
+  passport: PermissionPassport,
+  validUntil: string,
+  today: string = new Date().toISOString().slice(0, 10)
+):
+  | {
+      ok: true;
+      input: {
+        creatorId: string;
+        sourceMediaIds: string[];
+        platforms: Platform[];
+        countries: string[];
+        allowedTransformations: Transformation[];
+        validUntil: string;
+        purpose: string;
+      };
+    }
+  | { ok: false; error: string } {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(validUntil)) {
+    return { ok: false, error: "validUntil must be YYYY-MM-DD" };
+  }
+  if (validUntil <= today) {
+    return { ok: false, error: "Renewal must extend into the future - pick a date after today." };
+  }
+  if (passport.sourceMediaIds.length === 0) {
+    return { ok: false, error: "This permission names no approved media - create a new consent request manually." };
+  }
+  const suffix = ` (replaces permission ${passport.id}).`;
+  const headroom = CONSENT_PURPOSE_MAX - "Renewed permission for ".length - suffix.length;
+  const name = passport.creatorName.trim().slice(0, Math.max(1, headroom));
+  return {
+    ok: true,
+    input: {
+      creatorId: passport.creatorId,
+      sourceMediaIds: [...passport.sourceMediaIds],
+      platforms: [...passport.platforms],
+      countries: [...passport.countries],
+      allowedTransformations: [...passport.allowedTransformations],
+      validUntil,
+      purpose: `Renewed permission for ${name}${suffix}`
+    }
+  };
+}
+/**
+ * Extend a permission passport's expiry ONLY with a fresh creator
+ * attestation from a new consent flow. The agency must never extend
+ * consent by itself: without a supplied consentedAt + declaration this
+ * refuses instead of republishing, and the stored declaration is always
+ * the creator's own words - never agency-appended renewal text. No UI
+ * flow calls this directly anymore; renewal goes through a fresh consent
+ * request (buildRenewalConsentInput) that the creator must approve.
+ */
+export async function renewPassport(
+  passportId: string,
+  validUntil: string,
+  attestation?: { consentedAt: string; declaration: string }
+): Promise<PermissionPassport | undefined> {
   const db = await loadDb();
   const passport = db.passports.find((p) => p.id === passportId);
   if (!passport) return undefined;
+  const gated = validateRenewalAttestation(attestation);
+  if (!gated.ok) throw new Error(gated.error);
   const renewed: PermissionPassport = {
     ...passport,
     validUntil,
     status: "active",
     attestation: {
-      ...passport.attestation,
-      consentedAt: nowIso(),
-      declaration: `${passport.attestation.declaration} Renewed through PermitFrame on ${nowIso().slice(0, 10)} until ${validUntil}.`
+      method: "creator-consent-link",
+      consentedAt: gated.attestation.consentedAt,
+      declaration: gated.attestation.declaration
     }
   };
   let ual = passport.ual;

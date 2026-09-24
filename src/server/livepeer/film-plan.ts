@@ -101,7 +101,7 @@ export function validateFilmPlan(raw: unknown): FilmPlanValidation {
   if (typeof raw !== "object" || raw === null) return { ok: false, error: "Film plan must be an object." };
   const v = raw as Record<string, unknown>;
   if (v.mode === "short_clip") {
-    return { ok: false, error: "Short clips are planned with the 3–15 second picker - film planning saves campaign-film plans." };
+    return { ok: false, error: "Short clips are planned with the 3-15 second picker - film planning saves campaign-film plans." };
   }
   if (v.mode !== "campaign_film") {
     return { ok: false, error: "Film plan mode must be short_clip or campaign_film." };
@@ -157,10 +157,10 @@ export function validateFilmPlan(raw: unknown): FilmPlanValidation {
     }
     const duration = s.durationSeconds;
     if (typeof duration !== "number" || !Number.isFinite(duration) || !Number.isInteger(duration)) {
-      return { ok: false, error: `Scene ${label}: duration must be a whole number of seconds (3–15).` };
+      return { ok: false, error: `Scene ${label}: duration must be a whole number of seconds (3-15).` };
     }
     if (duration < FILM_SCENE_MIN_SECONDS || duration > FILM_SCENE_MAX_SECONDS) {
-      return { ok: false, error: `Scene ${label}: duration must be 3–15 seconds - one short shot, never a long render.` };
+      return { ok: false, error: `Scene ${label}: duration must be 3-15 seconds - one short shot, never a long render.` };
     }
     const beat = typeof s.title === "string" ? s.title.trim() : "";
     if (!beat) return { ok: false, error: `Scene ${i + 1} needs a concise story beat.` };
@@ -327,7 +327,7 @@ export function describeSceneGaps(
     scene.durationSeconds < FILM_SCENE_MIN_SECONDS ||
     scene.durationSeconds > FILM_SCENE_MAX_SECONDS
   ) {
-    gaps.push("a valid duration (3–15 seconds)");
+    gaps.push("a valid duration (3-15 seconds)");
   }
   if (scene.visualDirection.trim() === "") gaps.push("visual direction");
   if (scene.sourceIntent.trim() === "") gaps.push("a scene direction note");
@@ -383,9 +383,9 @@ export function describeFilmDurationMismatch(total: number, target: FilmTargetDu
   const diff = Math.abs(target - total);
   const unit = diff === 1 ? "second" : "seconds";
   if (total < target) {
-    return `${total} of ${target} seconds planned — add ${diff} ${unit} across scenes or add another scene.`;
+    return `${total} of ${target} seconds planned - add ${diff} ${unit} across scenes or add another scene.`;
   }
-  return `${total} of ${target} seconds planned — reduce ${diff} ${unit} across scenes to match the ${target}-second target.`;
+  return `${total} of ${target} seconds planned - reduce ${diff} ${unit} across scenes to match the ${target}-second target.`;
 }
 
 function renumberFilmScenes(scenes: FilmScene[]): FilmScene[] {
@@ -570,7 +570,7 @@ export function describeLegacyShortClipSeconds(value: unknown): string | null {
   const n = typeof value === "string" ? Number(value) : value;
   if (typeof n === "number" && Number.isInteger(n) && n >= 3 && n <= 15) return null;
   const label = typeof n === "number" && Number.isFinite(n) ? String(n) : String(value);
-  return `Legacy setting: ${label}s is not supported for one short clip. Choose 3–15 seconds to update this plan.`;
+  return `Legacy setting: ${label}s is not supported for one short clip. Choose 3-15 seconds to update this plan.`;
 }
 
 /**

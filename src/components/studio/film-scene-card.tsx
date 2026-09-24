@@ -127,7 +127,7 @@ export function FilmSceneCard({
               />
             </label>
             <label className="block">
-              <span className="text-[11px] font-medium text-muted-foreground">Seconds (3–15)</span>
+              <span className="text-[11px] font-medium text-muted-foreground">Seconds (3-15)</span>
               <input
                 type="number"
                 min={3}

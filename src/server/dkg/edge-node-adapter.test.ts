@@ -1,6 +1,7 @@
-import { describe, it } from "node:test";
+import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { isDkgUnavailable, parseCliTable, redactSecrets } from "./edge-node-adapter";
+import { EdgeNodeAdapter, isDkgUnavailable, parseCliTable, redactSecrets } from "./edge-node-adapter";
+import type { CliTransport } from "./transports";
 
 describe("parseCliTable", () => {
   it("parses data rows and drops the trailing count summary", () => {
@@ -49,5 +50,68 @@ describe("isDkgUnavailable", () => {
     assert.ok(!isDkgUnavailable("idempotencyKey must be 1-128 chars"));
     assert.ok(!isDkgUnavailable("Campaign not found"));
     assert.ok(!isDkgUnavailable(""));
+  });
+});
+
+const savedCg = process.env.DKG_CONTEXT_GRAPH_ID;
+
+describe("listPassports source-media binding", () => {
+  before(() => {
+    // Skip context-graph resolution: the canned id is used verbatim.
+    process.env.DKG_CONTEXT_GRAPH_ID = "test-graph";
+  });
+
+  after(() => {
+    if (savedCg === undefined) delete process.env.DKG_CONTEXT_GRAPH_ID;
+    else process.env.DKG_CONTEXT_GRAPH_ID = savedCg;
+  });
+
+  it("aggregates multiple pf:sourceMedia rows into distinct media ids", async () => {
+    const queries: string[][] = [];
+    const transport: CliTransport = {
+      run: async (args: string[]) => {
+        queries.push(args);
+        const header = [
+          "passport",
+          "creatorId",
+          "creatorName",
+          "platform",
+          "country",
+          "transformation",
+          "status",
+          "validFrom",
+          "validUntil",
+          "attestedAt",
+          "declaration",
+          "sourceMedia"
+        ].join("   ");
+        const row = (transformation: string, media: string) =>
+          [
+            "urn:permitframe:passport:pp1",
+            "c1",
+            "Creator",
+            "instagram",
+            "GR",
+            transformation,
+            "active",
+            "2026-01-01",
+            "2027-01-01",
+            "2026-01-01",
+            "ok",
+            media
+          ].join("   ");
+        return [
+          header,
+          "─".repeat(header.length),
+          row("edit", "urn:permitframe:media:m1"),
+          row("animate", "urn:permitframe:media:m2"),
+          "2 row(s)"
+        ].join("\n");
+      }
+    };
+    const passports = await new EdgeNodeAdapter(transport).listPassports("c1");
+    assert.equal(passports.length, 1);
+    assert.deepEqual(passports[0].sourceMediaIds, ["m1", "m2"]);
+    assert.deepEqual(passports[0].allowedTransformations, ["edit", "animate"]);
   });
 });

@@ -5,11 +5,15 @@ import { FadeIn, Marquee } from "@/components/motion-primitives";
 import { PermitFrameMark } from "@/components/logo";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { WorkspaceCta } from "@/components/workspace-cta";
+import { QueryProvider } from "@/components/query-provider";
+import { PermitFramePrivyProvider } from "@/components/privy-provider";
 import { HowItWorks, PlatformFeatures, PolicyScenarios } from "@/components/landing/landing-sections";
 
 export default function LandingPage() {
   return (
-    <div className="pf-page min-h-screen bg-background text-foreground dark:bg-[#0b0f0e] dark:text-white">
+    <QueryProvider>
+      <PermitFramePrivyProvider>
+        <div className="pf-page min-h-screen bg-background text-foreground dark:bg-[#0b0f0e] dark:text-white">
       {/* Header - same dark backdrop, blur over content */}
       <header className="fixed inset-x-0 top-0 z-50 border-b border-border bg-background/80 backdrop-blur-md dark:border-white/5 dark:bg-[#0b0f0e]/80">
         <div className="mx-auto flex h-14 w-full max-w-6xl items-center justify-between gap-2 px-4 sm:px-6">
@@ -23,8 +27,12 @@ export default function LandingPage() {
             <a href="#how" className="transition hover:text-foreground dark:hover:text-white">How it works</a>
             <a href="#policy" className="transition hover:text-foreground dark:hover:text-white">Policy</a>
             <a href="#features" className="transition hover:text-foreground dark:hover:text-white">Platform</a>
+            <Link href="/docs" className="transition hover:text-foreground dark:hover:text-white">Docs</Link>
           </nav>
           <div className="flex shrink-0 items-center gap-2">
+            <Link href="/docs" className="inline-flex rounded-full px-2.5 py-2 text-[13px] font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground md:hidden dark:text-white/70 dark:hover:bg-white/10 dark:hover:text-white">
+              Docs
+            </Link>
             <ThemeToggle />
             <WorkspaceCta label="Open campaigns" className="rounded-full bg-emerald-400 font-medium text-emerald-950 hover:bg-emerald-300" />
           </div>
@@ -116,6 +124,8 @@ export default function LandingPage() {
           </p>
         </div>
       </footer>
-    </div>
+        </div>
+      </PermitFramePrivyProvider>
+    </QueryProvider>
   );
 }

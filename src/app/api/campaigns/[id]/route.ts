@@ -64,16 +64,16 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
     jobs: (normalized.campaign.jobs ?? []).map((j) => ({
       ...j,
       ...(typeof j.error === "string"
-        ? { error: scrubStoredText(j.error, "This step failed — diagnostic detail was withheld. Retry the stage.") }
+        ? { error: scrubStoredText(j.error, "This step failed - diagnostic detail was withheld. Retry the stage.") }
         : {}),
       ...(typeof j.lastTransientError === "string"
-        ? { lastTransientError: scrubStoredText(j.lastTransientError, "Submit hiccup — retrying automatically.") }
+        ? { lastTransientError: scrubStoredText(j.lastTransientError, "Submit hiccup - retrying automatically.") }
         : {})
     })),
     runs: (normalized.campaign.runs ?? []).map((r) => ({
       ...r,
       ...(typeof r.note === "string"
-        ? { note: scrubStoredText(r.note, "Run finished — diagnostic detail was withheld.") }
+        ? { note: scrubStoredText(r.note, "Run finished - diagnostic detail was withheld.") }
         : {})
     }))
   };

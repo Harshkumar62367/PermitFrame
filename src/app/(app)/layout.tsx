@@ -3,6 +3,8 @@ import { getCurrentSession } from "@/server/auth";
 import { AppAccessGate } from "@/components/app-access-gate";
 import { WorkspaceBridge } from "@/components/workspace/workspace-bridge";
 import { AppShell } from "@/components/app-shell";
+import { QueryProvider } from "@/components/query-provider";
+import { PermitFramePrivyProvider } from "@/components/privy-provider";
 
 /**
  * Protected route group: the existing HttpOnly PermitFrame session is
@@ -15,10 +17,14 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   if (!session) redirect("/");
 
   return (
-    <AppAccessGate>
-      <WorkspaceBridge>
-        <AppShell>{children}</AppShell>
-      </WorkspaceBridge>
-    </AppAccessGate>
+    <QueryProvider>
+      <PermitFramePrivyProvider>
+        <AppAccessGate>
+          <WorkspaceBridge>
+            <AppShell>{children}</AppShell>
+          </WorkspaceBridge>
+        </AppAccessGate>
+      </PermitFramePrivyProvider>
+    </QueryProvider>
   );
 }

@@ -287,10 +287,10 @@ export function FilmPanel({ vm, allowed, campaignId, campaign, onChanged }: Film
               className="cursor-not-allowed rounded-full px-3 py-1.5 text-[12px] text-muted-foreground ring-1 ring-border"
             >
               {kind === "narration"
-                ? "Narration — after delivery"
+                ? "Narration - after delivery"
                 : kind === "subtitles"
-                  ? "Burned captions — after delivery"
-                  : "Music — not available yet"}
+                  ? "Burned captions - after delivery"
+                  : "Music - not available yet"}
             </span>
           ))}
         </div>

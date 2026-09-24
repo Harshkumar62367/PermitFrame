@@ -18,6 +18,23 @@ export const PF_CONTEXT: Record<string, string> = {
   xsd: "http://www.w3.org/2001/XMLSchema#"
 };
 
+/** Source-media URN prefix for KA references (`pf:sourceMedia` values). */
+export const MEDIA_URN_PREFIX = "urn:permitframe:media:";
+
+/**
+ * Reduce a pf:sourceMedia reference to its bare media id. Accepts the
+ * canonical URN (optionally wrapped in angle brackets, as CLI tables may
+ * render); anything else returns null so unknown references never
+ * authorize - callers fail closed on unparseable values.
+ */
+export function mediaIdFromUrn(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const urn = value.trim().replace(/^<|>$/g, "");
+  if (!urn.startsWith(MEDIA_URN_PREFIX)) return null;
+  const id = urn.slice(MEDIA_URN_PREFIX.length);
+  return id.length > 0 ? id : null;
+}
+
 export interface KaEnvelope {
   name: string;
   content: Record<string, unknown>;
@@ -75,18 +92,23 @@ export function productFactsKa(facts: ProductFacts): KaEnvelope {
 
 /** Knowledge Asset 3: Source Media Record (reference + hash, never the bytes). */
 export function sourceMediaKa(media: SourceMedia): KaEnvelope {
+  const uploaded = media.source === "upload";
   return {
     name: `permitframe-source-media-${media.id}`,
     content: {
       "@context": PF_CONTEXT,
       "@id": `urn:permitframe:media:${media.id}`,
       "@type": "PermitFrameSourceMedia",
-      "schema:name": media.title,
+      "schema:name": `Permission Passport - ${media.title}`,
       "pf:creatorId": media.creatorId,
       "pf:mediaType": media.type,
-      "pf:referenceUrl": media.url,
-      // Reference-URL fingerprint for registry correlation - not a byte hash
-      // of the media (source bytes stay with the creator by design).
+      // URL registrations publish the reference URL. Uploaded originals are
+      // private workspace copies: no reference URL, public id, or delivery
+      // URL ever enters the record - only the byte hash and the storage
+      // classification. The asset stays private either way.
+      ...(uploaded ? { "pf:storageClass": "private-workspace-copy" } : { "pf:referenceUrl": media.url }),
+      // URL registrations fingerprint the reference string (source bytes stay
+      // with the creator by design); uploads fingerprint the stored bytes.
       "pf:referenceFingerprint": media.hash,
       "pf:visibility": "private"
     }

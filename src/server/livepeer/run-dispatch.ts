@@ -11,6 +11,7 @@ import { nowIso } from "../store";
 import { readWorkspace, writeWorkspace } from "./run-store";
 import { assertCapabilityAvailable } from "./catalogue";
 import { MODEL_OVERRIDE_UNAVAILABLE } from "./template-catalogue";
+import { revalidateCampaignAuthorization } from "../policy/authorization";
 import { fetchLivePriceMap, quoteStage, stageSpendingCeiling } from "./pricing";
 import { resolveMotionDuration } from "./duration-policy";
 import { isUsableOutputUrl } from "./plan-dag";
@@ -252,6 +253,18 @@ export async function dispatchSlot(
   if (!isDispatchableJob(job)) {
     return false; // claimed by a concurrent pump - serialized writes decide
   }
+  // Exact authorization revalidation before first provider contact: rights
+  // may have changed since submit (revocation, expiry, swapped selection).
+  // Only jobs that have never been attempted are checked - later attempts
+  // of the same job already passed this gate. A failure fails the stage
+  // with zero provider calls (everything below spends).
+  if (!job.livepeerJobId && (job.attempts ?? 0) === 0) {
+    const auth = await revalidateCampaignAuthorization(fresh, db);
+    if (!auth.ok) {
+      await failStageJobs(campaign.id, stage.id, auth.error, workspaceId, run.jobIds);
+      return true;
+    }
+  }
   const isVideo = job.kind === "image-to-video";
   // Machine capability for pricing/dispatch/resolution: the structured
   // actual value, falling back to the planned one. Never display text.
@@ -315,7 +328,20 @@ export async function dispatchSlot(
   // Preservation policy: strongest honest path for this stage, validated
   // before any paid dispatch. Refusals fail the stage with the reason and
   // spend nothing - no silent fallback to an arbitrary render.
-  const { ctx: preservationCtx } = preservationContextFor(fresh, db.sourceMedia, stage, job, slot);
+  //
+  // Single-resolution rule: the source URL is resolved exactly once per
+  // dispatch operation, upstream in the pump, and arrives here inside the
+  // slot. This function MUST NOT re-resolve it - temporary delivery URLs
+  // differ on every generation, and a second independent URL would fail
+  // the byte-for-byte ownership check below and falsely block valid
+  // generation. For approved-source slots the campaign row is projected
+  // onto the slot's exact input URL (the same value the provider
+  // receives); all other slot kinds compare against stored rows as before.
+  const resolvedSources =
+    slot.resolvedInputSource === "approved-source"
+      ? db.sourceMedia.map((m) => (m.id === fresh.sourceMediaId ? { ...m, url: slot.inputUrl } : m))
+      : db.sourceMedia;
+  const { ctx: preservationCtx } = preservationContextFor(fresh, resolvedSources, stage, job, slot);
   const preservation = resolvePreservation(preservationCtx);
   if (preservation.refusal) {
     await failStageJobs(campaign.id, stage.id, `"${stage.label}": ${preservation.refusal}`, workspaceId, run.jobIds);

@@ -82,6 +82,22 @@ function decoyJob(): ProductionJob {
 function seedDb(jobs: ProductionJob[], run: Record<string, unknown> | null): Database {
   const db = emptyDb();
   db.sourceMedia.push({ id: "m1", creatorId: "c1", title: "approved creator media", type: "image", url: SOURCE, hash: "hash" });
+  // Rights evidence for production authorization revalidation (Tier-3
+  // workspace rows; live DKG is unsupported in this harness).
+  db.passports.push({
+    id: "p1",
+    creatorId: "c1",
+    creatorName: "Creator",
+    sourceMediaIds: ["m1"],
+    platforms: ["instagram"],
+    countries: ["GR"],
+    allowedTransformations: ["edit", "animate"],
+    validFrom: "2026-01-01",
+    validUntil: "2027-01-01",
+    status: "active",
+    attestation: { method: "creator-consent-link", consentedAt: "2026-01-01", declaration: "ok" },
+    visibility: "public"
+  });
   const campaign = {
     id: "cmp_scope",
     title: "scope pack",

@@ -1,7 +1,7 @@
 import { Check } from "lucide-react";
 import { notFound } from "next/navigation";
 import { lookupVerification } from "@/server/verify";
-import { blockExplorerNftUrl } from "@/lib/proof-links";
+import { baseSepoliaTransactionUrl, blockExplorerNftUrl } from "@/lib/proof-links";
 import { displayText } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -20,6 +20,7 @@ export default async function VerifyPage({ params }: { params: Promise<{ ref: st
   const s = v.snapshot;
   const anchored = s.publicationStatus === "anchored" && !!s.ual;
   const nftLink = anchored && s.ual ? blockExplorerNftUrl(s.ual) : null;
+  const transactionLink = anchored ? baseSepoliaTransactionUrl(s.ual, s.txHash) : null;
 
   return (
     <div className="pf-page min-h-screen bg-background">
@@ -127,6 +128,14 @@ export default async function VerifyPage({ params }: { params: Promise<{ ref: st
                     {" · "}
                     <a href={nftLink.href} target="_blank" rel="noreferrer" className="text-sky-700 hover:underline dark:text-sky-300">
                       {nftLink.label}
+                    </a>
+                  </>
+                )}
+                {transactionLink && (
+                  <>
+                    {" · "}
+                    <a href={transactionLink.href} target="_blank" rel="noreferrer" className="text-sky-700 hover:underline dark:text-sky-300">
+                      {transactionLink.label}
                     </a>
                   </>
                 )}

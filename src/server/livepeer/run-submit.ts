@@ -1,7 +1,8 @@
 import type { Database, ProductionJob, ProductionRun, ProductionStagePlan } from "../types";
-import { newId, nowIso, updateDb } from "../store";
+import { loadDb, newId, nowIso, updateDb } from "../store";
 import { readWorkspace, writeWorkspace } from "./run-store";
 import { checkAssetsPerRun, checkProfileAccess, resolveEntitlements } from "../entitlements";
+import { revalidateCampaignAuthorization } from "../policy/authorization";
 import { normalizeQualityProfile, normalizeStagePlan } from "./plan-dag";
 import { createJobRecords } from "./pipeline";
 import { fetchLivePriceMap, quoteStage } from "./pricing";
@@ -77,15 +78,26 @@ async function estimateStages(
  * exact scope so every later operation stays on those jobs.
  */
 export async function submitRun(input: SubmitInput): Promise<SubmitResult> {
-  // Workspace-scoped read when available (detached-safe); session read in
-  // request scope. All writes below go through the run-store seam (live =
-  // the same Neon workspace blob production uses; tests swap memory in).
-  const campaign = input.workspaceId
-    ? (await readWorkspace(input.workspaceId)).campaigns.find((c) => c.id === input.campaignId)
-    : await (await import("../campaigns")).loadCampaign(input.campaignId);
+  // Single fresh read feeds BOTH selection and authorization below: the
+  // campaign validated here is the exact row the authorization check binds
+  // (no older snapshot). Workspace-scoped read when available
+  // (detached-safe); session read in request scope. All writes below go
+  // through the run-store seam (live = the same Neon workspace blob
+  // production uses; tests swap memory in).
+  const authDb = input.workspaceId ? await readWorkspace(input.workspaceId) : await loadDb();
+  const campaign = authDb.campaigns.find((c) => c.id === input.campaignId);
   if (!campaign) return { created: false, error: "Campaign not found" };
   if (campaign.preflight?.decision !== "allow") {
     return { created: false, error: "Preflight has not approved this campaign" };
+  }
+  // Exact authorization revalidation: the saved allow decision is not
+  // enough - the campaign-selected passport, media, facts, and scope must
+  // still authorize this use right now. Runs before creation AND before
+  // replaying an existing run, so rights revoked since submit cannot slip
+  // through.
+  {
+    const auth = await revalidateCampaignAuthorization(campaign, authDb);
+    if (!auth.ok) return { created: false, error: auth.error };
   }
   const write: (mutator: (db: Database) => void) => Promise<unknown> = (mutator) =>
     input.workspaceId ? writeWorkspace(input.workspaceId, mutator) : updateDb(mutator);

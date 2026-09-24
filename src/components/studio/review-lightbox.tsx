@@ -25,7 +25,7 @@ export function ReviewLightbox({ receipt, index, total, verificationRef, onClose
     <div
       role="dialog"
       aria-modal="true"
-      aria-label={`${receipt.label} — full size viewer`}
+      aria-label={`${receipt.label} - full size viewer`}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4"
       onClick={onClose}
     >
@@ -47,7 +47,7 @@ export function ReviewLightbox({ receipt, index, total, verificationRef, onClose
               receipt.actualWidth !== undefined &&
               receipt.actualHeight !== undefined && (
                 <p role="status" className="mt-0.5 text-[11.5px] font-medium text-amber-700 dark:text-amber-300">
-                  Needs review — requested {receipt.format}, received {describeActualSize(receipt.actualWidth, receipt.actualHeight)}.
+                  Needs review - requested {receipt.format}, received {describeActualSize(receipt.actualWidth, receipt.actualHeight)}.
                 </p>
               )}
           </div>

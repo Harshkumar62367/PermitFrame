@@ -37,6 +37,7 @@ export default function WorkspaceOverviewPage() {
         <CampaignControlHeader
           workspaceName={data?.workspaceName ?? null}
           formOpen={formOpen}
+          showNewCampaignAction={(data?.campaigns.length ?? 0) > 0}
           onToggleForm={() => setFormOpen((v) => !v)}
         />
       </FadeIn>

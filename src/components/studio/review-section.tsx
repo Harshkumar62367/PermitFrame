@@ -228,6 +228,7 @@ export function ReviewSection({ campaign, onChanged }: ReviewSectionProps) {
         <ReviewTechnicalDetails
           receipts={receiptRecords}
           campaignRecord={campaignRecord}
+          campaignTxHash={campaign.campaignTxHash ?? null}
           open={showTechnical}
           onToggle={() => setShowTechnical((v) => !v)}
         />

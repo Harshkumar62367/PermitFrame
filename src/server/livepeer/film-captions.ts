@@ -53,7 +53,7 @@ export const CAPTION_STALE_MS = 12 * 60 * 1000;
 
 /** Rendered for stale claimed jobs: non-success, no outcome invented. */
 export const OUTCOME_UNKNOWN_COPY =
-  "Caption outcome unknown — PermitFrame did not record a result. The provider request may or may not have completed.";
+  "Caption outcome unknown - PermitFrame did not record a result. The provider request may or may not have completed.";
 
 /** Recovery confirmation: explicit consent to a possible second charge. */
 export const RECOVERY_CONFIRM_COPY =

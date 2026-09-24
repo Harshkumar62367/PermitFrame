@@ -8,10 +8,12 @@ import { PageHeader } from "@/components/ui/page-header";
 export function CampaignControlHeader({
   workspaceName,
   formOpen,
+  showNewCampaignAction,
   onToggleForm
 }: {
   workspaceName: string | null;
   formOpen: boolean;
+  showNewCampaignAction: boolean;
   onToggleForm: () => void;
 }) {
   return (
@@ -19,7 +21,7 @@ export function CampaignControlHeader({
       eyebrow={workspaceName ? `Workspace / ${workspaceName}` : "Workspace"}
       title="Campaign control room"
       description="Review rights, approve production and track verifiable campaign outputs."
-      actions={
+      actions={showNewCampaignAction ? (
         <Button
           onClick={onToggleForm}
           aria-expanded={formOpen}
@@ -27,7 +29,7 @@ export function CampaignControlHeader({
         >
           <Plus className="h-4 w-4" aria-hidden /> {formOpen ? "Close form" : "New campaign"}
         </Button>
-      }
+      ) : undefined}
     />
   );
 }

@@ -1,9 +1,8 @@
 "use client";
 
-import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useId, useState } from "react";
-import { ArrowLeft, BadgeCheck } from "lucide-react";
+import { BadgeCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DatePicker } from "@/components/ui/date-picker";
@@ -22,7 +21,9 @@ import { cn } from "@/lib/utils";
 interface ConsentMedia {
   title: string;
   type: "image" | "video";
-  url: string;
+  url?: string;
+  previewIndex?: number;
+  isPrivateUpload: boolean;
 }
 
 interface ConsentData {
@@ -171,9 +172,6 @@ export default function ConsentPage() {
     return (
       <div className="pf-page mx-auto w-full max-w-xl px-4 py-24 sm:px-6">
         <ErrorState message={loadError} onRetry={reloadConsent} />
-        <Link href="/" className="mt-5 inline-flex items-center gap-1.5 text-[12.5px] text-muted-foreground hover:text-foreground">
-          <ArrowLeft className="h-3.5 w-3.5" aria-hidden /> Back to PermitFrame
-        </Link>
       </div>
     );
   }
@@ -247,9 +245,6 @@ export default function ConsentPage() {
             <p className="mx-auto mt-2 max-w-sm text-[13.5px] leading-relaxed text-muted-foreground">
               You declined this permission request. No permission was recorded and nothing was published.
             </p>
-            <Link href="/" className="mt-5 inline-flex items-center gap-1.5 text-[12.5px] text-muted-foreground hover:text-foreground">
-              <ArrowLeft className="h-3.5 w-3.5" aria-hidden /> Back to PermitFrame
-            </Link>
           </div>
         </FadeIn>
       </div>
@@ -269,9 +264,6 @@ export default function ConsentPage() {
                 ? "This request link has expired - ask the agency for a fresh link."
                 : "This request was cancelled - ask the agency for a fresh link."}
             </p>
-            <Link href="/" className="mt-5 inline-flex items-center gap-1.5 text-[12.5px] text-muted-foreground hover:text-foreground">
-              <ArrowLeft className="h-3.5 w-3.5" aria-hidden /> Back to PermitFrame
-            </Link>
           </div>
         </FadeIn>
       </div>
@@ -307,7 +299,17 @@ export default function ConsentPage() {
               <div className="grid grid-cols-3 gap-2 pt-1 sm:grid-cols-4">
                 {data.media.map((m, index) => (
                   <div key={`consent-media-${index}`} className="overflow-hidden rounded-lg ring-1 ring-border">
-                    {m.type === "image" ? (
+                    {m.isPrivateUpload && m.type === "image" && typeof m.previewIndex === "number" ? (
+                      // The invitation token scopes this same-origin preview
+                      // to exactly this request; no Cloudinary URL is sent to
+                      // the creator's browser.
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={`/api/consent/${params.token}/media/${m.previewIndex}/preview`} alt={m.title} loading="lazy" className="aspect-square w-full object-cover" />
+                    ) : m.isPrivateUpload || !m.url ? (
+                      <span className="grid aspect-square w-full place-items-center bg-muted px-1 text-center font-mono text-[9px] text-muted-foreground" title={`${m.title} (private workspace copy - no preview)`}>
+                        Private workspace copy{m.type === "video" ? " - video preview unavailable" : ""}
+                      </span>
+                    ) : m.type === "image" ? (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img src={m.url} alt={m.title} loading="lazy" className="aspect-square w-full object-cover" />
                     ) : (
@@ -318,7 +320,7 @@ export default function ConsentPage() {
                 ))}
               </div>
             ) : (
-              <p className="text-[12px] font-medium text-muted-foreground">Legacy request — no media was attached.</p>
+              <p className="text-[12px] font-medium text-muted-foreground">Legacy request - no media was attached.</p>
             )}
             <dl className="space-y-1 pt-1 text-[12.5px]">
               <div className="flex gap-2">
@@ -488,9 +490,6 @@ export default function ConsentPage() {
             {submitError && <p role="alert" className="break-words text-[13px] text-rose-600 dark:text-rose-300">{submitError}</p>}
           </div>
         </FadeIn>
-        <Link href="/workspace" className="mt-5 inline-flex items-center gap-1.5 text-[12.5px] text-muted-foreground hover:text-foreground">
-          <ArrowLeft className="h-3.5 w-3.5" aria-hidden /> Back to PermitFrame
-        </Link>
       </div>
     </div>
   );

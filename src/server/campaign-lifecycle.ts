@@ -1,11 +1,15 @@
 import type { Campaign, CampaignRequest, Platform, PublicationStatus } from "./types";
-import { hasSharableReceipt } from "./types";
+import { hasSharableReceipt, isPublicDeliverableReceipt } from "./types";
 import { loadDb, newId, nowIso, updateDb } from "./store";
 import { eq } from "drizzle-orm";
 import { getDb } from "./db/client";
 import { workspaces } from "./db/schema";
 import { requireCurrentSession } from "./auth";
 import { preflight } from "./policy/engine";
+import {
+  revalidateCampaignAuthorization,
+  type AuthorizationRevalidation
+} from "./policy/authorization";
 import { effectiveCampaignStatus, preflightEvent } from "./campaign-status";
 import { buildPublicSnapshot, newVerificationRef, saveVerificationSnapshot } from "./verify";
 import {
@@ -302,24 +306,67 @@ export async function updateCampaignBrief(
   return { campaign: final };
 }
 
-export async function approveCampaign(id: string): Promise<{ approved: boolean; ual?: string; publicationStatus?: PublicationStatus; verificationRef?: string; verificationWarning?: string; error?: string }> {
-  const campaign = await loadCampaign(id);
-  if (!campaign) return { approved: false, error: "Campaign not found" };
-  try {
-    throwIfArchived(campaign, "approved");
-  } catch (e) {
-    return { approved: false, error: e instanceof Error ? e.message : "Archived campaigns are read-only." };
-  }
+export type ApprovalEligibility = { ok: true } | { ok: false; error: string };
+
+/**
+ * Pure approval-gate composition (unit-tested): effective verdict,
+ * current exact authorization, complete-pack readiness, production
+ * readiness, durable identity, aspect honesty, and at least one public
+ * deliverable output. String copies match the historical messages
+ * byte-for-byte. approveCampaign supplies live evidence; tests supply
+ * fixtures.
+ */
+export function checkApprovalEligibility(
+  campaign: Pick<Campaign, "status" | "preflight" | "jobs" | "receipts" | "passportId">,
+  auth: AuthorizationRevalidation
+): ApprovalEligibility {
   // Gate on the effective verdict, not the stored label: a stale "draft" row
   // whose preflight denies must never be approvable.
-  if (effectiveCampaignStatus(campaign) === "blocked") return { approved: false, error: "Blocked campaigns cannot be approved" };
+  if (effectiveCampaignStatus(campaign) === "blocked") {
+    return { ok: false, error: "Blocked campaigns cannot be approved" };
+  }
+  if (!auth.ok) return { ok: false, error: auth.error };
+  // The authorization must bind THIS campaign's current selection: an
+  // approval computed for an earlier selection (different passport) never
+  // finalizes, even if that evidence was once valid.
+  if (auth.passport.id !== campaign.passportId) {
+    return {
+      ok: false,
+      error: "Authorization does not match the current campaign selection - re-check permissions before approving."
+    };
+  }
+  // Complete-pack readiness: every job belonging to the active preflight
+  // plan must be genuinely ready for delivery. One ready receipt is never
+  // permission to approve an incomplete pack - queued, generating,
+  // previewed, pending, retryable, failed, or cancelled planned jobs block
+  // with their stages named. Jobs outside the active plan (legacy rows from
+  // retired plans) never block. Stages with no job at all have not been
+  // produced and block the same way.
+  const plan = campaign.preflight?.plan ?? [];
+  const unready: string[] = [];
+  for (const stage of plan) {
+    const stageJobs = campaign.jobs.filter((j) => j.stageId === stage.id);
+    if (stageJobs.length === 0) {
+      unready.push(`“${stage.label || stage.id}” (not produced)`);
+      continue;
+    }
+    const pending = stageJobs.find((j) => j.status !== "ready_to_share");
+    if (pending) unready.push(`“${stage.label || stage.id}” (${pending.status})`);
+  }
+  if (unready.length > 0) {
+    const names = unready.join("; ").slice(0, 220);
+    return {
+      ok: false,
+      error: `Cannot approve - ${unready.length} planned stage${unready.length === 1 ? " is" : "s are"} not ready: ${names}. Wait for completion or regenerate before approving.`
+    };
+  }
   if (campaign.jobs.filter((j) => j.status === "ready_to_share").length === 0) {
-    return { approved: false, error: "Produce the campaign pack before approving - previews and unsaved outputs cannot be signed off yet" };
+    return { ok: false, error: "Produce the campaign pack before approving - previews and unsaved outputs cannot be signed off yet" };
   }
   // Proof needs durable identity: provider-hosted legacy outputs must be
   // stored securely first — approval publishes evidence, never previews.
   if (!campaign.receipts.some((r) => hasSharableReceipt(r))) {
-    return { approved: false, error: "Store outputs securely before approving — provider-hosted legacy assets cannot be published as proof yet" };
+    return { ok: false, error: "Store outputs securely before approving - provider-hosted legacy assets cannot be published as proof yet" };
   }
   // Aspect honesty: a stored output whose measured file differs from the
   // requested placement is never Ready for that placement. Name the stages
@@ -337,10 +384,52 @@ export async function approveCampaign(id: string): Promise<{ approved: boolean; 
       .join("; ")
       .slice(0, 220);
     return {
-      approved: false,
-      error: `Aspect check failed — ${names}. Regenerate the listed stage${mismatched.length === 1 ? "" : "s"} for the planned placement, then approve.`
+      ok: false,
+      error: `Aspect check failed - ${names}. Regenerate the listed stage${mismatched.length === 1 ? "" : "s"} for the planned placement, then approve.`
     };
   }
+  // Public deliverability: at least one output must be non-private, durably
+  // stored, and unblocked. A pack whose only outputs are private
+  // derivatives (narration, captions) approves nothing public.
+  if (!campaign.receipts.some((r) => isPublicDeliverableReceipt(r))) {
+    return {
+      ok: false,
+      error: "Only deliverable shared outputs can be approved - private, blocked, or not-yet-stored outputs cannot be signed off."
+    };
+  }
+  return { ok: true };
+}
+
+export async function approveCampaign(id: string): Promise<{ approved: boolean; ual?: string; publicationStatus?: PublicationStatus; verificationRef?: string; verificationWarning?: string; error?: string }> {
+  // Single fresh workspace read: the campaign object below feeds
+  // authorization revalidation, approval eligibility, the status
+  // transition, and snapshot construction - an earlier snapshot is never
+  // authorized while a newer one is mutated.
+  const db = await loadDb();
+  const campaign = db.campaigns.find((c) => c.id === id);
+  if (!campaign) return { approved: false, error: "Campaign not found" };
+  try {
+    throwIfArchived(campaign, "approved");
+  } catch (e) {
+    return { approved: false, error: e instanceof Error ? e.message : "Archived campaigns are read-only." };
+  }
+  // Finalization belongs to the workspace owner: any other session -
+  // including an anonymous share-link reviewer - can only record feedback,
+  // never approve. The error is owner-specific (not the delete/archive one).
+  try {
+    await requireWorkspaceOwner();
+  } catch (e) {
+    if (e instanceof WorkspaceOwnerRequiredError) {
+      return { approved: false, error: "Only the workspace owner may approve campaigns." };
+    }
+    throw e;
+  }
+  // Current authorization + delivery eligibility, evaluated now - never the
+  // saved preflight label alone. loadDb() above already resolved the same
+  // workspace the campaign came from.
+  const auth = await revalidateCampaignAuthorization(campaign, db);
+  const eligibility = checkApprovalEligibility(campaign, auth);
+  if (!eligibility.ok) return { approved: false, error: eligibility.error };
   await updateDb((d) => {
     const c = d.campaigns.find((x) => x.id === id);
     if (c) {
@@ -366,16 +455,21 @@ export async function approveCampaign(id: string): Promise<{ approved: boolean; 
   void (async () => {
     await publishCampaignRecord(id);
     try {
-      const fresh = await loadCampaign(id);
+      // One read for the post-publish snapshot: campaign, passport, and
+      // facts all resolve from the same fresh database state.
+      const snapshotDb = await loadDb();
+      const fresh = snapshotDb.campaigns.find((c) => c.id === id);
       if (fresh) {
-        const db = await loadDb();
-        const ref = fresh.verificationRef ?? newVerificationRef();
+        // Versioned snapshots: every approval mints a fresh ref, so prior
+        // published snapshots are never overwritten and stay retrievable
+        // under their own URLs. The campaign points at the latest.
+        const ref = newVerificationRef();
         await saveVerificationSnapshot(
           buildPublicSnapshot({
             ref,
             campaign: fresh,
-            passport: db.passports.find((p) => p.id === fresh.passportId) ?? null,
-            facts: db.productFacts.find((f) => f.id === fresh.productFactsId) ?? null
+            passport: snapshotDb.passports.find((p) => p.id === fresh.passportId) ?? null,
+            facts: snapshotDb.productFacts.find((f) => f.id === fresh.productFactsId) ?? null
           })
         );
         await updateDb((d) => {
@@ -454,13 +548,16 @@ export async function deleteCampaign(
  */
 export async function refreshVerificationSnapshot(id: string): Promise<{ verificationRef: string; created: boolean }> {
   await requireWorkspaceOwner();
-  const campaign = await loadCampaign(id);
+  const db = await loadDb();
+  const campaign = db.campaigns.find((c) => c.id === id);
   if (!campaign) throw new CampaignNotFoundError(id);
   if (campaign.status !== "approved") {
     throw new CampaignProtectedError(["Only approved campaign packs can receive a verification link."], false);
   }
-  const db = await loadDb();
-  const ref = campaign.verificationRef ?? newVerificationRef();
+  // Versioned snapshots: a refresh mints a fresh ref like every approval -
+  // prior snapshots are never overwritten and stay retrievable. `created`
+  // still reports whether this campaign had a link before.
+  const ref = newVerificationRef();
   const created = !campaign.verificationRef;
   await saveVerificationSnapshot(
     buildPublicSnapshot({

@@ -87,7 +87,7 @@ export function BriefPanel({ campaign, passport, productFacts, onChanged }: Brie
   async function save() {
     if (busy || !dirty) return;
     if (!draft.country) {
-      setError("Choose a territory — only this permission's territories are listed.");
+      setError("Choose a territory - only this permission's territories are listed.");
       return;
     }
     if (draft.creativeBrief.trim().length < 12) {

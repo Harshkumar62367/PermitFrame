@@ -5,10 +5,11 @@ import {
   attestGuard,
   buildConsentPublicView,
   consentLifecycle,
+  toConsentPublicMedia,
   validateAttestation,
   validateAttestationAcks
 } from "@/server/consent-validation";
-import { markConsentViewed, withConsentTransitionLock } from "@/server/platform";
+import { withConsentTransitionLock } from "@/server/platform";
 import { withIdempotencyLock } from "@/server/idempotency";
 import { getDkg } from "@/server/dkg";
 import { logDkgError, sanitizeDkgError } from "@/server/dkg/public-errors";
@@ -22,22 +23,27 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   if (!ctx) return NextResponse.json({ error: "Consent link not found" }, { status: 404 });
   const invite = ctx.db.consentInvites.find((i) => i.token === token) ?? null;
   if (!invite) return NextResponse.json({ error: "Consent link not found" }, { status: 404 });
-  // First open marks the request viewed: idempotent, publishes nothing.
-  // Read reliability: a viewed-write failure never fails the GET, but the
-  // normal path genuinely persists through the token's own workspace.
-  if (invite.status === "pending") await markConsentViewed(token, ctx.workspaceId).catch(() => undefined);
-  const fresh = (await loadInviteContext(token))?.db.consentInvites.find((i) => i.token === token) ?? invite;
+  // This is the critical creator-facing read path. It deliberately makes
+  // no "viewed" bookkeeping write and no second workspace scan: a consent
+  // link must remain a single database read, never wait behind a write lock
+  // or a cold database update before the creator can inspect the terms.
+  // Pending and viewed have identical permissions, so omitting telemetry
+  // does not change consent, cancellation, or attestation semantics.
+  const fresh = invite;
   // Deliberately narrow: the offered terms, purpose, covered media previews,
   // and the creator's public name - plus, for approved links, the proof
   // status of this exact link's passport. No workspace ids, owner identity,
-  // other creator records, raw media internals (hashes, UALs), passport ids,
-  // UALs, or secrets ever leave this endpoint.
+  // other creator records, raw media internals (hashes, UALs, storage
+  // metadata, controlled references, delivery URLs), passport ids,
+  // UALs, or secrets ever leave this endpoint. Uploaded image previews use
+  // only an opaque position in this invitation; the token-scoped preview
+  // route resolves its source server-side.
   const creator = ctx.db.creators.find((c) => c.id === invite.creatorId);
   const mediaById = new Map(ctx.db.sourceMedia.map((m) => [m.id, m]));
   const media = (invite.draft.sourceMediaIds ?? [])
     .map((id) => mediaById.get(id))
     .filter((m): m is NonNullable<typeof m> => Boolean(m))
-    .map((m) => ({ title: m.title, type: m.type, url: m.url }));
+    .map((m, index) => toConsentPublicMedia(m, index));
   return NextResponse.json(
     buildConsentPublicView(
       fresh,

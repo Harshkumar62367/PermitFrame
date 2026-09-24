@@ -45,8 +45,8 @@ export function TemplatePanel({ campaign, allowed, film, onChanged }: TemplatePa
         <div className="mt-1.5 grid gap-1.5 sm:grid-cols-2" role="radiogroup" aria-label="Production mode">
           {(
             [
-              { id: "short_clip", title: "Short clip", blurb: "One 3–15 second motion deliverable." },
-              { id: "campaign_film", title: "Campaign film", blurb: "Several 3–15 second scenes, assembled later into one longer reel." }
+              { id: "short_clip", title: "Short clip", blurb: "One 3-15 second motion deliverable." },
+              { id: "campaign_film", title: "Campaign film", blurb: "Several 3-15 second scenes, assembled later into one longer reel." }
             ] as const
           ).map((m) => (
             <button

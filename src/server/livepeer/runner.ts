@@ -20,6 +20,7 @@ import {
 } from "./run-scope";
 import { dispatchSlot } from "./run-dispatch";
 import { delay, pollJob, resolveProgressHold, type PumpOptions, type PumpResult } from "./run-poll";
+import { resolveSourceMediaUrl } from "../cloudinary";
 import { completeRun, failRunStages, fetchRunStatusSnapshot, type RunStatusSnapshot } from "./run-lifecycle";
 
 /**
@@ -98,11 +99,18 @@ async function pumpRunInner(
       return { pumped: progressed, reason: "invalid-plan" };
     }
     const sourceMedia = db.sourceMedia.find((m) => m.id === campaign.sourceMediaId);
+    // THE single resolution for this pump pass: URL registrations pass
+    // through, uploaded private copies become a time-limited download URL.
+    // The resolved value - never the stored reference - threads through
+    // planning, dispatch, and the byte-for-byte ownership check, and is
+    // never persisted. Nothing downstream may resolve again.
+    const resolveSource = opts.resolveSourceUrl ?? resolveSourceMediaUrl;
+    const sourceMediaUrl = sourceMedia ? resolveSource(sourceMedia) : undefined;
     // Exact runs bypass stage decisions entirely: owned derivative jobs get
     // one slot each (never first-match-by-stage), and no fail decision for
     // a stage can touch a job outside the exact list.
     const exact = isExactRun(run);
-    const decisions = exact ? [] : decideStageRuns(stages, campaign.jobs, sourceMedia?.url, run.stageIds);
+    const decisions = exact ? [] : decideStageRuns(stages, campaign.jobs, sourceMediaUrl, run.stageIds);
 
     const runJobs = campaign.jobs.filter((j) => runOwnsJob(run, j));
     const inFlight = runJobs.filter((j) => j.status === "generating" && j.livepeerJobId);
@@ -167,11 +175,11 @@ async function pumpRunInner(
       }
     }
     if (allowDispatch && exact) {
-      await failUnreadyExactJobs({ workspaceId, campaign, run, stages, sourceMediaUrl: sourceMedia?.url });
+      await failUnreadyExactJobs({ workspaceId, campaign, run, stages, sourceMediaUrl });
     }
     const slots = allowDispatch
       ? exact
-        ? selectExactSlots(stages, runJobs, campaign.jobs, sourceMedia?.url, activeCount, ceiling)
+        ? selectExactSlots(stages, runJobs, campaign.jobs, sourceMediaUrl, activeCount, ceiling)
         : selectDispatchable(decisions, runJobs, activeCount, ceiling)
       : [];
     if (slots.length > 0) {

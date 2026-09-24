@@ -69,3 +69,24 @@ export function basePublicationStatus(mode: DkgMode, verifiable: boolean): Publi
   if (mode === "local-evidence") return "local";
   return verifiable ? "anchored" : "shared";
 }
+
+export interface PublicDkgHealth {
+  mode: DkgMode;
+  healthy: boolean;
+  status: string;
+}
+
+/**
+ * Browser-safe health projection: mode + liveness + one fixed
+ * product-owned status line. Adapter detail strings are never forwarded -
+ * they can carry peer counts, context-graph names, filesystem paths,
+ * endpoint labels, hostnames, and env-var names. Error text is never
+ * included either; failures map to the unhealthy static line.
+ */
+export function publicDkgStatus(mode: DkgMode, healthy: boolean): PublicDkgHealth {
+  return {
+    mode,
+    healthy,
+    status: healthy ? "Proof ledger connected." : "Proof ledger is temporarily unavailable."
+  };
+}

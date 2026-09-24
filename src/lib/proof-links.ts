@@ -41,6 +41,22 @@ export function blockExplorerNftUrl(ual: string): { label: string; href: string 
 }
 
 /**
+ * Base Sepolia transaction link for a finalized DKG publication. A transaction
+ * hash on its own is not enough: the corresponding UAL must explicitly be a
+ * Base Sepolia Knowledge Asset, and the hash must be a canonical EVM hash.
+ * This keeps malformed, local, and non-Base records out of public UI.
+ */
+export function baseSepoliaTransactionUrl(ual: string | null | undefined, txHash: string | null | undefined): { label: string; href: string } | null {
+  const parsed = typeof ual === "string" ? parseUal(ual) : null;
+  const hash = typeof txHash === "string" ? txHash.trim() : "";
+  if (parsed?.chainId !== "84532" || !/^0x[a-fA-F0-9]{64}$/.test(hash)) return null;
+  return {
+    label: "View Base Sepolia transaction",
+    href: `https://sepolia.basescan.org/tx/${hash}`
+  };
+}
+
+/**
  * Download href for a delivered asset. Cloudinary delivery URLs accept the
  * `fl_attachment` flag, which makes the CDN respond with
  * Content-Disposition: attachment - a real file download even cross-origin

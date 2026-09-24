@@ -32,6 +32,13 @@ export function CountryMultiSelect({ label, hint, selected, allowedCodes, onTogg
       (country.name.toLocaleLowerCase().includes(normalizedQuery) || country.code.toLocaleLowerCase().includes(normalizedQuery))
     ).slice(0, 8);
   }, [allowed, normalizedQuery]);
+  const matchesOutsideAllowed = useMemo(() => {
+    if (!normalizedQuery || !allowed) return false;
+    return COUNTRIES.some((country) =>
+      !allowed.has(country.code) &&
+      (country.name.toLocaleLowerCase().includes(normalizedQuery) || country.code.toLocaleLowerCase().includes(normalizedQuery))
+    );
+  }, [allowed, normalizedQuery]);
 
   function chooseCountry(code: string) {
     onToggle(code);
@@ -69,7 +76,13 @@ export function CountryMultiSelect({ label, hint, selected, allowedCodes, onTogg
           })}
         </div>
       )}
-      {normalizedQuery && matches.length === 0 && <p className="mt-1.5 rounded-md border border-dashed border-border px-3 py-2 text-[12px] text-muted-foreground">No country matches “{query.trim()}”. Try a country name or ISO code.</p>}
+      {normalizedQuery && matches.length === 0 && (
+        <p className="mt-1.5 rounded-md border border-dashed border-border px-3 py-2 text-[12px] text-muted-foreground">
+          {matchesOutsideAllowed
+            ? `${query.trim()} is not included in this request. You can remove territories, but cannot add new ones.`
+            : `No country matches “${query.trim()}”. Try a country name or ISO code.`}
+        </p>
+      )}
       {!normalizedQuery && <p className="mt-1.5 text-[11px] text-muted-foreground">Search to see a country; the first 8 matches are shown.</p>}
       {error && <p id={`${id}-error`} role="alert" className="mt-1.5 text-[12px] text-rose-600 dark:text-rose-300">{error}</p>}
     </fieldset>

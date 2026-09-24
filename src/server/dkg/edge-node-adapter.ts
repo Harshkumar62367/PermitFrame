@@ -3,7 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import type { PermissionPassport, ProductFacts, Visibility } from "../types";
 import { explorerUrlFor, basePublicationStatus, type DkgAdapter, type DkgHealth, type KaRecord } from "./adapter";
+import { FileDkgAdapter } from "./file-adapter";
 import type { KaEnvelope } from "./schemas";
+import { mediaIdFromUrn } from "./schemas";
 import { createTransportFromEnv, type CliTransport } from "./transports";
 
 const CG_ENV = process.env.DKG_CONTEXT_GRAPH ?? "permitframe";
@@ -123,7 +125,13 @@ export class EdgeNodeAdapter implements DkgAdapter {
     }
   }
 
-  async publish(ka: KaEnvelope, _visibility: Visibility): Promise<KaRecord> {
+  async publish(ka: KaEnvelope, visibility: Visibility): Promise<KaRecord> {
+    // Private records must never reach the shared graph: they stay in the
+    // local evidence store with a truthful "local" status and zero shared
+    // (CLI/transport) calls. Shared and public records use the SWM path.
+    if (visibility === "private") {
+      return new FileDkgAdapter().publish(ka, visibility);
+    }
     const cg = await this.contextGraph();
     const ttl = jsonLdToTurtle(ka.content);
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pf-ka-"));
@@ -166,6 +174,11 @@ export class EdgeNodeAdapter implements DkgAdapter {
    * we enqueue a named finalized KA then wait for its canonical UAL and tx hash.
    */
   async publishVerifiable(ka: KaEnvelope, visibility: Visibility): Promise<KaRecord> {
+    // Verifiable Memory is on-chain by definition: a private record must
+    // never be anchored, so it stays local exactly like publish().
+    if (visibility === "private") {
+      return new FileDkgAdapter().publish(ka, visibility);
+    }
     const shared = await this.publish(ka, visibility);
     const cg = await this.contextGraph();
     const accepted = await this.run(["publisher", "publish-async", cg, shared.name], 30_000);
@@ -242,6 +255,11 @@ export class EdgeNodeAdapter implements DkgAdapter {
         attestation: { method: "creator-consent-link", consentedAt: String(row.attestedAt ?? ""), declaration: String(row.declaration ?? "") },
         visibility: "public"
       };
+      // One row per source-media value: aggregate distinctly. Missing media
+      // (legacy passports) leaves the list empty, which authorization
+      // treats as fail-closed - never guessed.
+      const mediaId = mediaIdFromUrn(row.sourceMedia ?? "");
+      if (mediaId && !passport.sourceMediaIds.includes(mediaId)) passport.sourceMediaIds.push(mediaId);
       for (const field of ["platforms", "countries", "allowedTransformations"] as const) {
         const value = String(row[field === "platforms" ? "platform" : field === "countries" ? "country" : "transformation"] ?? "");
         if (value && !passport[field].includes(value as never)) (passport[field] as string[]).push(value);
@@ -258,7 +276,7 @@ export class EdgeNodeAdapter implements DkgAdapter {
     onDate: string;
   }): Promise<PermissionPassport[]> {
     return this.passportRows(`PREFIX pf: <https://permitframe.app/ns#>
-SELECT ?passport ?creatorId ?creatorName ?platform ?country ?transformation ?status ?validFrom ?validUntil ?attestedAt ?declaration
+SELECT ?passport ?creatorId ?creatorName ?platform ?country ?transformation ?status ?validFrom ?validUntil ?attestedAt ?declaration ?sourceMedia
 WHERE {
   ?passport a pf:PermitFramePermissionPassport ;
     pf:creatorId "${filter.creatorId}" ;
@@ -271,6 +289,7 @@ WHERE {
     pf:platform ?platform ;
     pf:country ?country ;
     pf:allowedTransformation ?transformation .
+  OPTIONAL { ?passport pf:sourceMedia ?sourceMedia . }
   FILTER (LCASE(STR(?platform)) = "${filter.platform}")
   FILTER (EXISTS { ?passport pf:country "${filter.country}" })
   FILTER (?status != "revoked")
@@ -280,7 +299,7 @@ WHERE {
 
   async listPassports(creatorId: string): Promise<PermissionPassport[]> {
     return this.passportRows(`PREFIX pf: <https://permitframe.app/ns#>
-SELECT ?passport ?creatorId ?creatorName ?platform ?country ?transformation ?status ?validFrom ?validUntil ?attestedAt ?declaration
+SELECT ?passport ?creatorId ?creatorName ?platform ?country ?transformation ?status ?validFrom ?validUntil ?attestedAt ?declaration ?sourceMedia
 WHERE {
   ?passport a pf:PermitFramePermissionPassport ;
     pf:creatorId "${creatorId}" ;
@@ -293,6 +312,7 @@ WHERE {
     pf:platform ?platform ;
     pf:country ?country ;
     pf:allowedTransformation ?transformation .
+  OPTIONAL { ?passport pf:sourceMedia ?sourceMedia . }
 }`);
   }
 

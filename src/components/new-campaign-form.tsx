@@ -88,11 +88,11 @@ export function NewCampaignForm({ onCreated }: { onCreated?: (id: string) => voi
   const attemptRef = useRef<{ payload: string; key: string } | null>(null);
   function validate(): FieldErrors {
     const errors: FieldErrors = {};
-    if (!form.passportId) errors.permission = "Choose a creator permission — campaigns never pick one automatically.";
+    if (!form.passportId) errors.permission = "Choose a creator permission - campaigns never pick one automatically.";
     if (!form.sourceMediaId) errors.media = "Choose the source media for this campaign.";
     if (!form.productFactsId) errors.facts = "Choose a brand rule for this campaign.";
-    if (!form.country) errors.country = "Choose a country — only this permission's territories are listed.";
-    if (!form.creativeBrief.trim()) errors.brief = "Describe the shot — the studio generates from this brief.";
+    if (!form.country) errors.country = "Choose a country - only this permission's territories are listed.";
+    if (!form.creativeBrief.trim()) errors.brief = "Describe the shot - the studio generates from this brief.";
     else if (form.creativeBrief.trim().length < 12) errors.brief = "Give the brief a little more to work with (12+ characters).";
     return errors;
   }
@@ -301,7 +301,7 @@ export function NewCampaignForm({ onCreated }: { onCreated?: (id: string) => voi
           </Select>
           {chosenPassport && (
             <p className="text-[11.5px] text-muted-foreground">
-              Only {creatorName(chosenPassport.creatorId)}&apos;s permitted territories are listed — anything else would fail the permission check.
+              Only {creatorName(chosenPassport.creatorId)}&apos;s permitted territories are listed - anything else would fail the permission check.
             </p>
           )}
           {fieldErrors.country && (

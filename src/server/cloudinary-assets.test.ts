@@ -155,6 +155,7 @@ describe("durable identity in proofs", () => {
     claimsUsed: [],
     derivedFrom: { sourceMediaId: "m", passportId: "p", productFactsId: "f" },
     generatedAt: "2026-09-21T00:00:00.000Z",
+    storageStatus: "stored",
     visibility: "shared"
   } as unknown as DerivativeReceipt;
 

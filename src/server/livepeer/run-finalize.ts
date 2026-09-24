@@ -7,6 +7,7 @@ import { LivepeerMcpClient, livepeerConfig } from "./mcp-client";
 import { persistPreviewInBackground } from "./pipeline";
 import { withCampaignLock } from "./mutex";
 import { qualityCheckEnabled } from "./run-retry";
+import { resolveSourceMediaUrl } from "../cloudinary";
 
 /**
  * Output finalization: preview recording, durable-storage kickoff, receipt
@@ -81,7 +82,18 @@ export async function finalizeDispatchedJob(
   // Advisory vision check for image outputs (never fails the stage).
   if (qualityCheckEnabled() && job.kind !== "image-to-video") {
     const db = await readWorkspace(workspaceId).catch(() => null);
-    const sourceUrl = db?.sourceMedia.find((m) => m.id === campaign.sourceMediaId)?.url;
+    // Advisory reference only: uploads resolve to a time-limited download
+    // URL that is sent to the provider and never persisted (only the
+    // resulting score/note are stored). This finalize step is its own
+    // operation with its own single resolution - never a re-resolution of
+    // a dispatch URL.
+    const sourceRow = db?.sourceMedia.find((m) => m.id === campaign.sourceMediaId);
+    let sourceUrl: string | undefined;
+    try {
+      sourceUrl = sourceRow ? resolveSourceMediaUrl(sourceRow) : undefined;
+    } catch {
+      sourceUrl = undefined;
+    }
     if (sourceUrl) {
       try {
         const client = new LivepeerMcpClient(livepeerConfig());

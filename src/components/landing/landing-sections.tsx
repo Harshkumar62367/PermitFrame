@@ -53,7 +53,7 @@ export function HowItWorks() {
             <div className="group h-full rounded-2xl border border-border bg-card p-6 transition-all duration-300 hover:-translate-y-1 hover:border-emerald-600/30 hover:shadow-[0_12px_40px_-12px_rgba(16,185,129,0.15)]">
               <step.icon className="h-5 w-5 text-emerald-700 dark:text-emerald-300" aria-hidden />
               <p className="mt-5 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">{step.kicker}</p>
-              <h3 className="mt-2 text-[15px] font-semibold leading-snug">{step.title}</h3>
+              <h3 className="mt-2 text-[15px] font-semibold leading-snug tracking-[0.01em]">{step.title}</h3>
               <p className="mt-2.5 text-[13px] leading-relaxed text-muted-foreground">{step.body}</p>
             </div>
           </StaggerItem>
@@ -69,7 +69,7 @@ export function PolicyScenarios() {
       <div className="mx-auto w-full max-w-6xl px-4 sm:px-6">
         <FadeIn>
           <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-emerald-700 dark:text-emerald-300">Policy in action</p>
-          <h2 className="font-display mt-3 max-w-3xl text-balance text-3xl font-semibold tracking-tight sm:text-4xl">
+          <h2 className="font-display mt-3 max-w-3xl text-balance text-3xl font-semibold tracking-[0.01em] sm:text-4xl">
             Watch a request get refused - then watch the compliant one ship.
           </h2>
         </FadeIn>

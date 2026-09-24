@@ -115,7 +115,7 @@ describe("invalid plans are rejected before persistence", () => {
     const r = validateFilmPlan(plan({ scenes }));
     assert.equal(r.ok, false);
     if (r.ok) return;
-    assert.match(r.error, /3–15/);
+    assert.match(r.error, /3-15/);
   });
 
   it("rejects totals that miss the target with the exact difference", () => {
@@ -124,13 +124,13 @@ describe("invalid plans are rejected before persistence", () => {
     const over = validateFilmPlan(plan({ scenes, targetDurationSeconds: 30 }));
     assert.equal(over.ok, false);
     if (over.ok) return;
-    assert.equal(over.error, "31 of 30 seconds planned — reduce 1 second across scenes to match the 30-second target.");
+    assert.equal(over.error, "31 of 30 seconds planned - reduce 1 second across scenes to match the 30-second target.");
     const short = (plan().scenes as FilmScene[]).map((s, i) => ({ ...s, durationSeconds: i === 0 ? 3 : 4 }));
     // 3 + 4*5 = 23 of 30: under by 7.
     const under = validateFilmPlan(plan({ scenes: short, targetDurationSeconds: 30 }));
     assert.equal(under.ok, false);
     if (under.ok) return;
-    assert.equal(under.error, "23 of 30 seconds planned — add 7 seconds across scenes or add another scene.");
+    assert.equal(under.error, "23 of 30 seconds planned - add 7 seconds across scenes or add another scene.");
   });
 
   it("rejects 1-scene and >30-scene plans", () => {
@@ -169,7 +169,7 @@ describe("invalid plans are rejected before persistence", () => {
   it("rejects short_clip mode and unknown modes", () => {
     const short = validateFilmPlan(plan({ mode: "short_clip" }));
     assert.equal(short.ok, false);
-    if (!short.ok) assert.match(short.error, /3–15 second picker/);
+    if (!short.ok) assert.match(short.error, /3-15 second picker/);
     assert.equal(validateFilmPlan(plan({ mode: "feature" })).ok, false);
   });
 
@@ -287,7 +287,7 @@ describe("legacy short-clip normalization", () => {
   it("renders the exact notice for a 40s legacy value", () => {
     assert.equal(
       describeLegacyShortClipSeconds(40),
-      "Legacy setting: 40s is not supported for one short clip. Choose 3–15 seconds to update this plan."
+      "Legacy setting: 40s is not supported for one short clip. Choose 3-15 seconds to update this plan."
     );
   });
 
@@ -506,12 +506,12 @@ describe("exact duration behavior", () => {
     );
     const under = filmDurationState(five, 30);
     assert.deepEqual(under, { totalSeconds: 25, targetSeconds: 30, status: "under", differenceSeconds: 5 });
-    assert.equal(describeFilmDurationMismatch(under.totalSeconds, 30), "25 of 30 seconds planned — add 5 seconds across scenes or add another scene.");
+    assert.equal(describeFilmDurationMismatch(under.totalSeconds, 30), "25 of 30 seconds planned - add 5 seconds across scenes or add another scene.");
     const over = filmDurationState([...five, scene({ id: "film-scene-6", order: 6, durationSeconds: 6, title: "Extra" })], 30);
     assert.deepEqual(over, { totalSeconds: 31, targetSeconds: 30, status: "over", differenceSeconds: 1 });
     assert.equal(
       describeFilmDurationMismatch(over.totalSeconds, 30),
-      "31 of 30 seconds planned — reduce 1 second across scenes to match the 30-second target."
+      "31 of 30 seconds planned - reduce 1 second across scenes to match the 30-second target."
     );
   });
 
@@ -553,7 +553,7 @@ describe("exact duration behavior", () => {
     const r = distributeRemainingSeconds(over, 30);
     assert.equal(r.ok, false);
     if (r.ok) return;
-    assert.equal(r.error, "31 of 30 seconds planned — reduce 1 second across scenes to match the 30-second target.");
+    assert.equal(r.error, "31 of 30 seconds planned - reduce 1 second across scenes to match the 30-second target.");
   });
 });
 
@@ -604,9 +604,9 @@ describe("scene completeness gaps", () => {
   it("flags blank text and out-of-range or fractional durations", () => {
     const base = createStarterScenes(30)[0];
     assert.deepEqual(describeSceneGaps({ ...base, title: "   " }), ["a story beat"]);
-    assert.deepEqual(describeSceneGaps({ ...base, durationSeconds: 2 }), ["a valid duration (3–15 seconds)"]);
-    assert.deepEqual(describeSceneGaps({ ...base, durationSeconds: 16 }), ["a valid duration (3–15 seconds)"]);
-    assert.deepEqual(describeSceneGaps({ ...base, durationSeconds: 7.5 }), ["a valid duration (3–15 seconds)"]);
+    assert.deepEqual(describeSceneGaps({ ...base, durationSeconds: 2 }), ["a valid duration (3-15 seconds)"]);
+    assert.deepEqual(describeSceneGaps({ ...base, durationSeconds: 16 }), ["a valid duration (3-15 seconds)"]);
+    assert.deepEqual(describeSceneGaps({ ...base, durationSeconds: 7.5 }), ["a valid duration (3-15 seconds)"]);
     assert.deepEqual(describeSceneGaps({ ...base, visualDirection: "", sourceIntent: "" }), [
       "visual direction",
       "a scene direction note"

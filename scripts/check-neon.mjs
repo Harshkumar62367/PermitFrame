@@ -2,7 +2,7 @@ import { neon } from "@neondatabase/serverless";
 
 const url = process.env.DATABASE_URL;
 if (!url) {
-  throw new Error("DATABASE_URL is missing from .env.local");
+  throw new Error("DATABASE_URL is not set - add it to .env.local for local use, or export it in your shell.");
 }
 
 const sql = neon(url);

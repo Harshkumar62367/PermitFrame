@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
 import { explorerUrlFor } from "./dkg/adapter";
+import { baseSepoliaTransactionUrl } from "@/lib/proof-links";
+import { isPublicDeliverableReceipt } from "./types";
 import type {
   Campaign,
   PermissionPassport,
@@ -18,7 +20,11 @@ export function newVerificationRef(): string {
  * when the campaign record genuinely anchored - never from ID shape.
  * Throws for non-approved campaigns so no future caller can publish a
  * "verified" snapshot of a draft, blocked, or archived pack.
- * Unit-tested for field leakage and anchored honesty. No I/O, no session.
+ * Outputs are limited to public deliverable receipts (non-private,
+ * durably stored, not delivery-blocked): private narration/caption
+ * derivatives, blocked ratios, unstored outputs, and transcript-only or
+ * internal records never reach the public snapshot. Unit-tested for field
+ * leakage and anchored honesty. No I/O, no session.
  */
 export function buildPublicSnapshot(input: {
   ref: string;
@@ -31,6 +37,9 @@ export function buildPublicSnapshot(input: {
     throw new Error("Public verification snapshots require an approved campaign pack.");
   }
   const anchored = campaign.publicationStatus === "anchored" && !!campaign.campaignUAL;
+  const transaction = anchored
+    ? baseSepoliaTransactionUrl(campaign.campaignUAL, campaign.campaignTxHash)
+    : null;
   return {
     ref,
     campaignId: campaign.id,
@@ -60,7 +69,7 @@ export function buildPublicSnapshot(input: {
       claimsUsed: c.claimsUsed,
       disclosure: c.disclosure
     })),
-    outputs: campaign.receipts.map((r) => ({
+    outputs: campaign.receipts.filter((r) => isPublicDeliverableReceipt(r)).map((r) => ({
       id: r.id,
       label: r.label,
       mediaType: r.mediaType,
@@ -80,6 +89,7 @@ export function buildPublicSnapshot(input: {
     })),
     publicationStatus: campaign.publicationStatus ?? null,
     ual: anchored ? (campaign.campaignUAL as string) : null,
-    explorerUrl: anchored ? explorerUrlFor(campaign.campaignUAL as string) : null
+    explorerUrl: anchored ? explorerUrlFor(campaign.campaignUAL as string) : null,
+    txHash: transaction && campaign.campaignTxHash ? campaign.campaignTxHash.trim() : null
   };
 }

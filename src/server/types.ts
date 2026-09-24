@@ -79,15 +79,68 @@ export interface PermissionPassport {
   ual?: string; // set once published to DKG
 }
 
+/** How a source-media record entered the workspace. Legacy rows predate this field and read as "url". */
+export type SourceMediaOrigin = "url" | "upload";
+
+/**
+ * Private workspace-copy delivery identity for uploaded originals. Present
+ * only when source === "upload". Never public: no public share, verification
+ * snapshot, or public DKG payload may carry the public id or any delivery
+ * URL derived from it - only a time-limited download URL leaves Cloudinary,
+ * and only toward the production service at generation time.
+ */
+export interface SourceMediaStorage {
+  provider: "cloudinary";
+  publicId: string;
+  resourceType: "image" | "video";
+  /** Delivery format as stored (needed for the download endpoint). */
+  format: string;
+  bytes: number;
+}
+
 export interface SourceMedia {
   id: string;
   creatorId: string;
   title: string;
   type: "video" | "image";
+  /**
+   * Delivery reference. URL registrations store the public https URL.
+   * Uploads store a non-routable controlled reference
+   * ("private:cloudinary:<publicId>") that only the server resolves into a
+   * time-limited download URL at generation time - never render it directly.
+   */
   url: string;
-  /** Fingerprint of the reference URL string (registry correlation only - not a byte hash of the media). */
+  /**
+   * Fingerprint for registry correlation. URL registrations hash the
+   * reference URL string (not the bytes - those stay with the creator).
+   * Uploads hash the uploaded bytes (SHA-256).
+   */
   hash: string;
+  source?: SourceMediaOrigin;
+  storage?: SourceMediaStorage;
   ual?: string;
+}
+
+/** An upload-classified record: private workspace copy, never directly renderable. */
+export function isPrivateUpload(media: Pick<SourceMedia, "source">): boolean {
+  return media.source === "upload";
+}
+
+/**
+ * Which tile a surface may render for a source-media row. Uploads always
+ * resolve to "private" (their stored reference is non-routable and must
+ * never reach an img src, title, or other DOM attribute); URL rows keep
+ * their existing image/video previews. Pure so signed-in surfaces share
+ * one decision, unit-tested.
+ */
+export function mediaTileKind(media: Pick<SourceMedia, "source" | "type">): "private" | "image" | "video" {
+  if (isPrivateUpload(media)) return "private";
+  return media.type === "image" ? "image" : "video";
+}
+
+/** Non-routable controlled reference for an uploaded original. Never a URL. */
+export function uploadReference(publicId: string): string {
+  return `private:cloudinary:${publicId}`;
 }
 
 export interface ProductFacts {
@@ -206,6 +259,19 @@ export function isDeliverableReceipt(
   receipt: Pick<DerivativeReceipt, "storageStatus" | "deliveryBlocked" | "aspectVerdict">
 ): boolean {
   return hasSharableReceipt(receipt) && deliveryBlockReason(receipt) === null;
+}
+
+/**
+ * Public/shareable delivery: non-private AND deliverable (durably stored,
+ * not blocked). The single predicate behind share views, verification
+ * snapshots, and the approval gate - private derivatives (narration,
+ * captions), blocked ratios, and not-yet-stored outputs never reach
+ * public surfaces through any of them.
+ */
+export function isPublicDeliverableReceipt(
+  receipt: Pick<DerivativeReceipt, "visibility" | "storageStatus" | "deliveryBlocked" | "aspectVerdict">
+): boolean {
+  return receipt.visibility !== "private" && isDeliverableReceipt(receipt);
 }
 
 /** Job ids whose stored receipt blocks delivery (queue/plan derivation). */
@@ -536,8 +602,8 @@ export interface DerivativeReceipt {
  * from already-approved workspace data and containing ONLY intentional public
  * fields - no workspace/session ids, no user identifiers, no wallet material,
  * no private source media, no consent documents, no internal notes, no
- * private claims, no DKG payloads, no credentials. UAL/explorer are set only
- * when the record genuinely anchored.
+ * private claims, no DKG payloads, no credentials. UAL/explorer/transaction
+ * hash are set only when the record genuinely anchored.
  */
 export interface PublicVerificationOutput {
   id: string;
@@ -586,6 +652,8 @@ export interface PublicVerificationSnapshot {
   ual: string | null;
   /** Set ONLY when genuinely anchored. */
   explorerUrl: string | null;
+  /** Base Sepolia finalization hash. Set ONLY with a valid anchored UAL. */
+  txHash: string | null;
 }
 
 /**
@@ -642,6 +710,8 @@ export interface Campaign {
   request: CampaignRequest;
   status: CampaignStatus;
   campaignUAL?: string; // set once the campaign record is published to DKG
+  /** Base Sepolia finalization hash for an anchored campaign record only. */
+  campaignTxHash?: string;
   /** Explicit state from the real VM publish result. Missing on legacy rows (non-public). */
   publicationStatus?: PublicationStatus;
   /** High-entropy public verification reference. Set at approval; anonymous reads use it. */
@@ -736,6 +806,10 @@ export interface ConsentInvite {
   decision?: ConsentInviteDecision;
   /** Replacement link token when this row was superseded. */
   replacedBy?: string;
+  /** Client retry key. Repeating the same creation request returns this link. */
+  creationKey?: string;
+  /** Normalized scope fingerprint paired with creationKey. */
+  creationFingerprint?: string;
   version: 1;
 }
 

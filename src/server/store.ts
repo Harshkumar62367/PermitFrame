@@ -70,7 +70,8 @@ export async function writeDb(
 /** Write to an explicitly resolved workspace (no viewer session required). */
 export async function updateWorkspaceDb(
   workspaceId: string,
-  mutator: (db: Database) => void
+  mutator: (db: Database) => void,
+  options: { mirror?: boolean } = {}
 ): Promise<Database> {
   const db = getDb();
   const [row] = await db
@@ -88,9 +89,14 @@ export async function updateWorkspaceDb(
       set: { data, updatedAt: new Date() }
     });
   // Mirror hot collections to normalized tables (best-effort, never throws).
-  // The blob above stays canonical until backfill is verified.
-  const { mirrorWorkspaceToNormalized } = await import("./campaign-store");
-  await mirrorWorkspaceToNormalized(workspaceId, data);
+  // The blob above stays canonical until backfill is verified. Small
+  // consent-link lifecycle writes opt out: consent invites are not mirrored
+  // rows, and making a creator-facing cancellation wait for every campaign,
+  // event, passport, media, and fact mirror is both unnecessary and slow.
+  if (options.mirror !== false) {
+    const { mirrorWorkspaceToNormalized } = await import("./campaign-store");
+    await mirrorWorkspaceToNormalized(workspaceId, data);
+  }
   return data;
 }
 

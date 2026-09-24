@@ -61,12 +61,12 @@ export function deriveQualityReview(
 export function qualityReviewCopy(state: QualityReviewState): string {
   switch (state) {
     case "delivery_blocked":
-      return "Not deliverable — ratio mismatch.";
+      return "Not deliverable - ratio mismatch.";
     case "needs_attention":
-      return "Needs attention — the automated check flagged this output.";
+      return "Needs attention - the automated check flagged this output.";
     case "reviewed":
       return "Automated review found no issue.";
     case "not_assessed":
-      return "Not assessed automatically — review this asset before delivery.";
+      return "Not assessed automatically - review this asset before delivery.";
   }
 }

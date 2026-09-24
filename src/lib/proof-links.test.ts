@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { blockExplorerNftUrl, downloadHrefFor, parseUal } from "./proof-links";
+import { baseSepoliaTransactionUrl, blockExplorerNftUrl, downloadHrefFor, parseUal } from "./proof-links";
 
 describe("proof links", () => {
   it("parses UAL contract and token id", () => {
@@ -20,6 +20,18 @@ describe("proof links", () => {
       href: "https://sepolia.basescan.org/token/0xabc?a=10"
     });
     assert.equal(blockExplorerNftUrl("did:dkg:foo:999/0xabc/10"), null);
+  });
+
+  it("links only canonical Base Sepolia finalization hashes", () => {
+    const ual = "did:dkg:base:84532/0x31c83ac625c29ef7f4fabdb49ee68fb56b06977c/10";
+    const hash = `0x${"ab".repeat(32)}`;
+    assert.deepEqual(baseSepoliaTransactionUrl(ual, hash), {
+      label: "View Base Sepolia transaction",
+      href: `https://sepolia.basescan.org/tx/${hash}`
+    });
+    assert.equal(baseSepoliaTransactionUrl("did:dkg:base:8453/0xabc/10", hash), null);
+    assert.equal(baseSepoliaTransactionUrl(ual, "not-a-hash"), null);
+    assert.equal(baseSepoliaTransactionUrl(null, hash), null);
   });
 
   it("forces attachment downloads for stored assets, plain links otherwise", () => {

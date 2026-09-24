@@ -28,7 +28,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
     const evts = normalized.map((e) => ({
       kind: e.kind,
       at: e.at,
-      summary: scrubStoredText(e.summary, "Recorded entry unavailable — diagnostic detail was withheld."),
+      summary: scrubStoredText(e.summary, "Recorded entry unavailable - diagnostic detail was withheld."),
       id: e.id
     }));
     return NextResponse.json({ timeline: [...evts, ...comments].sort((a, b) => a.at.localeCompare(b.at)).reverse() });
@@ -40,7 +40,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
     timeline: entries.map((entry) =>
       entry.kind === "comment"
         ? entry
-        : { ...entry, summary: scrubStoredText(entry.summary, "Recorded entry unavailable — diagnostic detail was withheld.") }
+        : { ...entry, summary: scrubStoredText(entry.summary, "Recorded entry unavailable - diagnostic detail was withheld.") }
     )
   });
 }

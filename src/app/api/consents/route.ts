@@ -3,6 +3,7 @@ import { loadDb } from "@/server/store";
 import { createConsentRequest } from "@/server/platform";
 import { logDkgError, sanitizeDkgError } from "@/server/dkg/public-errors";
 import type { Platform, Transformation } from "@/server/types";
+import { IDEMPOTENCY_KEY_PATTERN } from "@/server/idempotency";
 
 export const dynamic = "force-dynamic";
 
@@ -24,7 +25,12 @@ export async function POST(request: NextRequest) {
     validUntil?: unknown;
     purpose?: unknown;
     replacesToken?: unknown;
+    idempotencyKey?: unknown;
   };
+  const idempotencyKey = typeof body.idempotencyKey === "string" ? body.idempotencyKey.trim() : "";
+  if (body.idempotencyKey !== undefined && !IDEMPOTENCY_KEY_PATTERN.test(idempotencyKey)) {
+    return NextResponse.json({ error: "Request retry key is invalid - refresh the form and try again." }, { status: 400 });
+  }
   try {
     const result = await createConsentRequest({
       creatorId: typeof body.creatorId === "string" ? body.creatorId : "",
@@ -41,6 +47,7 @@ export async function POST(request: NextRequest) {
         : [],
       validUntil: typeof body.validUntil === "string" ? body.validUntil : "",
       purpose: typeof body.purpose === "string" ? body.purpose : "",
+      ...(idempotencyKey ? { idempotencyKey } : {}),
       ...(typeof body.replacesToken === "string" && body.replacesToken ? { replacesToken: body.replacesToken } : {})
     });
     return NextResponse.json({ token: result.token, url: `/consent/${result.token}` });

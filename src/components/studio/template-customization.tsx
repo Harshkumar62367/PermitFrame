@@ -88,7 +88,7 @@ function ModelRoleSelect({
             {c.name}
           </option>
         ))}
-        {stale && <option value={STALE_MODEL_VALUE} disabled>Previously selected — unavailable</option>}
+        {stale && <option value={STALE_MODEL_VALUE} disabled>Previously selected - unavailable</option>}
       </select>
       {stale && (
         <span className="mt-0.5 block break-words text-[11px] text-amber-700 dark:text-amber-300">
@@ -184,7 +184,7 @@ export function TemplateCustomization({
               <div className="mt-3 rounded-lg bg-muted/60 p-3 ring-1 ring-border">
                 <p className="text-[11.5px] font-medium">Short-clip finishing</p>
                 <p className="mt-0.5 text-[11.5px] leading-relaxed text-muted-foreground">
-                  This pack generates images and an optional 3–15 second motion clip. Narration and burned captions
+                  This pack generates images and an optional 3-15 second motion clip. Narration and burned captions
                   are available after a Campaign Film reel is delivered. Music and soundtrack mixing are not available
                   yet.
                 </p>

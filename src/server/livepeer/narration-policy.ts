@@ -63,7 +63,7 @@ export const NARRATION_STALE_MS = 30 * 60 * 1000;
 
 /** Rendered for stale claimed jobs: non-success, no outcome invented. */
 export const NARRATION_OUTCOME_UNKNOWN_COPY =
-  "Narration outcome unknown — PermitFrame did not record a result. The provider request may or may not have completed.";
+  "Narration outcome unknown - PermitFrame did not record a result. The provider request may or may not have completed.";
 
 /** Recovery confirmation: explicit consent to a possible second charge. */
 export const NARRATION_RECOVERY_CONFIRM_COPY =

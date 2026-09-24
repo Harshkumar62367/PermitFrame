@@ -1,16 +1,20 @@
 /**
- * PermitFrame mark - a verification frame: camera-viewfinder corners
- * (the production frame) closing around a check (the permit).
- * Uses currentColor so it adapts to both themes.
+ * PermitFrame mark - mirrored permission brackets aligned inside a creative
+ * boundary. Uses currentColor so it adapts to both themes.
  */
 export function PermitFrameMark({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 32 32" fill="none" className={className} aria-hidden>
-      <path d="M5 11.5V8a3 3 0 0 1 3-3h3.5" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" />
-      <path d="M20.5 5H24a3 3 0 0 1 3 3v3.5" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" />
-      <path d="M27 20.5V24a3 3 0 0 1-3 3h-3.5" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" />
-      <path d="M11.5 27H8a3 3 0 0 1-3-3v-3.5" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" />
-      <path d="M10.5 16.75l4.5 4.5L22 12" stroke="#10b981" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+      <g stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M8 5h16" />
+        <path d="M5 8v6" />
+        <path d="M5 18v6" />
+        <path d="M27 8v6" />
+        <path d="M27 18v6" />
+        <path d="M8 27h16" />
+        <path d="M14 11h-2a3 3 0 0 0-3 3v4a3 3 0 0 0 3 3h2" />
+        <path d="M18 11h2a3 3 0 0 1 3 3v4a3 3 0 0 1-3 3h-2" />
+      </g>
     </svg>
   );
 }

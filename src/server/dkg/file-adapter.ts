@@ -3,6 +3,7 @@ import path from "node:path";
 import type { PermissionPassport, ProductFacts, Visibility } from "../types";
 import { type DkgAdapter, type DkgHealth, type KaRecord, basePublicationStatus } from "./adapter";
 import type { KaEnvelope } from "./schemas";
+import { mediaIdFromUrn } from "./schemas";
 
 const DKG_DIR = process.env.PERMITFRAME_DATA_DIR
   ? path.join(process.env.PERMITFRAME_DATA_DIR, "dkg")
@@ -150,11 +151,19 @@ export class FileDkgAdapter implements DkgAdapter {
 
 export function rowToPassport(row: Record<string, unknown>, ual?: string): PermissionPassport {
   const id = String(row["@id"] ?? "").replace("urn:permitframe:passport:", "") || "unknown";
+  const mediaRefs = row["pf:sourceMedia"];
+  const mediaList = Array.isArray(mediaRefs) ? mediaRefs : mediaRefs === undefined || mediaRefs === null ? [] : [mediaRefs];
   return {
     id,
     creatorId: String(row["pf:creatorId"] ?? ""),
     creatorName: String(row["pf:creatorName"] ?? ""),
-    sourceMediaIds: [],
+    sourceMediaIds: mediaList
+      .map((v) =>
+        v !== null && typeof v === "object" && "@id" in (v as Record<string, unknown>)
+          ? mediaIdFromUrn((v as { "@id": unknown })["@id"])
+          : mediaIdFromUrn(v)
+      )
+      .filter((v): v is string => v !== null),
     platforms: toList(row["pf:platform"]) as PermissionPassport["platforms"],
     countries: toList(row["pf:country"]),
     allowedTransformations: toList(row["pf:allowedTransformation"]) as PermissionPassport["allowedTransformations"],

@@ -1,6 +1,6 @@
 import { neon } from "@neondatabase/serverless";
 
-if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is missing from .env.local");
+if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is not set - add it to .env.local for local use, or export it in your shell.");
 
 const sql = neon(process.env.DATABASE_URL);
 const [counts] = await sql`

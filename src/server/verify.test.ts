@@ -34,6 +34,7 @@ const campaign = {
       claimsUsed: ["made with recycled materials"],
       derivedFrom: { sourceMediaId: "media_1", passportId: "passport_1", productFactsId: "facts_1" },
       generatedAt: "2026-09-17T00:00:00.000Z",
+      storageStatus: "stored",
       visibility: "shared"
     }
   ],
@@ -85,7 +86,10 @@ const BANNED_KEYS = [
   "note",
   "comment",
   "prompt:",
-  "outputHash"
+  "outputHash",
+  "livepeerJobId",
+  "livepeer",
+  "session"
 ];
 
 describe("buildPublicSnapshot", () => {
@@ -102,15 +106,18 @@ describe("buildPublicSnapshot", () => {
     assert.equal(s.outputs[0].providerUrlFingerprint, "abc", "legacy URL fingerprints map to the honest key");
   });
 
-  it("sets UAL/explorer only for genuinely anchored records", () => {
+  it("sets UAL, explorer, and Base Sepolia transaction only for genuinely anchored records", () => {
+    const baseUal = "did:dkg:base:84532/0x31c83ac625c29ef7f4fabdb49ee68fb56b06977c/10";
+    const txHash = `0x${"ab".repeat(32)}`;
     const anchored = buildPublicSnapshot({
       ref: "vrf_a",
-      campaign: { ...campaign, publicationStatus: "anchored", campaignUAL: "did:dkg:0xabc/1" } as Campaign,
+      campaign: { ...campaign, publicationStatus: "anchored", campaignUAL: baseUal, campaignTxHash: txHash } as Campaign,
       passport,
       facts
     });
-    assert.equal(anchored.ual, "did:dkg:0xabc/1");
+    assert.equal(anchored.ual, baseUal);
     assert.ok(anchored.explorerUrl?.startsWith("https://dkg.origintrail.io/explore?ual="));
+    assert.equal(anchored.txHash, txHash);
 
     for (const status of ["local", "shared", "failed", undefined] as const) {
       const s = buildPublicSnapshot({
@@ -121,6 +128,7 @@ describe("buildPublicSnapshot", () => {
       });
       assert.equal(s.ual, null, `status ${status} must not carry a UAL`);
       assert.equal(s.explorerUrl, null, `status ${status} must not carry an explorer link`);
+      assert.equal(s.txHash, null, `status ${status} must not carry a transaction hash`);
       assert.equal(s.publicationStatus, status ?? null);
     }
   });
@@ -134,6 +142,7 @@ describe("buildPublicSnapshot", () => {
     });
     assert.equal(s.ual, null);
     assert.equal(s.explorerUrl, null);
+    assert.equal(s.txHash, null);
     assert.equal(s.creatorName, "Creator");
     assert.equal(s.outputs.length, 1);
   });
@@ -147,6 +156,27 @@ describe("buildPublicSnapshot", () => {
       );
     }
   });
+
+  it("excludes private, blocked, and unstored receipts from public outputs", () => {
+    const base = campaign.receipts[0];
+    const s = buildPublicSnapshot({
+      ref: "vrf_filter",
+      campaign: {
+        ...campaign,
+        receipts: [
+          base,
+          { ...base, id: "rcpt_priv", visibility: "private" },
+          { ...base, id: "rcpt_blocked", aspectVerdict: "mismatch" },
+          { ...base, id: "rcpt_pending", storageStatus: "pending" }
+        ]
+      } as Campaign,
+      passport,
+      facts
+    });
+    assert.deepEqual(s.outputs.map((o) => o.id), ["rcpt_1"]);
+    const leaked = JSON.stringify(s.outputs);
+    assert.ok(!leaked.includes("private"), "private markers must not leak either");
+  });
 });
 
 describe("verify module session isolation", () => {
@@ -155,5 +185,11 @@ describe("verify module session isolation", () => {
     for (const banned of ["loadDb", "requireCurrentSession", "SESSION_COOKIE", "next/headers", "./store", "../store", "./auth", "../auth", "cookies()"]) {
       assert.ok(!source.includes(banned), `verify.ts must not reference ${banned}`);
     }
+  });
+
+  it("persists snapshots append-only, never overwriting history", () => {
+    const source = fs.readFileSync(path.join(process.cwd(), "src", "server", "verify.ts"), "utf8");
+    assert.ok(source.includes("onConflictDoNothing"), "snapshot saves must be insert-only");
+    assert.ok(!source.includes("onConflictDoUpdate"), "snapshot saves must never update published rows");
   });
 });

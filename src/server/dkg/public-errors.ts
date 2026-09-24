@@ -68,7 +68,7 @@ const PROVIDER_UNAVAILABLE = {
 
 const WORKSPACE_ERROR = {
   code: "workspace_error",
-  message: "Something went wrong — your workspace data is safe. Try again shortly."
+  message: "Something went wrong - your workspace data is safe. Try again shortly."
 } as const;
 
 /** Operational-detail signatures: usernames/hosts/paths/commands/query artefacts. */
@@ -169,6 +169,22 @@ const SAFE_EXACT_MESSAGES: ReadonlySet<string> = new Set([
   "Select at least one platform.",
   "Add at least one 2-letter country code.",
   "Expiry must be a future date.",
+  // creator onboarding (workspace-local record, no identity proof)
+  "Give the creator a name so media and requests can attach to them.",
+  "Creator name must be 80 characters or fewer.",
+  "Handle may only contain letters, numbers, and @ _ . - (40 characters or fewer).",
+  "Choose a creator for this asset - add one in the Media library first.",
+  "The chosen creator no longer exists - pick another one.",
+  // private source-media uploads (server-validated, restricted delivery)
+  "Choose a file to upload.",
+  "Could not read the uploaded file - try again.",
+  "The selected file is empty - choose a file with content.",
+  "Unsupported file type - upload a JPEG, PNG, GIF, or WebP image, or an MP4, WebM, or MOV video.",
+  "File content does not match its declared type - re-export the file and try again.",
+  "Image is too large - images up to 10 MB can be uploaded.",
+  "Video is too large - videos up to 25 MB can be uploaded.",
+  "Upload is too large - images up to 10 MB and videos up to 25 MB can be uploaded.",
+  "Upload storage is not configured - ask the workspace owner to connect durable storage first.",
   // captions / share / verification gates
   "Captions are only generated for policy-approved campaigns",
   "Share links need a ready-to-share output - previews and unsaved outputs stay private until durable storage confirms them.",
@@ -176,11 +192,22 @@ const SAFE_EXACT_MESSAGES: ReadonlySet<string> = new Set([
   "Public verification snapshots require an approved campaign pack.",
   // approval / production gates
   "Blocked campaigns cannot be approved",
+  "Only the workspace owner may approve campaigns.",
   "Produce the campaign pack before approving - previews and unsaved outputs cannot be signed off yet",
   "Store outputs securely before approving - provider-hosted legacy assets cannot be published as proof yet",
   "Resolve the rights block before choosing a production template - blocked campaigns never reach generation.",
   "Preflight has not approved this campaign",
   "No matching plan stages selected",
+  "Only deliverable shared outputs can be approved - private, blocked, or not-yet-stored outputs cannot be signed off.",
+  // production authorization revalidation (exact selected permission/media/facts)
+  "The selected source media is no longer in this workspace - choose approved media again before producing.",
+  "The selected source media does not belong to the campaign creator - choose approved media again before producing.",
+  "Verified product facts for this campaign are missing - re-check the product record before producing.",
+  "The selected product facts do not match this campaign's brand and product - re-check the product record before producing.",
+  "Permission expiry can only be extended with a new creator consent - send a fresh consent request instead of renewing.",
+  // renewal consent requests (prefilled, creator must still approve)
+  "Renewal must extend into the future - pick a date after today.",
+  "This permission names no approved media - create a new consent request manually.",
   // brief validation
   "Unknown platform.",
   "Use a 2-letter country code (e.g. GR for Greece, DE for Germany).",

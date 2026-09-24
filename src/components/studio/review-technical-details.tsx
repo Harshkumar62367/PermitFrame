@@ -1,11 +1,12 @@
 import { ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { blockExplorerNftUrl } from "@/lib/proof-links";
+import { baseSepoliaTransactionUrl, blockExplorerNftUrl } from "@/lib/proof-links";
 import type { DerivativeReceipt } from "@/server/types";
 
 interface ReviewTechnicalDetailsProps {
   receipts: Pick<DerivativeReceipt, "id" | "label" | "ual">[];
   campaignRecord: string | null;
+  campaignTxHash?: string | null;
   open: boolean;
   onToggle: () => void;
 }
@@ -14,7 +15,7 @@ interface ReviewTechnicalDetailsProps {
  * Collapsible per-receipt UAL list with explorer links for verification.
  * View-only: the open flag and toggle live in the parent.
  */
-export function ReviewTechnicalDetails({ receipts, campaignRecord, open, onToggle }: ReviewTechnicalDetailsProps) {
+export function ReviewTechnicalDetails({ receipts, campaignRecord, campaignTxHash, open, onToggle }: ReviewTechnicalDetailsProps) {
   return (
     <div className="mt-4 rounded-xl border border-border p-4">
       <button
@@ -49,12 +50,25 @@ export function ReviewTechnicalDetails({ receipts, campaignRecord, open, onToggl
               Campaign record · {campaignRecord}
               {(() => {
                 const nftLink = blockExplorerNftUrl(campaignRecord);
-                return nftLink ? (
+                const transactionLink = baseSepoliaTransactionUrl(campaignRecord, campaignTxHash);
+                return nftLink || transactionLink ? (
                   <>
-                    {" · "}
-                    <a href={nftLink.href} target="_blank" rel="noreferrer" className="font-sans text-sky-700 hover:underline dark:text-sky-300">
-                      {nftLink.label}
-                    </a>
+                    {nftLink && (
+                      <>
+                        {" · "}
+                        <a href={nftLink.href} target="_blank" rel="noreferrer" className="font-sans text-sky-700 hover:underline dark:text-sky-300">
+                          {nftLink.label}
+                        </a>
+                      </>
+                    )}
+                    {transactionLink && (
+                      <>
+                        {" · "}
+                        <a href={transactionLink.href} target="_blank" rel="noreferrer" className="font-sans text-sky-700 hover:underline dark:text-sky-300">
+                          {transactionLink.label}
+                        </a>
+                      </>
+                    )}
                   </>
                 ) : null;
               })()}

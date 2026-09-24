@@ -1,5 +1,6 @@
 import {
   BadgeCheck,
+  BookOpen,
   FolderKanban,
   Images,
   LayoutDashboard,
@@ -38,6 +39,12 @@ export const APP_NAV: NavGroup[] = [
       { href: "/media", label: "Media library", icon: Images },
       { href: "/verifier", label: "Verification", icon: BadgeCheck },
       { href: "/settings", label: "Settings", icon: Settings }
+    ]
+  },
+  {
+    section: "Resources",
+    items: [
+      { href: "/docs/getting-started", label: "Docs / Getting started", icon: BookOpen }
     ]
   }
 ];

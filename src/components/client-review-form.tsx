@@ -41,7 +41,7 @@ export function ClientReviewForm({ token }: { token: string }) {
     return (
       <div role="status" className="rounded-2xl bg-emerald-50 p-5 text-center ring-1 ring-emerald-200 dark:bg-emerald-950/40 dark:ring-emerald-900">
         <p className="text-[14px] font-semibold text-emerald-800 dark:text-emerald-300">
-          {done === "approved" ? "Approved - your decision has been recorded for the agency." : "Changes requested - your notes have been recorded for the agency."}
+          {done === "approved" ? "Recommendation recorded - the agency reviews it for final sign-off." : "Changes requested - your notes have been recorded for the agency."}
         </p>
       </div>
     );
@@ -68,8 +68,8 @@ export function ClientReviewForm({ token }: { token: string }) {
           )}
         >
           <Check className="h-5 w-5 text-emerald-600 dark:text-emerald-400" aria-hidden />
-          <p className="mt-2 text-[14px] font-semibold">Approve the pack</p>
-          <p className="mt-0.5 text-[12px] text-muted-foreground">Signs off this campaign as final.</p>
+          <p className="mt-2 text-[14px] font-semibold">Recommend approval</p>
+          <p className="mt-0.5 text-[12px] text-muted-foreground">Records your recommendation - final sign-off stays with the agency.</p>
         </button>
         <button
           type="button"
@@ -125,7 +125,7 @@ export function ClientReviewForm({ token }: { token: string }) {
             aria-busy={busy}
             className="w-full rounded-full bg-emerald-700 py-2.5 font-medium text-emerald-50 hover:bg-emerald-600 dark:bg-emerald-500 dark:text-emerald-950 dark:hover:bg-emerald-400"
           >
-            {busy ? "Sending…" : decision === "approved" ? "Confirm approval" : "Send change request"}
+            {busy ? "Sending…" : decision === "approved" ? "Send recommendation" : "Send change request"}
           </Button>
         </>
       )}

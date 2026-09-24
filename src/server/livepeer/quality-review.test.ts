@@ -106,12 +106,12 @@ describe("truncateQualityNote", () => {
 
 describe("qualityReviewCopy", () => {
   it("covers every state with fixed reviewer-safe copy", () => {
-    assert.equal(qualityReviewCopy("delivery_blocked"), "Not deliverable — ratio mismatch.");
-    assert.equal(qualityReviewCopy("needs_attention"), "Needs attention — the automated check flagged this output.");
+    assert.equal(qualityReviewCopy("delivery_blocked"), "Not deliverable - ratio mismatch.");
+    assert.equal(qualityReviewCopy("needs_attention"), "Needs attention - the automated check flagged this output.");
     assert.equal(qualityReviewCopy("reviewed"), "Automated review found no issue.");
     assert.equal(
       qualityReviewCopy("not_assessed"),
-      "Not assessed automatically — review this asset before delivery."
+      "Not assessed automatically - review this asset before delivery."
     );
   });
 });

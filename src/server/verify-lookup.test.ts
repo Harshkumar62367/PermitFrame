@@ -31,7 +31,8 @@ const payload: PublicVerificationSnapshot = {
   outputs: [],
   publicationStatus: "local",
   ual: null,
-  explorerUrl: null
+  explorerUrl: null,
+  txHash: null
 };
 
 const sharedPayload: PublicVerificationSnapshot = {
@@ -137,7 +138,7 @@ describe("anonymous verification reads", () => {
     const allowedSnapshotKeys = [
       "approvedAt", "brand", "brandRules", "campaignId", "captions", "country", "creatorName",
       "explorerUrl", "outputs", "platform", "productName", "publicationStatus", "ref",
-      "rightsSummary", "status", "title", "ual", "verifiedClaims"
+      "rightsSummary", "status", "title", "txHash", "ual", "verifiedClaims"
     ].sort();
     assert.deepEqual(Object.keys(body.snapshot ?? {}).sort(), allowedSnapshotKeys);
     const dump = JSON.stringify(body);
