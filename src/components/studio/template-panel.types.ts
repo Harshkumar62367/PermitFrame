@@ -33,6 +33,8 @@ export interface PreviewStage {
   role: string;
   format: string;
   capability: string;
+  /** Exact user-pinned model for this stage, or null for Automatic resolution. */
+  requestedCapability: string | null;
   durationSeconds: number | null;
   requestedDurationSeconds: number | null;
   durationAdjusted: boolean;

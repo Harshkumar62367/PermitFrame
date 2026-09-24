@@ -123,6 +123,20 @@ export function TemplatePanel({ campaign, allowed, film, onChanged }: TemplatePa
                 onCap={vm.setCap}
                 showDetails={vm.showDetails}
                 onToggleDetails={() => vm.setShowDetails((v) => !v)}
+                imageModel={vm.imageModel}
+                motionModel={vm.motionModel}
+                onImageModel={vm.setImageModel}
+                onMotionModel={vm.setMotionModel}
+                modelChoices={vm.modelChoices}
+                modelsLoading={vm.modelsLoading}
+                modelsError={vm.modelsError}
+                onRefreshModels={vm.refreshModelChoices}
+                hasImageRole={vm.hasImageRole}
+                hasMotionRole={vm.hasMotionRole}
+                imageModelStale={vm.imageModelStale}
+                motionModelStale={vm.motionModelStale}
+                modelsOpen={vm.modelsOpen}
+                onToggleModels={() => vm.setModelsOpen((v) => !v)}
               />
 
               <TemplatePackReview

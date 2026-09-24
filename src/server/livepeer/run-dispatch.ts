@@ -10,6 +10,7 @@ import type { PreservationDecision } from "./preservation-policy";
 import { nowIso } from "../store";
 import { readWorkspace, writeWorkspace } from "./run-store";
 import { assertCapabilityAvailable } from "./catalogue";
+import { MODEL_OVERRIDE_UNAVAILABLE } from "./template-catalogue";
 import { fetchLivePriceMap, quoteStage, stageSpendingCeiling } from "./pricing";
 import { resolveMotionDuration } from "./duration-policy";
 import { isUsableOutputUrl } from "./plan-dag";
@@ -301,7 +302,13 @@ export async function dispatchSlot(
   try {
     await assertCapabilityAvailable(dispatchCap);
   } catch (error) {
-    await failStageJobs(campaign.id, stage.id, (error as Error).message, workspaceId, run.jobIds);
+    // A user-pinned model is never substituted: the guard failure carries
+    // the static safe message (zero create_media calls happen above or
+    // below this point). Automatic stages keep the detailed provider error.
+    const pinned = stage.requestedCapability;
+    const message =
+      pinned !== undefined && dispatchCap === pinned ? MODEL_OVERRIDE_UNAVAILABLE : (error as Error).message;
+    await failStageJobs(campaign.id, stage.id, message, workspaceId, run.jobIds);
     return true;
   }
 

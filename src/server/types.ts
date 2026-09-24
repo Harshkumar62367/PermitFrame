@@ -267,6 +267,13 @@ export interface ProductionStagePlan {
    * first preference at plan time. Copied onto jobs for honest provenance.
    */
   fallbackFrom?: string;
+  /**
+   * User-pinned model for this stage (Short Clip advanced model choice).
+   * Present only when an explicit override resolved it - capability equals
+   * this value and no fallback was recorded. Absent on automatic stages
+   * and all legacy rows.
+   */
+  requestedCapability?: string;
 }
 
 export interface PreflightDecision {

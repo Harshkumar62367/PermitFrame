@@ -113,6 +113,12 @@ export function TemplatePackReview({
                           Required for {s.requiredFor.join(", ")}
                         </span>
                       )}
+                      <span
+                        className="ml-1.5 rounded-full px-1.5 py-0.5 font-mono text-[9.5px] ring-1 ring-border text-muted-foreground"
+                        title={s.requestedCapability ? `Pinned model choice: ${s.requestedCapability}` : "Automatic: profile-driven resolution with fallback"}
+                      >
+                        Model: {s.requestedCapability ?? "Automatic"}
+                      </span>
                     </span>
                     <span className="shrink-0 font-mono text-[10.5px]" title={s.durationNote ?? undefined}>
                       {s.durationSeconds ? `${s.durationSeconds}s${s.durationAdjusted && s.requestedDurationSeconds !== null ? ` (was ${s.requestedDurationSeconds}s)` : ""}` : s.capability}

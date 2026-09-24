@@ -1,6 +1,7 @@
 import { LivepeerMcpClient, livepeerConfig } from "./mcp-client";
 import type { QualityProfile, StageRole } from "../types";
 import { DEFAULT_QUALITY_PROFILE } from "./plan-dag";
+import type { ModelOverrideRole } from "./template-catalogue";
 
 /**
  * Small, reusable capability catalogue built ONLY from live Livepeer MCP
@@ -202,6 +203,46 @@ export interface ResolvedRole {
   source: "configured" | "discovered" | "default";
   /** "first-pick → actual" when availability forced an honest substitution. */
   fallbackFrom?: string;
+}
+
+/** Safe display data for one selectable model: name + short provider blurb only. */
+export interface ModelChoice {
+  name: string;
+  description: string;
+}
+
+const MODEL_CHOICE_DESCRIPTION_MAX = 200;
+
+/**
+ * Model choices for an expert override, drawn ONLY from the current live
+ * catalogue: the override key's verified role family (its in-code
+ * eligibility ladder across all profiles - critic, preservation,
+ * product-photo, upscale, and audio ladders are never included),
+ * intersected with capabilities the snapshot reports available right now.
+ * Returns safe display data only - never endpoints, auth mode, raw
+ * payloads, internal model ids, or error text. No external documentation
+ * list is consulted; models outside the verified family are offered only
+ * through Automatic resolution, never as manual pins.
+ */
+export function modelChoicesForOverride(snapshot: CatalogueSnapshot, key: ModelOverrideRole): ModelChoice[] {
+  if (!snapshot.reachable) return [];
+  const available = new Set(
+    snapshot.capabilities.filter((c) => c.availability === "available").map((c) => c.name)
+  );
+  const family: StageRole = key === "conceptImage" ? "conceptImage" : "imageToVideo";
+  const names: string[] = [];
+  for (const profile of ["draft", "balanced", "premium"] as QualityProfile[]) {
+    for (const name of ROLE_PREFERENCE[family][profile]) {
+      if (!names.includes(name)) names.push(name);
+    }
+  }
+  const byName = new Map(snapshot.capabilities.map((c) => [c.name, c]));
+  return names
+    .filter((name) => available.has(name))
+    .map((name) => ({
+      name,
+      description: (byName.get(name)?.description ?? "").trim().slice(0, MODEL_CHOICE_DESCRIPTION_MAX)
+    }));
 }
 
 export interface RoleResolutionInput {

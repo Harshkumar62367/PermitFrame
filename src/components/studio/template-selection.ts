@@ -1,5 +1,6 @@
 import { ALL_FORMATS } from "./template-panel.types";
 import type { TemplateMeta } from "./template-panel.types";
+import type { ModelChoice } from "@/server/livepeer/catalogue";
 
 /**
  * Pure selection/normalization helpers for the campaign pack configurator.
@@ -19,6 +20,67 @@ export interface DraftSelection {
   qualityProfile: string;
   /** Raw spend-cap input: undefined/"" when empty, otherwise the typed text. */
   maxSpendCapUsd?: number | string;
+  /** Per-role expert model choice, normalized like the persisted shape below. */
+  modelOverrides?: { conceptImage?: string; imageToVideo?: string };
+}
+
+/** Sentinel for profile-driven resolution in the model-choice UI. */
+export const MODEL_AUTOMATIC = "automatic";
+
+/** Neutral copy when live model discovery cannot be read - retryable, never an outage claim. */
+export const MODEL_CHOICES_UNAVAILABLE = "Model choices are unavailable right now.";
+
+/** Display-only model entries per override role, as served by the safe choices endpoint. */
+export interface ModelRoleChoices {
+  conceptImage: ModelChoice[];
+  imageToVideo: ModelChoice[];
+}
+
+/**
+ * Map a choices-endpoint envelope onto client state. `ok: true` with
+ * `reachable: false` (or a missing list) is unavailable discovery - never
+ * an authoritative empty list - so choices stay null and any saved pin is
+ * left alone for the server preview/apply/dispatch guards to judge.
+ * Transport failures are not mapped here: the caller keeps the previous
+ * state and only surfaces the neutral retry copy.
+ */
+export function applyModelChoicesResponse(
+  res: { reachable?: boolean; choices?: ModelRoleChoices } | null
+): { choices: ModelRoleChoices | null; reachable: boolean | null; error: string | null } {
+  if (res && res.reachable === true && res.choices) {
+    return { choices: res.choices, reachable: true, error: null };
+  }
+  return { choices: null, reachable: false, error: MODEL_CHOICES_UNAVAILABLE };
+}
+
+/**
+ * A saved pin is stale only against a reachable, successfully fetched live
+ * list that omits it. Automatic, loading, unknown, and unreachable states
+ * are never stale - Apply stays locally unblocked and the authoritative
+ * server guards decide.
+ */
+export function isModelChoiceStale(
+  value: string,
+  roleChoices: { name: string }[] | null,
+  reachable: boolean | null,
+  loading: boolean
+): boolean {
+  if (value === MODEL_AUTOMATIC || loading) return false;
+  if (roleChoices === null || reachable !== true) return false;
+  return !roleChoices.some((c) => c.name === value);
+}
+
+/** Drop Automatic/blank entries so absent ≡ Automatic everywhere. */
+export function normalizeModelOverrides(
+  v: { conceptImage?: string; imageToVideo?: string } | undefined
+): { conceptImage?: string; imageToVideo?: string } | undefined {
+  if (!v) return undefined;
+  const out: { conceptImage?: string; imageToVideo?: string } = {};
+  for (const key of ["conceptImage", "imageToVideo"] as const) {
+    const raw = v[key];
+    if (typeof raw === "string" && raw.trim() !== "" && raw !== MODEL_AUTOMATIC) out[key] = raw;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 /** Duration validity lives next to the input: invalid values block preview and apply. */
@@ -39,6 +101,8 @@ export interface SelectionBuildInput {
   durationError: string | null;
   profile: string;
   cap: string;
+  /** Per-role model choice ("automatic" or a capability name). */
+  modelOverrides: { conceptImage: string; imageToVideo: string };
 }
 
 /** Request selection: all formats means formats are omitted; custom stages only for custom packs. */
@@ -56,6 +120,8 @@ export function buildSelection(input: SelectionBuildInput): Record<string, unkno
   }
   const capNum = input.cap.trim() === "" ? undefined : Number(input.cap);
   if (capNum !== undefined && Number.isFinite(capNum) && capNum > 0) sel.maxSpendCapUsd = capNum;
+  const overrides = normalizeModelOverrides(input.modelOverrides);
+  if (overrides) sel.modelOverrides = overrides;
   return sel;
 }
 
@@ -68,13 +134,16 @@ export interface NormalizedSelection {
   motionSeconds: number | undefined;
   qualityProfile?: string;
   cap: string;
+  modelOverrides: { conceptImage?: string; imageToVideo?: string } | undefined;
 }
 
 /**
  * Active-vs-draft comparison on persisted values, not display strings.
  * Normalized fields: template id, pack id, sorted asset types, formats
  * (full set ≡ absent), custom stage ids (sorted, custom only), motion
- * length (motion on only, legacy default 5), profile, spend cap.
+ * length (motion on only, legacy default 5), profile, spend cap, expert
+ * model overrides (absent ≡ Automatic on both sides, so legacy rows
+ * compare exactly as before).
  */
 export function normalizeSelection(v: DraftSelection): NormalizedSelection {
   const assets = [...v.assetTypes].sort();
@@ -87,7 +156,8 @@ export function normalizeSelection(v: DraftSelection): NormalizedSelection {
     stageIds: v.packSize === "custom" ? [...(v.stageIds ?? [])].sort() : [],
     motionSeconds: assets.includes("motion") ? (v.motionSeconds ?? 5) : undefined,
     qualityProfile: v.qualityProfile,
-    cap: v.maxSpendCapUsd === undefined || v.maxSpendCapUsd === "" ? "" : String(Number(v.maxSpendCapUsd))
+    cap: v.maxSpendCapUsd === undefined || v.maxSpendCapUsd === "" ? "" : String(Number(v.maxSpendCapUsd)),
+    modelOverrides: normalizeModelOverrides(v.modelOverrides)
   };
 }
 
@@ -101,6 +171,7 @@ export interface PersistedSelection {
   motionSeconds?: number | null;
   qualityProfile?: string;
   maxSpendCapUsd?: number;
+  modelOverrides?: { conceptImage?: string; imageToVideo?: string };
 }
 
 /**
@@ -119,7 +190,8 @@ export function computeHasChanges(persisted: PersistedSelection | undefined, dra
     stageIds: persisted.stageIds,
     motionSeconds: persisted.motionSeconds ?? null,
     qualityProfile: persisted.qualityProfile ?? "",
-    maxSpendCapUsd: persisted.maxSpendCapUsd
+    maxSpendCapUsd: persisted.maxSpendCapUsd,
+    modelOverrides: persisted.modelOverrides
   });
   return JSON.stringify(active) !== JSON.stringify(normalizeSelection(draft));
 }
@@ -171,9 +243,11 @@ export interface CanApplyInput {
   durationError: string | null;
   packSize: string;
   stageIds: string[];
+  /** A saved expert model choice that is no longer selectable. */
+  modelsBlocked: boolean;
 }
 
-/** Invalid duration blocks apply; custom packs need at least one stage. */
+/** Invalid duration blocks apply; custom packs need at least one stage; stale model pins block apply. */
 export function deriveCanApply(input: CanApplyInput): boolean {
   return (
     input.allowed &&
@@ -181,6 +255,7 @@ export function deriveCanApply(input: CanApplyInput): boolean {
     input.hasPreview &&
     !input.hasPreviewError &&
     input.durationError === null &&
+    !input.modelsBlocked &&
     (input.packSize !== "custom" || input.stageIds.length > 0)
   );
 }

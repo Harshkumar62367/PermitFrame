@@ -1,5 +1,6 @@
 import type { ProductionStagePlan, QualityProfile } from "../types";
 import type { ProductionTemplate, TemplateSelection, TemplateStageRecipe } from "./template-catalogue";
+import { MODEL_OVERRIDE_STAGE_ROLES, type ModelOverrideRole } from "./template-catalogue";
 import type { AutoIncludedPrerequisite } from "./template-selection";
 import { closeSelectionDependencies, pickRecipes } from "./template-selection";
 import { resolveMotionDuration, type DurationMetadata } from "./duration-policy";
@@ -15,12 +16,40 @@ import { resolveMotionDuration, type DurationMetadata } from "./duration-policy"
 export interface CapabilityResolution {
   capability: string;
   fallbackFrom?: string;
+  /**
+   * User-pinned model for this stage (Short Clip advanced model choice).
+   * Present only when an explicit override resolved it - capability equals
+   * this value and no fallback was recorded. Absent on automatic stages.
+   */
+  requestedCapability?: string;
+}
+
+/**
+ * Expert override for one stage role, if the selection pins it. The
+ * concept choice covers the concept family (source-guided variations ride
+ * the concept pick); every other role resolves automatically. Returns
+ * undefined for Automatic (absent) overrides.
+ */
+export function overrideForRole(
+  role: TemplateStageRecipe["role"],
+  overrides: Partial<Record<ModelOverrideRole, string>> | undefined
+): string | undefined {
+  if (!overrides) return undefined;
+  if (overrides.conceptImage && MODEL_OVERRIDE_STAGE_ROLES.conceptImage.includes(role)) {
+    return overrides.conceptImage;
+  }
+  if (overrides.imageToVideo && MODEL_OVERRIDE_STAGE_ROLES.imageToVideo.includes(role)) {
+    return overrides.imageToVideo;
+  }
+  return undefined;
 }
 
 export interface BuiltTemplateStage {
   recipe: TemplateStageRecipe;
   capability: string;
   fallbackFrom?: string;
+  /** User-pinned model for this stage - persisted, never substituted. */
+  requestedCapability?: string;
   /** Resolved clip length (motion only). */
   durationSeconds?: number;
   /** Requested clip length before adjustment (motion only). */
@@ -74,7 +103,13 @@ export function buildTemplateStages(
       deferred.push({ recipe, reason: recipe.deferredReason ?? "Not dispatched by this production task." });
       continue;
     }
-    const resolved = resolveCapability(recipe.role);
+    // Explicit expert override pins the exact capability for every matching
+    // stage - no fallback recording, never substituted. Without an override
+    // the injected automatic resolution runs exactly as before.
+    const pinned = overrideForRole(recipe.role, selection.modelOverrides);
+    const resolved = pinned
+      ? { capability: pinned, requestedCapability: pinned }
+      : resolveCapability(recipe.role);
     if (recipe.kind === "image-to-video") {
       const requested = selection.motionSeconds ?? recipe.defaultDurationSeconds ?? 6;
       const duration = resolveMotionDuration(requested, resolved.capability, durationMetadata?.[resolved.capability]);
@@ -83,6 +118,7 @@ export function buildTemplateStages(
         recipe,
         capability: resolved.capability,
         ...(resolved.fallbackFrom ? { fallbackFrom: resolved.fallbackFrom } : {}),
+        ...(resolved.requestedCapability ? { requestedCapability: resolved.requestedCapability } : {}),
         durationSeconds: duration.resolvedSeconds,
         requestedDurationSeconds: duration.requestedSeconds,
         ...(duration.adjusted && duration.adjustmentReason ? { durationNote: duration.adjustmentReason } : {}),
@@ -93,7 +129,8 @@ export function buildTemplateStages(
     stages.push({
       recipe,
       capability: resolved.capability,
-      ...(resolved.fallbackFrom ? { fallbackFrom: resolved.fallbackFrom } : {})
+      ...(resolved.fallbackFrom ? { fallbackFrom: resolved.fallbackFrom } : {}),
+      ...(resolved.requestedCapability ? { requestedCapability: resolved.requestedCapability } : {})
     });
   }
   return {
@@ -128,6 +165,7 @@ export function toPlanStages(built: BuiltTemplatePlan, profile: QualityProfile):
     role: s.recipe.role,
     ...(s.durationSeconds !== undefined ? { durationSeconds: s.durationSeconds } : {}),
     ...(s.requestedDurationSeconds !== undefined ? { requestedDurationSeconds: s.requestedDurationSeconds } : {}),
+    ...(s.requestedCapability ? { requestedCapability: s.requestedCapability } : {}),
     ...(s.durationNote ? { durationNote: s.durationNote } : {}),
     ...(s.durationSource ? { durationSource: s.durationSource } : {}),
     ...(s.fallbackFrom ? { fallbackFrom: s.fallbackFrom } : {})

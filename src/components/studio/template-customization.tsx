@@ -3,6 +3,16 @@
 import { Check, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DURATION_CHIPS, type TemplateMeta } from "./template-panel.types";
+import type { ModelChoice } from "@/server/livepeer/catalogue";
+import { MODEL_AUTOMATIC } from "./template-selection";
+
+/** Value shown for a saved pin that is no longer selectable - never submitted. */
+const STALE_MODEL_VALUE = "__previously-selected-unavailable__";
+
+export interface ModelChoices {
+  conceptImage: ModelChoice[];
+  imageToVideo: ModelChoice[];
+}
 
 interface TemplateCustomizationProps {
   campaignId: string;
@@ -28,8 +38,66 @@ interface TemplateCustomizationProps {
   onCap: (cap: string) => void;
   showDetails: boolean;
   onToggleDetails: () => void;
+  imageModel: string;
+  motionModel: string;
+  onImageModel: (model: string) => void;
+  onMotionModel: (model: string) => void;
+  modelChoices: ModelChoices | null;
+  modelsLoading: boolean;
+  modelsError: string | null;
+  onRefreshModels: () => void;
+  hasImageRole: boolean;
+  hasMotionRole: boolean;
+  imageModelStale: boolean;
+  motionModelStale: boolean;
+  modelsOpen: boolean;
+  onToggleModels: () => void;
 }
 
+/** Per-role expert model selector. Values and callback only - no state, no API. */
+function ModelRoleSelect({
+  id,
+  label,
+  value,
+  stale,
+  choices,
+  onChange
+}: {
+  id: string;
+  label: string;
+  value: string;
+  stale: boolean;
+  choices: ModelChoice[];
+  onChange: (model: string) => void;
+}) {
+  return (
+    <label className="block">
+      <span className="text-[11px] font-medium text-muted-foreground">{label}</span>
+      <select
+        id={id}
+        value={stale ? STALE_MODEL_VALUE : value}
+        onChange={(e) => {
+          if (e.target.value !== STALE_MODEL_VALUE) onChange(e.target.value);
+        }}
+        aria-label={`${label} choice`}
+        className="mt-0.5 w-full rounded-lg border border-border bg-card px-2.5 py-1.5 text-[12.5px] focus:border-emerald-500/50 focus:outline-none"
+      >
+        <option value={MODEL_AUTOMATIC}>Automatic (recommended)</option>
+        {choices.map((c) => (
+          <option key={c.name} value={c.name} title={c.description || undefined}>
+            {c.name}
+          </option>
+        ))}
+        {stale && <option value={STALE_MODEL_VALUE} disabled>Previously selected — unavailable</option>}
+      </select>
+      {stale && (
+        <span className="mt-0.5 block break-words text-[11px] text-amber-700 dark:text-amber-300">
+          &ldquo;{value}&rdquo; is no longer selectable.
+        </span>
+      )}
+    </label>
+  );
+}
 /** Optional pack customization disclosure. Values and callbacks only - no state, no API. */
 export function TemplateCustomization({
   campaignId,
@@ -53,7 +121,21 @@ export function TemplateCustomization({
   cap,
   onCap,
   showDetails,
-  onToggleDetails
+  onToggleDetails,
+  imageModel,
+  motionModel,
+  onImageModel,
+  onMotionModel,
+  modelChoices,
+  modelsLoading,
+  modelsError,
+  onRefreshModels,
+  hasImageRole,
+  hasMotionRole,
+  imageModelStale,
+  motionModelStale,
+  modelsOpen,
+  onToggleModels
 }: TemplateCustomizationProps) {
   return (
     <div className="rounded-xl border border-border">
@@ -100,9 +182,11 @@ export function TemplateCustomization({
                 Include a short motion clip
               </button>
               <div className="mt-3 rounded-lg bg-muted/60 p-3 ring-1 ring-border">
-                <p className="text-[11.5px] font-medium">Planned capabilities</p>
+                <p className="text-[11.5px] font-medium">Short-clip finishing</p>
                 <p className="mt-0.5 text-[11.5px] leading-relaxed text-muted-foreground">
-                  Narration, Music, and Subtitles are not included in this version.
+                  This pack generates images and an optional 3–15 second motion clip. Narration and burned captions
+                  are available after a Campaign Film reel is delivered. Music and soundtrack mixing are not available
+                  yet.
                 </p>
               </div>
             </div>
@@ -271,6 +355,91 @@ export function TemplateCustomization({
                 className="mt-1.5 w-full rounded-lg border border-border bg-card px-3 py-1.5 text-[13px] focus:border-emerald-500/50 focus:outline-none"
               />
             </div>
+          </div>
+
+          <div>
+            <button
+              type="button"
+              onClick={onToggleModels}
+              aria-expanded={modelsOpen}
+              className="inline-flex items-center gap-1 text-[12px] font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+            >
+              <ChevronDown className={cn("h-3.5 w-3.5 transition", modelsOpen && "rotate-180")} aria-hidden />
+              Model choice (advanced)
+              {!modelsOpen && (
+                <span className="font-normal">
+                  {imageModel !== MODEL_AUTOMATIC || motionModel !== MODEL_AUTOMATIC ? " · Custom" : " · Automatic"}
+                </span>
+              )}
+            </button>
+            {modelsOpen && (
+              <div className="mt-2 rounded-xl border border-border p-3">
+                <p className="text-[11.5px] leading-relaxed text-muted-foreground">
+                  Automatic uses the selected quality profile and Livepeer&apos;s available rendering path. A manual
+                  choice pins that model for this deliverable and may become unavailable.
+                </p>
+                {modelsLoading && !modelChoices && (
+                  <p className="mt-2 text-[12px] text-muted-foreground">Loading model choices…</p>
+                )}
+                {modelsError && !modelChoices && (
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <p className="text-[12px] text-muted-foreground">{modelsError}</p>
+                    <button
+                      type="button"
+                      onClick={onRefreshModels}
+                      className="rounded-full px-2.5 py-1 text-[11.5px] ring-1 ring-border transition hover:ring-emerald-600/40"
+                    >
+                      Refresh
+                    </button>
+                  </div>
+                )}
+                {modelChoices && (
+                  <div className="mt-2 grid gap-3 sm:grid-cols-2">
+                    {hasImageRole && (
+                      <ModelRoleSelect
+                        id={`image-model-${campaignId}`}
+                        label="Image model"
+                        value={imageModel}
+                        stale={imageModelStale}
+                        choices={modelChoices.conceptImage}
+                        onChange={onImageModel}
+                      />
+                    )}
+                    {hasMotionRole && (
+                      <ModelRoleSelect
+                        id={`motion-model-${campaignId}`}
+                        label="Motion model"
+                        value={motionModel}
+                        stale={motionModelStale}
+                        choices={modelChoices.imageToVideo}
+                        onChange={onMotionModel}
+                      />
+                    )}
+                    {!hasImageRole && !hasMotionRole && (
+                      <p className="text-[12px] text-muted-foreground">
+                        No image or motion deliverable is selected in this pack.
+                      </p>
+                    )}
+                  </div>
+                )}
+                <div className="mt-2">
+                  <button
+                    type="button"
+                    onClick={onRefreshModels}
+                    disabled={modelsLoading}
+                    aria-busy={modelsLoading}
+                    className="rounded-full px-2.5 py-1 text-[11.5px] ring-1 ring-border transition hover:ring-emerald-600/40 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {modelsLoading ? "Refreshing…" : "Refresh model list"}
+                  </button>
+                </div>
+                {(imageModelStale || motionModelStale) && (
+                  <p role="alert" className="mt-1.5 break-words text-[12px] text-amber-700 dark:text-amber-300">
+                    A previously selected model is unavailable. Choose Automatic or an available model to apply.
+                  </p>
+                )}
+              </div>
+            )}
           </div>
 
           <div>

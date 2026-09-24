@@ -63,7 +63,39 @@ export interface TemplateSelection {
   qualityProfile: QualityProfile;
   /** Optional run spend ceiling in USD, enforced at produce time. */
   maxSpendCapUsd?: number;
+  /**
+   * Optional expert model choice per deliverable role. Absent (or an empty
+   * entry) means Automatic: existing profile → live discovery → default
+   * resolution with fallback recording. A present entry pins that exact
+   * capability for every matching selected stage and is never substituted.
+   * Legacy selections omit this and behave exactly as before.
+   */
+  modelOverrides?: Partial<Record<ModelOverrideRole, string>>;
 }
+
+/**
+ * Deliverable roles a user may pin a model for. Only the concept-image
+ * family and image-to-video motion: never critic, preservation or
+ * product-photo tooling, upscale, deferred audio, captions, narration, or
+ * music.
+ */
+export type ModelOverrideRole = "conceptImage" | "imageToVideo";
+
+export const MODEL_OVERRIDE_ROLES: ModelOverrideRole[] = ["conceptImage", "imageToVideo"];
+
+/**
+ * Stage roles each override key pins. The concept choice covers the concept
+ * family: source-guided variations resolve from the concept pick so
+ * siblings stay on one model per run (mirrors plan resolution).
+ */
+export const MODEL_OVERRIDE_STAGE_ROLES: Record<ModelOverrideRole, StageRole[]> = {
+  conceptImage: ["conceptImage", "sourceGuidedImage"],
+  imageToVideo: ["imageToVideo"]
+};
+
+/** Static user-safe refusal when a pinned model cannot be honored. */
+export const MODEL_OVERRIDE_UNAVAILABLE =
+  "Selected model is not currently available for this deliverable. Refresh the model list or choose Automatic.";
 
 export type RecipeExecution = "create_media" | "deferred";
 

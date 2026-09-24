@@ -12,11 +12,16 @@ import {
   type TemplateMeta,
   type TemplatePreview as Preview
 } from "./template-panel.types";
+import type { ModelChoice } from "@/server/livepeer/catalogue";
 import {
-  buildCustomizeSummary,
+  MODEL_AUTOMATIC,
+  MODEL_CHOICES_UNAVAILABLE,
+  applyModelChoicesResponse,
   buildSelection,
+  buildCustomizeSummary,
   computeHasChanges,
   deriveCanApply,
+  isModelChoiceStale,
   recommendedStageIds,
   switchTemplateSelection,
   toggleList,
@@ -49,9 +54,28 @@ export function useTemplateSelection({ campaign, allowed, onChanged }: UseTempla
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [profile, setProfile] = useState<string>(spec?.qualityProfile ?? campaign.request.qualityProfile ?? "balanced");
   const [cap, setCap] = useState<string>(spec?.maxSpendCapUsd !== undefined ? String(spec.maxSpendCapUsd) : "");
+  // Expert model choice per role: "automatic" or a capability name. Saved
+  // pins hydrate; anything else normalizes to Automatic.
+  const savedOverrides = spec?.modelOverrides;
+  const [imageModel, setImageModel] = useState<string>(
+    typeof savedOverrides?.conceptImage === "string" && savedOverrides.conceptImage.trim() !== ""
+      ? savedOverrides.conceptImage
+      : MODEL_AUTOMATIC
+  );
+  const [motionModel, setMotionModel] = useState<string>(
+    typeof savedOverrides?.imageToVideo === "string" && savedOverrides.imageToVideo.trim() !== ""
+      ? savedOverrides.imageToVideo
+      : MODEL_AUTOMATIC
+  );
+  const [modelChoices, setModelChoices] = useState<{ conceptImage: ModelChoice[]; imageToVideo: ModelChoice[] } | null>(null);
+  const [modelsLoading, setModelsLoading] = useState(true);
+  const [modelsError, setModelsError] = useState<string | null>(null);
+  const [modelsReachable, setModelsReachable] = useState<boolean | null>(null);
+  const [modelsRefresh, setModelsRefresh] = useState(0);
   const [comboOpen, setComboOpen] = useState(false);
   const [customizeOpen, setCustomizeOpen] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
+  const [modelsOpen, setModelsOpen] = useState(false);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [previewing, setPreviewing] = useState(false);
@@ -88,9 +112,75 @@ export function useTemplateSelection({ campaign, allowed, onChanged }: UseTempla
 
   const selection = useMemo(
     () =>
-      buildSelection({ templateId, packSize, motionOn, formats, stageIds, motionSeconds, durationError, profile, cap }),
-    [templateId, packSize, motionOn, formats, stageIds, motionSeconds, durationError, profile, cap]
+      buildSelection({ templateId, packSize, motionOn, formats, stageIds, motionSeconds, durationError, profile, cap, modelOverrides: { conceptImage: imageModel, imageToVideo: motionModel } }),
+    [templateId, packSize, motionOn, formats, stageIds, motionSeconds, durationError, profile, cap, imageModel, motionModel]
   );
+
+  // Expert model choices: same-origin safe endpoint, display data only.
+  // Refresh refetches the lists; nothing here reloads the page. An
+  // unreachable-discovery envelope maps to neutral unavailable state (no
+  // authoritative list, no stale markers); transport failures keep the
+  // previous lists and only surface the retry copy.
+  useEffect(() => {
+    let active = true;
+    apiGet<{ ok: boolean; reachable?: boolean; choices?: { conceptImage: ModelChoice[]; imageToVideo: ModelChoice[] }; error?: string }>(
+      "/api/livepeer/model-choices",
+      undefined,
+      15000
+    ).then(
+      (d) => {
+        if (!active) return;
+        setModelsLoading(false);
+        if (!d.ok) {
+          setModelsError(MODEL_CHOICES_UNAVAILABLE);
+          return;
+        }
+        const next = applyModelChoicesResponse(d);
+        setModelChoices(next.choices);
+        setModelsReachable(next.reachable);
+        setModelsError(next.error);
+      },
+      () => {
+        if (!active) return;
+        setModelsLoading(false);
+        setModelsError(MODEL_CHOICES_UNAVAILABLE);
+      }
+    );
+    return () => {
+      active = false;
+    };
+  }, [modelsRefresh]);
+
+  function refreshModelChoices() {
+    setModelsLoading(true);
+    setModelsError(null);
+    setModelsRefresh((n) => n + 1);
+  }
+
+  // Role presence comes from the server-computed preview (executable
+  // stages only): the image choice appears only with an image-generation
+  // role selected, motion only with image-to-video. Never critic,
+  // preservation/product-photo tooling, upscale, or deferred audio.
+  const previewRoles = useMemo(() => new Set((preview?.stages ?? []).map((s) => s.role)), [preview]);
+  const hasImageRole = previewRoles.has("conceptImage") || previewRoles.has("sourceGuidedImage");
+  const hasMotionRole = previewRoles.has("imageToVideo");
+
+  // A saved pin is stale only against a reachable live list that omits it
+  // (see isModelChoiceStale): unreachable discovery stays neutral and
+  // Apply stays locally unblocked, deferring to the server guards.
+  const imageModelStale = isModelChoiceStale(
+    imageModel,
+    modelChoices?.conceptImage ?? null,
+    modelsReachable,
+    modelsLoading
+  );
+  const motionModelStale = isModelChoiceStale(
+    motionModel,
+    modelChoices?.imageToVideo ?? null,
+    modelsReachable,
+    modelsLoading
+  );
+  const modelsBlocked = imageModelStale || motionModelStale;
 
   function fetchPreviewNow() {
     setPreviewError(null);
@@ -183,9 +273,10 @@ export function useTemplateSelection({ campaign, allowed, onChanged }: UseTempla
         stageIds,
         motionSeconds,
         qualityProfile: profile,
-        maxSpendCapUsd: cap.trim() === "" ? undefined : cap
+        maxSpendCapUsd: cap.trim() === "" ? undefined : cap,
+        modelOverrides: { conceptImage: imageModel, imageToVideo: motionModel }
       }),
-    [campaign.request.productionSpec, templateId, packSize, motionOn, formats, stageIds, motionSeconds, profile, cap]
+    [campaign.request.productionSpec, templateId, packSize, motionOn, formats, stageIds, motionSeconds, profile, cap, imageModel, motionModel]
   );
 
   const canApply = deriveCanApply({
@@ -195,7 +286,8 @@ export function useTemplateSelection({ campaign, allowed, onChanged }: UseTempla
     hasPreviewError: !!previewError,
     durationError,
     packSize,
-    stageIds
+    stageIds,
+    modelsBlocked
   });
   const customizeSummary = buildCustomizeSummary({ motionOn, formats, profile, cap });
 
@@ -225,10 +317,21 @@ export function useTemplateSelection({ campaign, allowed, onChanged }: UseTempla
     advancedOpen,
     profile,
     cap,
+    imageModel,
+    motionModel,
+    modelChoices,
+    modelsLoading,
+    modelsError,
+    hasImageRole,
+    hasMotionRole,
+    imageModelStale,
+    motionModelStale,
+    modelsBlocked,
     // disclosure state
     comboOpen,
     customizeOpen,
     showDetails,
+    modelsOpen,
     // preview/apply lifecycle
     preview,
     previewError,
@@ -255,9 +358,13 @@ export function useTemplateSelection({ campaign, allowed, onChanged }: UseTempla
     setAdvancedOpen,
     setProfile,
     setCap,
+    setImageModel,
+    setMotionModel,
+    refreshModelChoices,
     setComboOpen,
     setCustomizeOpen,
     setShowDetails,
+    setModelsOpen,
     setStageIds,
     // callbacks
     toggleFormat,

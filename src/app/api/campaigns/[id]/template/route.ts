@@ -3,7 +3,8 @@ import { AuthenticationRequiredError } from "@/server/auth";
 import { applyTemplateSpec, loadCampaign } from "@/server/campaigns";
 import { resolveEntitlements } from "@/server/entitlements";
 import { fetchLivePriceMap, quoteStage } from "@/server/livepeer/pricing";
-import { resolvePlanRolesLive } from "@/server/livepeer/catalogue";
+import { catalogueSnapshot, resolvePlanRolesLive } from "@/server/livepeer/catalogue";
+import { checkModelOverrides } from "@/server/livepeer/template-validation";
 import {
   buildTemplateStages,
   estimateTemplateMinutes,
@@ -48,6 +49,12 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const template = getTemplate(spec.templateId);
     if (!template) return NextResponse.json({ error: `Unknown template "${spec.templateId}".` }, { status: 400 });
 
+    // Expert model choices are enforced live on preview AND apply: the
+    // override must be currently available and compatible with its role.
+    const snapshot = await catalogueSnapshot();
+    const overrides = checkModelOverrides(spec, template, snapshot);
+    if (!overrides.ok) return NextResponse.json({ error: overrides.error }, { status: 400 });
+
     const profile = normalizeQualityProfile(spec.qualityProfile);
     const roles = await resolvePlanRolesLive(profile);
     const built = buildTemplateStages(template, spec, (role) => {
@@ -91,6 +98,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         role: s.recipe.role,
         format: s.recipe.format,
         capability: s.capability,
+        // Exact user pin for this stage, or null for Automatic resolution.
+        requestedCapability: s.requestedCapability ?? null,
         durationSeconds: s.durationSeconds ?? s.recipe.defaultDurationSeconds ?? null,
         requestedDurationSeconds: s.requestedDurationSeconds ?? null,
         durationAdjusted: s.requestedDurationSeconds !== undefined && s.durationSeconds !== undefined && s.requestedDurationSeconds !== s.durationSeconds,
