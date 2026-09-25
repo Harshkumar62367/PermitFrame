@@ -94,10 +94,10 @@ describe("2. transitive dependency closure", () => {
     assert.equal(closed.ok, true);
     if (!closed.ok) return;
     const ids = closed.recipes.map((r) => r.id);
-    assert.ok(ids.includes("cc-motion-916") && ids.includes("cc-hero-916"), "keyframe auto-included");
-    const auto = closed.autoIncluded.find((a) => a.id === "cc-hero-916");
+    assert.ok(ids.includes("cc-motion-916") && ids.includes("cc-feed-11"), "square source auto-included");
+    const auto = closed.autoIncluded.find((a) => a.id === "cc-feed-11");
     assert.ok(auto, "auto-inclusion reported");
-    assert.ok(auto.requiredFor.includes("Motion asset (9:16)"));
+    assert.ok(auto.requiredFor.includes("Motion asset (1:1)"));
   });
 
   it("closure preserves catalogue order", () => {
@@ -107,7 +107,7 @@ describe("2. transitive dependency closure", () => {
     assert.equal(closed.ok, true);
     if (!closed.ok) return;
     const ids = closed.recipes.map((r) => r.id);
-    assert.deepEqual(ids, ["cc-hero-916", "cc-feed-11", "cc-motion-916"]);
+    assert.deepEqual(ids, ["cc-feed-11", "cc-motion-916"]);
   });
 });
 
@@ -175,7 +175,7 @@ describe("4. plan stage ids and dependencies unchanged", () => {
     if (!built.ok) return;
     const stages = toPlanStages(built.plan, "balanced");
     const motion = stages.find((s) => s.id === "cc-motion-916")!;
-    assert.deepEqual(motion.dependsOnStageIds, ["cc-hero-916"]);
+    assert.deepEqual(motion.dependsOnStageIds, ["cc-feed-11"]);
     assert.equal(motion.inputSource, "stage-output");
   });
 
@@ -211,7 +211,7 @@ describe("5. duration and aspect metadata survive into built stages", () => {
     assert.equal(motion.requestedDurationSeconds, 6);
     assert.equal(motion.durationSource, "product-range-unverified");
     assert.match(motion.label, /6s/);
-    assert.equal(motion.format, "9:16");
+    assert.equal(motion.format, "1:1");
   });
 
   it("model rejection fails the build honestly with the stage label", () => {

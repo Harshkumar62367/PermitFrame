@@ -140,16 +140,14 @@ describe("template catalogue", () => {
     }
     const filtered = mustBuild(t, spec({ packSize: "full", formats: ["1:1"] }));
     assert.ok(filtered.stages.length > 0);
-    // Format filters apply to picked stills, but closure retains the 9:16
-    // keyframe that motion depends on - reported, not silent.
-    assert.ok(filtered.stages.every((s) => s.recipe.format === "1:1" || s.recipe.assetType !== "image" || s.recipe.id === "cc-hero-916"));
-    assert.ok(filtered.autoIncluded.some((a) => a.id === "cc-hero-916"));
+    assert.ok(filtered.stages.every((s) => s.recipe.format === "1:1" || s.recipe.assetType !== "image"));
+    assert.ok(!filtered.autoIncluded.some((a) => a.id === "cc-hero-916"));
   });
 
   it("custom packs validate ids and bounds", () => {
     const t = getTemplate("creator-campaign")!;
     const ok = mustBuild(t, spec({ packSize: "custom", stageIds: ["cc-hero-916", "cc-motion-916"] }));
-    assert.deepEqual(ok.stages.map((s) => s.recipe.id).sort(), ["cc-hero-916", "cc-motion-916"]);
+    assert.deepEqual(ok.stages.map((s) => s.recipe.id).sort(), ["cc-feed-11", "cc-hero-916", "cc-motion-916"]);
     const bad = validateTemplateSelection(
       { templateId: "creator-campaign", packSize: "custom", stageIds: ["cc-hero-916", "nope"], assetTypes: ["image"], qualityProfile: "balanced" },
       16
@@ -287,21 +285,22 @@ describe("dependency closure", () => {
   it("custom motion-only selection includes its keyframe, never the raw source", () => {    const t = getTemplate("creator-campaign")!;
     const built = mustBuild(t, spec({ packSize: "custom", stageIds: ["cc-motion-916"] }));
     const ids = built.stages.map((s) => s.recipe.id).sort();
-    assert.deepEqual(ids, ["cc-hero-916", "cc-motion-916"]);
-    const auto = built.autoIncluded.find((a) => a.id === "cc-hero-916");
-    assert.ok(auto, "keyframe reported as auto-included");
-    assert.deepEqual(auto.requiredFor, ["Motion asset (9:16)"]);
+    assert.deepEqual(ids, ["cc-feed-11", "cc-motion-916"]);
+    const auto = built.autoIncluded.find((a) => a.id === "cc-feed-11");
+    assert.ok(auto, "square source reported as auto-included");
+    assert.deepEqual(auto.requiredFor, ["Motion asset (1:1)"]);
     const motion = built.stages.find((s) => s.recipe.id === "cc-motion-916")!;
     assert.equal(motion.recipe.inputSource, "stage-output");
-    assert.deepEqual(motion.recipe.dependsOn, ["cc-hero-916"]);
+    assert.deepEqual(motion.recipe.dependsOn, ["cc-feed-11"]);
   });
 
   it("format filtering that drops the keyframe still retains it for motion", () => {
     const t = getTemplate("creator-campaign")!;
-    // Hero is 9:16; filtering to 1:1 only would drop it - closure restores it.
+    // The square motion uses the square feed output, so no vertical stage is
+    // silently retained by the dependency closure.
     const built = mustBuild(t, spec({ packSize: "full", formats: ["1:1"], assetTypes: ["image", "motion"] }));
-    assert.ok(built.stages.some((s) => s.recipe.id === "cc-hero-916"), "keyframe retained");
-    assert.ok(built.autoIncluded.some((a) => a.id === "cc-hero-916"));
+    assert.ok(built.stages.some((s) => s.recipe.id === "cc-feed-11"), "square source retained");
+    assert.ok(!built.autoIncluded.some((a) => a.id === "cc-hero-916"));
     const motion = built.stages.find((s) => s.recipe.id === "cc-motion-916")!;
     assert.ok(motion, "motion still selected");
   });
@@ -309,7 +308,7 @@ describe("dependency closure", () => {
   it("motion-only asset toggles still include required image dependencies", () => {
     const t = getTemplate("hospitality")!;
     const built = mustBuild(t, spec({ packSize: "full", assetTypes: ["motion"] }));
-    assert.ok(built.stages.some((s) => s.recipe.id === "ho-hero-916"));
+    assert.ok(built.stages.some((s) => s.recipe.id === "ho-feed-11"));
     assert.ok(built.stages.every((s) => s.recipe.assetType === "motion" || built.autoIncluded.some((a) => a.id === s.recipe.id)));
   });
 

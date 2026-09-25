@@ -24,6 +24,16 @@ export function TemplateScopeSelector({
   onClearStages,
   recipes
 }: TemplateScopeSelectorProps) {
+  const outputCount = (scope: string) => {
+    const executable = recipes.filter((recipe) => recipe.execution === "create_media");
+    const selected = scope === "quick"
+      ? executable.filter((recipe) => recipe.quickPick)
+      : scope === "campaign"
+        ? executable.filter((recipe) => !recipe.optional)
+        : executable;
+    return `${selected.length} asset${selected.length === 1 ? "" : "s"}`;
+  };
+
   return (
     <>
       <div>
@@ -59,7 +69,7 @@ export function TemplateScopeSelector({
                   )}
                 </span>
                 <span className={cn("mt-0.5 block text-[11.5px]", active ? "opacity-85" : "text-muted-foreground")}>
-                  {opt.blurb}
+                  {opt.id === "custom" ? opt.blurb : outputCount(opt.id)}
                 </span>
               </button>
             );

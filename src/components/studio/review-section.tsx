@@ -54,7 +54,9 @@ export function ReviewSection({ campaign, onChanged }: ReviewSectionProps) {
   // Only durable outputs unlock share/download/proof. Provider-hosted legacy
   // outputs stay previewable until stored via the action below.
   const sharable = campaign.receipts.some((r) => hasSharableReceipt(r));
-  const legacyHosted = campaign.receipts.filter((r) => !hasSharableReceipt(r));
+  // A superseded ratio mismatch is retained only as local audit history;
+  // it is neither a legacy asset to store nor an actionable delivery item.
+  const legacyHosted = campaign.receipts.filter((r) => !r.supersededAt && !hasSharableReceipt(r));
   // Proof-ledger grouping, all from persisted state so a refresh shows the
   // durable outcome: only durable, non-private records without a UAL can
   // anchor; failed and orphaned-publishing records stay actionable; fresh

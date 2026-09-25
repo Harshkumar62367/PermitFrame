@@ -179,7 +179,11 @@ export function ReviewAssetCard({
               variant="outline"
               size="sm"
               onClick={() => onRequestVary(r.id)}
-              disabled={regenFor !== null || varyFor !== null || active}
+              // A regeneration uses its own queued job. A different,
+              // completed asset can still start an explicitly requested
+              // variation; server-side concurrency and spend gates remain
+              // authoritative. Only prevent duplicate local submissions.
+              disabled={varyFor !== null || regenFor === r.id}
               aria-busy={varyFor === r.id}
               title="Derive 2 additional image assets from this completed output as new paid runs - the original stays intact"
               className="h-7 rounded-full px-2.5 text-[11px]"

@@ -311,10 +311,10 @@ const TEMPLATES: ProductionTemplate[] = [
       still("cc-feed-11", "1:1 feed post", "image-to-image", "sourceGuidedImage", "1:1", { quickPick: true, promptKey: "feed11" }),
       still("cc-banner-169", "16:9 banner / thumbnail", "image-to-image", "sourceGuidedImage", "16:9", { promptKey: "banner" }),
       still("cc-lifestyle-43", "Creator lifestyle (4:3)", "image-to-image", "sourceGuidedImage", "4:3", { promptKey: "lifestyle" }),
-      motion("cc-motion-916", "Motion asset (9:16)", "9:16", ["cc-hero-916"], { duration: 6, promptKey: "motion" }),
+      motion("cc-motion-916", "Motion asset (1:1)", "1:1", ["cc-feed-11"], { duration: 6, promptKey: "motion" }),
       still("cc-detail-11", "Product detail (1:1)", "image-to-image", "sourceGuidedImage", "1:1", { optional: true, promptKey: "detail" }),
       still("cc-story-916", "Story variant (9:16)", "image-to-image", "sourceGuidedImage", "9:16", { optional: true, promptKey: "story" }),
-      motion("cc-motion-reveal", "Motion reveal (9:16)", "9:16", ["cc-hero-916"], { optional: true, duration: 5, promptKey: "motion" }),
+      motion("cc-motion-reveal", "Motion reveal (1:1)", "1:1", ["cc-feed-11"], { optional: true, duration: 5, promptKey: "motion" }),
       upscaleMaster("cc-hero-master", "Hero master, hi-res (upscale)", ["cc-hero-916"]),
       deferredAudio("cc-motion-captioned", "Captioned motion version", "subtitle", DEFERRED_AUDIO_REASON)
     ],
@@ -453,13 +453,13 @@ const TEMPLATES: ProductionTemplate[] = [
     recipes: [
       still("ho-hero-916", "Room / venue hero (9:16)", "text-to-image", "conceptImage", "9:16", { quickPick: true, promptKey: "hero" }),
       still("ho-feed-11", "Feed post (1:1)", "image-to-image", "sourceGuidedImage", "1:1", { quickPick: true, promptKey: "feed" }),
-      motion("ho-reel-916", "Reel (9:16)", "9:16", ["ho-hero-916"], { quickPick: true, duration: 6, promptKey: "motion" }),
+      motion("ho-reel-916", "Feed motion (1:1)", "1:1", ["ho-feed-11"], { quickPick: true, duration: 6, promptKey: "motion" }),
       still("ho-experience-43", "Experience / lifestyle (4:3)", "image-to-image", "sourceGuidedImage", "4:3", { promptKey: "experience" }),
       still("ho-dining-11", "Food / amenity (1:1)", "image-to-image", "sourceGuidedImage", "1:1", { promptKey: "dining" }),
       still("ho-banner-169", "Booking banner (16:9)", "image-to-image", "sourceGuidedImage", "16:9", { promptKey: "banner" }),
       still("ho-venue-169", "Venue wide (16:9)", "image-to-image", "sourceGuidedImage", "16:9", { optional: true, promptKey: "venue" }),
       still("ho-detail-43", "Detail (4:3)", "image-to-image", "sourceGuidedImage", "4:3", { optional: true, promptKey: "detail" }),
-      motion("ho-reel-alt", "Reel alt clip (9:16)", "9:16", ["ho-hero-916"], { optional: true, duration: 6, promptKey: "motion" }),
+      motion("ho-reel-alt", "Feed motion alt (1:1)", "1:1", ["ho-feed-11"], { optional: true, duration: 6, promptKey: "motion" }),
       upscaleMaster("ho-hero-master", "Hero master, hi-res (upscale)", ["ho-hero-916"])
     ],
     promptScaffolds: {
@@ -503,11 +503,11 @@ const TEMPLATES: ProductionTemplate[] = [
       still("au-road-169", "Road / lifestyle scene (16:9)", "image-to-image", "sourceGuidedImage", "16:9", { quickPick: true, promptKey: "road" }),
       still("au-detail-11", "Feature detail (1:1)", "image-to-image", "sourceGuidedImage", "1:1", { promptKey: "detail" }),
       still("au-launch-169", "Launch asset (16:9)", "image-to-image", "sourceGuidedImage", "16:9", { promptKey: "launch" }),
-      motion("au-motion-reveal", "Motion reveal (9:16)", "9:16", ["au-studio-916"], { duration: 7, promptKey: "motion" }),
+      motion("au-motion-reveal", "Motion reveal (1:1)", "1:1", ["au-detail-11"], { duration: 7, promptKey: "motion" }),
       still("au-night-916", "Night grade (9:16)", "image-to-image", "sourceGuidedImage", "9:16", { optional: true, promptKey: "night" }),
       still("au-interior-43", "Interior (4:3)", "image-to-image", "sourceGuidedImage", "4:3", { optional: true, promptKey: "interior" }),
       upscaleMaster("au-studio-master", "Studio master, hi-res (upscale)", ["au-studio-916"]),
-      motion("au-motion-alt", "Motion alt clip (9:16)", "9:16", ["au-studio-916"], { optional: true, duration: 5, promptKey: "motion" })
+      motion("au-motion-alt", "Motion alt clip (1:1)", "1:1", ["au-detail-11"], { optional: true, duration: 5, promptKey: "motion" })
     ],
     promptScaffolds: {
       hero: (ctx) => `Studio hero of ${ctx.brand} ${ctx.productName}: ${ctx.brief}. Vertical 9:16. Preserve body, trim, paint, and badges exactly against the approved reference. ${ctx.constraints.join(" ")}`,
