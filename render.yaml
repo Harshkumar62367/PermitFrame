@@ -35,8 +35,6 @@ services:
         sync: false
       - key: NEXT_PUBLIC_PRIVY_APP_ID
         sync: false
-      - key: BASE_SEPOLIA_RPC_URL
-        sync: false
       # Durable deliverable storage. Without these, generation still works
       # but outputs stay provider-hosted and approval/publish proof steps
       # wait as storage-pending - set all three for public verification.
