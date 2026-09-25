@@ -368,7 +368,7 @@ export function NewCampaignForm({ onCreated }: { onCreated?: (id: string) => voi
       >
         {busy ? "Running permission check…" : "Create & run permission check"}
       </Button>
-      <p id={`${uid}-submit-hint`} className="mt-2 text-[11.5px] text-muted-foreground">
+      <p id={`${uid}-submit-hint`} className={cn("mt-2 text-[11.5px]", busy && submitAction.status ? "text-emerald-700 dark:text-emerald-300" : "text-muted-foreground")}>
         {busy && submitAction.status ? submitAction.status : "Country, creative brief, permission, media, and brand rule are required."}
       </p>
     </div>

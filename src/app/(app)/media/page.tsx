@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useId, useRef, useState } from "react";
+import { useId, useRef, useState, type KeyboardEvent } from "react";
 import { ArrowRight, Link2, Lock, Upload, Wand2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,7 +15,8 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
 import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
 import { apiPost, describeRecord } from "@/lib/api";
-import { classifyUploadError, shouldReconcileAfterUploadFailure, type UploadProgress } from "@/lib/upload-progress";
+import { MEDIA_TABS, nextMediaTab, type MediaTab } from "@/lib/media-tabs";
+import { classifyUploadError, shouldReconcileAfterUploadFailure, uploadCancelledNote, type UploadProgress } from "@/lib/upload-progress";
 import { postUpload } from "@/lib/upload-request";
 import { useLongAction } from "@/lib/use-long-action";
 import { useInvalidateDkgGraph } from "@/lib/use-dkg-graph";
@@ -41,7 +42,10 @@ export default function MediaLibraryPage() {
   // without one, so this starts empty and is never auto-filled. Shared by
   // both tabs: every asset, uploaded or referenced, belongs to a creator.
   const [creatorId, setCreatorId] = useState("");
-  const [tab, setTab] = useState<"upload" | "url">("upload");
+  const [tab, setTab] = useState<MediaTab>("upload");
+  // Roving focus for the tablist: arrow-key activation moves focus to the
+  // newly selected tab, so keyboard users never lose their place.
+  const tabButtonRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadTitle, setUploadTitle] = useState("");
   const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
@@ -73,10 +77,39 @@ export default function MediaLibraryPage() {
   const invalidateDkgGraph = useInvalidateDkgGraph();
 
   function fillExample() {
-    setTab("url");
+    selectTab("url");
     setForm(EXAMPLE_FORM);
     setFieldError(null);
     setResult(null);
+  }
+
+  /**
+   * Single tab-switch path for clicks, keys, and the guided example. Leaving
+   * the upload tab while a computer-file upload is active aborts the live
+   * XHR - a browser upload must never keep running silently behind the URL
+   * panel. The abort settles through upload()'s catch/finally, which posts
+   * the same honest cancellation notice and preserves creator, title, and
+   * file for a deliberate retry. URL registration owns no XHR and is
+   * untouched by tab changes.
+   */
+  function selectTab(next: MediaTab) {
+    if (next === tab) return;
+    if (tab === "upload" && next === "url" && uploadBusy && xhrRef.current) {
+      try {
+        xhrRef.current.abort();
+      } catch {
+        // Fall through to the request's own error/timeout settlement.
+      }
+    }
+    setTab(next);
+  }
+
+  function onTablistKeyDown(e: KeyboardEvent) {
+    const next = nextMediaTab(tab, e.key);
+    if (!next) return;
+    e.preventDefault();
+    selectTab(next);
+    tabButtonRefs.current[MEDIA_TABS.indexOf(next)]?.focus();
   }
 
   async function upload() {
@@ -132,16 +165,17 @@ export default function MediaLibraryPage() {
     } catch (e) {
       const outcome = classifyUploadError(e);
       if (outcome.kind === "cancelled") {
-        // Cancellation is a note, never a failure: the abort already
-        // settled the request exactly once, and busy/progress cleanup runs
-        // in finally below. Processing-phase cancels reconcile because
-        // server-side registration may still finish.
+        // Cancellation is a note, never a failure and never a success:
+        // the abort already settled the request exactly once, and
+        // busy/progress cleanup runs in finally below. Processing-phase
+        // cancels reconcile because server-side registration may still
+        // finish - the note says to refresh the gallery before retrying.
+        // Creator, title, and file state are preserved for a deliberate
+        // retry; only busy/progress reset.
         if (outcome.phase === "processing") {
           await invalidateSnapshot().catch(() => undefined);
-          setUploadNote("Upload stopped in the browser - securing may already have started, so the asset may still appear below. Check the library before retrying.");
-        } else {
-          setUploadNote("Upload cancelled before the file reached the server - nothing was registered.");
         }
+        setUploadNote(uploadCancelledNote(outcome.phase));
       } else if (shouldReconcileAfterUploadFailure(outcome.status)) {
         // Unknown outcome (timeout, network loss, server hiccup): the
         // server may still finish registering, so re-read the library to
@@ -179,7 +213,9 @@ export default function MediaLibraryPage() {
   }
 
   async function register() {
-    if (registerAction.busy) return;
+    // A tab switch aborts an upload asynchronously. Until its abort handler
+    // settles, do not permit a second source-media mutation from the URL tab.
+    if (registerAction.busy || uploadBusy) return;
     if (!creatorId) {
       setFieldError("Choose the creator this asset belongs to - or add them below first.");
       return;
@@ -285,12 +321,16 @@ export default function MediaLibraryPage() {
                 </SelectContent>
               </Select>
             </div>
-          <div className="mt-4 flex gap-1 rounded-full bg-muted p-1 ring-1 ring-border" role="tablist" aria-label="How to add source media">
+          <div className="mt-4 flex gap-1 rounded-full bg-muted p-1 ring-1 ring-border" role="tablist" aria-label="How to add source media" onKeyDown={onTablistKeyDown}>
             <button
               type="button"
               role="tab"
+              id={`${uid}-tab-upload`}
               aria-selected={tab === "upload"}
-              onClick={() => setTab("upload")}
+              aria-controls={`${uid}-panel-upload`}
+              tabIndex={tab === "upload" ? 0 : -1}
+              ref={(el) => { tabButtonRefs.current[0] = el; }}
+              onClick={() => selectTab("upload")}
               className={cn(
                 "flex flex-1 items-center justify-center gap-1.5 rounded-full px-3 py-1.5 text-[12.5px] font-medium transition",
                 tab === "upload" ? "bg-card text-foreground shadow-sm ring-1 ring-border" : "text-muted-foreground hover:text-foreground"
@@ -302,8 +342,12 @@ export default function MediaLibraryPage() {
             <button
               type="button"
               role="tab"
+              id={`${uid}-tab-url`}
               aria-selected={tab === "url"}
-              onClick={() => setTab("url")}
+              aria-controls={`${uid}-panel-url`}
+              tabIndex={tab === "url" ? 0 : -1}
+              ref={(el) => { tabButtonRefs.current[1] = el; }}
+              onClick={() => selectTab("url")}
               className={cn(
                 "flex flex-1 items-center justify-center gap-1.5 rounded-full px-3 py-1.5 text-[12.5px] font-medium transition",
                 tab === "url" ? "bg-card text-foreground shadow-sm ring-1 ring-border" : "text-muted-foreground hover:text-foreground"
@@ -313,7 +357,7 @@ export default function MediaLibraryPage() {
             </button>
           </div>
           {tab === "upload" && (
-          <div className="mt-4">
+          <div className="mt-4" role="tabpanel" id={`${uid}-panel-upload`} aria-labelledby={`${uid}-tab-upload`} tabIndex={0}>
             <p className="text-[12px] leading-relaxed text-muted-foreground">
               Uploaded originals are stored as a <span className="font-medium text-foreground">private workspace copy</span> with
               restricted delivery - never as public proof. Only a time-limited download link (expires one hour after
@@ -368,8 +412,8 @@ export default function MediaLibraryPage() {
                   : "Upload file"}
               </Button>
               {uploadBusy && (
-                <Button variant="outline" onClick={cancelUpload} className="rounded-full">
-                  Cancel
+                <Button variant="outline" onClick={cancelUpload} aria-label="Cancel the in-progress upload" className="rounded-full">
+                  Cancel upload
                 </Button>
               )}
               </div>
@@ -390,12 +434,11 @@ export default function MediaLibraryPage() {
                 Upload complete — securing and registering your asset… This can take a minute for large files.
               </p>
             )}
-            {uploadNote && <p role="status" className="mt-2 text-[12px] text-muted-foreground">{uploadNote}</p>}
             {uploadError && <p role="alert" className="mt-2 text-[12px] text-rose-600 dark:text-rose-300">{uploadError}</p>}
           </div>
           )}
           {tab === "url" && (
-          <div className="mt-4">
+          <div className="mt-4" role="tabpanel" id={`${uid}-panel-url`} aria-labelledby={`${uid}-tab-url`} tabIndex={0}>
           <p className="mb-3 text-[12px] text-muted-foreground">Advanced path: reference a publicly hosted file. Only the URL and its fingerprint are recorded - the bytes stay with the creator.</p>
           <div className="grid gap-4 sm:grid-cols-[1fr_2fr_140px_auto] sm:items-end">
             <div className="space-y-1.5">
@@ -436,8 +479,8 @@ export default function MediaLibraryPage() {
             </div>
             <Button
               onClick={register}
-              disabled={busy || !canSubmit}
-              aria-busy={busy}
+              disabled={busy || uploadBusy || !canSubmit}
+              aria-busy={busy || uploadBusy}
               aria-describedby={submitHint}
               title={!canSubmit ? "Choose a creator and paste a public http(s) URL to enable registration" : undefined}
               className="rounded-full bg-emerald-700 font-medium text-emerald-50 hover:bg-emerald-600 dark:bg-emerald-500 dark:text-emerald-950 dark:hover:bg-emerald-400"
@@ -445,7 +488,7 @@ export default function MediaLibraryPage() {
               <Link2 className="h-4 w-4" aria-hidden /> {busy ? "Registering…" : "Register"}
             </Button>
           </div>
-          <p id={submitHint} className="mt-2 text-[11.5px] text-muted-foreground">
+          <p id={submitHint} className={cn("mt-2 text-[11.5px]", busy && registerAction.status ? "text-emerald-700 dark:text-emerald-300" : "text-muted-foreground")}>
             {!canSubmit
               ? "Register is disabled until a creator is chosen and a public URL is pasted - placeholders don't count."
               : busy && registerAction.status
@@ -454,6 +497,11 @@ export default function MediaLibraryPage() {
           </p>
           </div>
           )}
+          {/* Cancellation notice lives outside the tab panels: aborting an
+              active upload by switching tabs must still show the honest
+              notice on the URL tab. Inactive panels unmount, so screen
+              readers never meet hidden tab content. */}
+          {uploadNote && <p role="status" className="mt-2 text-[12px] text-muted-foreground">{uploadNote}</p>}
           <div className="mt-3 border-t border-border pt-3">
             <button
               type="button"

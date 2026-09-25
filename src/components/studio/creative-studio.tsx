@@ -79,7 +79,7 @@ export function CreativeStudio({ campaign, sourceMedia, passport, productFacts, 
       />
       <ServiceNotice />
       {recheck.busy && recheck.status && (
-        <p role="status" className="break-words text-[12.5px] text-muted-foreground">{recheck.status}</p>
+        <p role="status" className="break-words text-[12.5px] text-emerald-700 dark:text-emerald-300">{recheck.status}</p>
       )}
       {recheckError && (
         <p role="alert" className="break-words text-[12.5px] text-rose-600 dark:text-rose-300">{recheckError}</p>

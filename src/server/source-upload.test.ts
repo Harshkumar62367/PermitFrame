@@ -103,6 +103,47 @@ describe("validateUploadFile", () => {
     });
   });
 
+  it("accepts compatible container aliases within the same detected kind", () => {
+    // MOV bytes declared as MP4 and MP4 bytes declared as QuickTime cross-
+    // declare in the wild; magic bytes stay authoritative for the kind.
+    const movAsMp4 = validateUploadFile({ bytes: mov, mimeType: "video/mp4", filename: "clip.mov" });
+    assert.equal(movAsMp4.ok, true);
+    if (!movAsMp4.ok) return;
+    assert.equal(movAsMp4.value.kind, "video");
+    assert.equal(movAsMp4.value.mime, "video/quicktime");
+    const mp4AsMov = validateUploadFile({ bytes: mp4, mimeType: "video/quicktime", filename: "clip.mp4" });
+    assert.equal(mp4AsMov.ok, true);
+    if (!mp4AsMov.ok) return;
+    assert.equal(mp4AsMov.value.kind, "video");
+    assert.equal(mp4AsMov.value.mime, "video/mp4");
+  });
+
+  it("rejects cross-kind declarations in both directions", () => {
+    const videoAsImage = validateUploadFile({ bytes: mp4, mimeType: "image/png" });
+    assert.deepEqual(videoAsImage, {
+      ok: false,
+      error: "File content does not match its declared type - re-export the file and try again."
+    });
+    const imageAsVideo = validateUploadFile({ bytes: jpeg, mimeType: "video/webm" });
+    assert.deepEqual(imageAsVideo, {
+      ok: false,
+      error: "File content does not match its declared type - re-export the file and try again."
+    });
+  });
+
+  it("rejects absent and unsupported declared types", () => {
+    const absent = validateUploadFile({ bytes: png });
+    assert.deepEqual(absent, {
+      ok: false,
+      error: "File content does not match its declared type - re-export the file and try again."
+    });
+    const unsupported = validateUploadFile({ bytes: png, mimeType: "application/octet-stream" });
+    assert.deepEqual(unsupported, {
+      ok: false,
+      error: "File content does not match its declared type - re-export the file and try again."
+    });
+  });
+
   it("accepts valid files and sanitizes hostile filenames", () => {
     const r = validateUploadFile({ bytes: png, mimeType: "image/png", filename: "../../etc/passwd.png" });
     assert.equal(r.ok, true);

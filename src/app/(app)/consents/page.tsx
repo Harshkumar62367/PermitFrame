@@ -600,7 +600,7 @@ export default function ConsentsPage() {
         </FadeIn>
       )}
       {revokeAction.busy && revokeAction.status && (
-        <p role="status" className="text-[13px] leading-relaxed text-muted-foreground">
+        <p role="status" className="text-[13px] leading-relaxed text-emerald-700 dark:text-emerald-300">
           {revokeAction.status}
         </p>
       )}

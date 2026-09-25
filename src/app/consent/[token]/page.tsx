@@ -411,7 +411,7 @@ export default function ConsentPage() {
               >
                 {busy ? "Attesting…" : "Attest my permission"}
               </Button>
-              <p id={`${uid}-attest-hint`} className="mt-2 text-[11.5px] text-muted-foreground">
+              <p id={`${uid}-attest-hint`} className={cn("mt-2 text-[11.5px]", busy && attestAction.status ? "text-emerald-700 dark:text-emerald-300" : "text-muted-foreground")}>
                 {!canSubmit
                   ? "Attestation is disabled until at least one platform and one territory are chosen."
                   : busy && attestAction.status

@@ -252,7 +252,7 @@ export default function ProductsPage() {
               </Button>
             )}
           </div>
-          <p id={submitHint} className="mt-2 text-[11.5px] text-muted-foreground">
+          <p id={submitHint} className={cn("mt-2 text-[11.5px]", busy && saveAction.status ? "text-emerald-700 dark:text-emerald-300" : "text-muted-foreground")}>
             {!canSubmit
               ? "Save is disabled until brand and product name are filled - placeholders don't count."
               : busy && saveAction.status

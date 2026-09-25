@@ -4,8 +4,11 @@ import crypto from "node:crypto";
  * Pure validation for private source-media uploads. The bounded server
  * upload route inspects bytes directly, so classification never trusts the
  * browser-declared MIME type or filename alone: magic-byte sniffing is
- * authoritative, declared types must agree, and storage paths are always
- * server-generated. Unit-tested; no session, no I/O, no network.
+ * authoritative for the media kind and the stored MIME, while the declared
+ * type must name a compatible type within that same kind (container
+ * aliases such as MOV bytes declared as video/mp4 cross-declare in the
+ * wild). Cross-kind declarations are rejected, and storage paths are
+ * always server-generated. Unit-tested; no session, no I/O, no network.
  */
 
 /** Hackathon-appropriate bounds: images stay light, video stays modest. */
@@ -110,7 +113,11 @@ export function validateUploadFile(
   }
   const declared = typeof input.mimeType === "string" ? input.mimeType.toLowerCase().split(";")[0].trim() : "";
   const allowed: readonly string[] = sniffed.kind === "image" ? IMAGE_MIMES : VIDEO_MIMES;
-  if (!allowed.includes(declared) || declared !== sniffed.mime) {
+  // Same-kind compatibility only: the allow-list gate rejects cross-kind
+  // declarations (image bytes as video and vice versa) as well as absent
+  // or unsupported declared types. The stored MIME stays the sniffed one -
+  // the declaration is never trusted for storage or evidence.
+  if (!allowed.includes(declared)) {
     return fail("File content does not match its declared type - re-export the file and try again.");
   }
   const max = sniffed.kind === "image" ? UPLOAD_IMAGE_MAX_BYTES : UPLOAD_VIDEO_MAX_BYTES;

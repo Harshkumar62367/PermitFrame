@@ -28,7 +28,7 @@ export function CampaignPreflightPanel({ checking, disabled, status, onRun }: Ca
         <RefreshCw className={cn("h-3.5 w-3.5", checking && "animate-spin")} aria-hidden /> {checking ? "Checking permissions…" : "Run permission check"}
       </Button>
       {checking && status && (
-        <p role="status" className="mt-3 max-w-2xl text-[13px] leading-relaxed text-muted-foreground">{status}</p>
+        <p role="status" className="mt-3 max-w-2xl text-[13px] leading-relaxed text-emerald-700 dark:text-emerald-300">{status}</p>
       )}
     </section>
   );

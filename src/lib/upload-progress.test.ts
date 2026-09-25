@@ -4,6 +4,7 @@ import {
   classifyUploadError,
   progressForTransmittedBytes,
   shouldReconcileAfterUploadFailure,
+  uploadCancelledNote,
   UploadCancelledError
 } from "./upload-progress";
 
@@ -65,5 +66,20 @@ describe("classifyUploadError", () => {
     assert.deepEqual(classifyUploadError(err), { kind: "failed", status: 400 });
     assert.deepEqual(classifyUploadError(new Error("boom")), { kind: "failed", status: -1 });
     assert.deepEqual(classifyUploadError("string failure"), { kind: "failed", status: -1 });
+  });
+});
+
+describe("uploadCancelledNote", () => {
+  it("reports an uploading-phase cancel as nothing registered, never a success", () => {
+    const note = uploadCancelledNote("uploading");
+    assert.match(note, /nothing was registered/);
+    assert.ok(!/success/i.test(note));
+  });
+
+  it("tells processing-phase cancels the browser stopped and the gallery must be refreshed", () => {
+    const note = uploadCancelledNote("processing");
+    assert.match(note, /browser request was stopped/);
+    assert.match(note, /refresh the gallery below before retrying/);
+    assert.match(note, /completed storage immediately before disconnect/);
   });
 });

@@ -153,7 +153,7 @@ export function ReviewSection({ campaign, onChanged }: ReviewSectionProps) {
 
       {actions.error && <p role="alert" className="mt-3 break-words text-[12.5px] text-rose-600 dark:text-rose-300">{actions.error}</p>}
       {actions.approval.busy && actions.approval.status && (
-        <p role="status" className="mt-3 break-words text-[12.5px] text-muted-foreground">{actions.approval.status}</p>
+        <p role="status" className="mt-3 break-words text-[12.5px] text-emerald-700 dark:text-emerald-300">{actions.approval.status}</p>
       )}
       {actions.notice && <p role="status" className="mt-3 break-words text-[12.5px] text-amber-700 dark:text-amber-300">{actions.notice}</p>}
       {productionReceipts.length > 0 && (

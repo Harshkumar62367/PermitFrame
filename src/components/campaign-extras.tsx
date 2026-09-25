@@ -259,7 +259,7 @@ export function CampaignExtras({ campaign, hideVariants = false }: { campaign: C
                   <Link2 className="h-3.5 w-3.5" aria-hidden /> {busy === "share" ? "Creating…" : "Create client share link"}
                 </Button>
                 {busy === "share" && shareAction.status && (
-                  <p role="status" className="basis-full text-[12px] text-muted-foreground">
+                  <p role="status" className="basis-full text-[12px] text-emerald-700 dark:text-emerald-300">
                     {shareAction.status}
                   </p>
                 )}

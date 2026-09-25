@@ -57,6 +57,18 @@ export type UploadOutcome =
   | { kind: "cancelled"; phase: "uploading" | "processing" }
   | { kind: "failed"; status: number };
 
+/**
+ * Honest cancellation note per abort-time phase. A note, never a success
+ * report: "uploading" means the file never reached the server, while
+ * "processing" means server-side storage may have completed immediately
+ * before disconnect, so the gallery must be refreshed before retrying.
+ */
+export function uploadCancelledNote(phase: "uploading" | "processing"): string {
+  return phase === "processing"
+    ? "Upload cancelled - the browser request was stopped. If the server completed storage immediately before disconnect, refresh the gallery below before retrying."
+    : "Upload cancelled before the file reached the server - nothing was registered.";
+}
+
 /** Classify a postUpload rejection so cancels never render as failures. Pure and unit-tested. */
 export function classifyUploadError(error: unknown): UploadOutcome {
   if (error instanceof UploadCancelledError) return { kind: "cancelled", phase: error.phase };

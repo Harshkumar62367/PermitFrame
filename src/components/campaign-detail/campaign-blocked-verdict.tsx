@@ -68,7 +68,7 @@ export function CampaignBlockedVerdict({
                 <RefreshCw className={cn("h-3.5 w-3.5", checking && "animate-spin")} aria-hidden /> {checking ? "Checking permissions…" : "Re-check rights"}
               </Button>
               {checking && status && (
-                <p role="status" className="mt-2 basis-full text-[12.5px] leading-relaxed text-muted-foreground">{status}</p>
+                <p role="status" className="mt-2 basis-full text-[12.5px] leading-relaxed text-emerald-700 dark:text-emerald-300">{status}</p>
               )}
             </>
           )}
