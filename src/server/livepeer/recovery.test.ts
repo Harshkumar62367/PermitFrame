@@ -1,9 +1,13 @@
 import { describe, it, before, after, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import type { Campaign, Database, ProductionJob, ProductionStagePlan } from "../types";
+import { CAPABILITY_PRICE_MAP } from "../types";
 import { emptyDb } from "../store";
 import { setRunStore, memoryStore } from "./run-store";
-import { pumpRun, STATUS_PUMP } from "./runner";
+import { enforceWatchdogs, pumpRun, STATUS_PUMP } from "./runner";
+import { resetCatalogueCache } from "./catalogue";
+import { LivepeerMcpClient, livepeerConfig } from "./mcp-client";
+import { fetchRunStatusSnapshot } from "./run-lifecycle";
 
 /**
  * Recovery regression test (Prompt-3 review, Fix 4) - real pumpRun
@@ -169,6 +173,7 @@ function stubProvider(): void {
           total: 2,
           capabilities: [
             { name: IMAGE_CAP, kind: "ai", availability: "available", model_id: "", description: "" },
+            { name: "seedream-5-lite", kind: "ai", availability: "available", model_id: "", description: "" },
             { name: MOTION_CAP, kind: "ai", availability: "available", model_id: "", description: "" }
           ]
         })
@@ -213,6 +218,14 @@ function createCalls(): Record<string, unknown>[] {
   return seen.filter((s) => s.tool === "create_media").map((s) => s.args);
 }
 
+async function waitFor(predicate: () => boolean, timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("timed out waiting for recovery");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
+
 function subscribeHolds(): number[] {
   return seen.filter((s) => s.tool === "subscribe_progress").map((s) => Number(s.args.budget_seconds));
 }
@@ -230,6 +243,7 @@ describe("recovery: pumpRun integration", () => {
     process.env.DKG_MODE = "__unsupported_test__";
     process.env.LIVEPEER_QUALITY_CHECK = "off";
     process.env.LIVEPEER_PLACE_SUBJECT = "off";
+    resetCatalogueCache();
     stubProvider();
   });
 
@@ -245,10 +259,11 @@ describe("recovery: pumpRun integration", () => {
 
   afterEach(() => {
     setRunStore(null);
+    resetCatalogueCache();
     subscribeMode = "completed";
   });
 
-  function useStore(jobs: ProductionJob[], tag: string) {
+  function seedStore(jobs: ProductionJob[], tag: string) {
     seen = [];
     failCreateOnce = null;
     const { store, read } = memoryStore(seedDb(jobs, tag));
@@ -261,7 +276,7 @@ describe("recovery: pumpRun integration", () => {
   }
 
   it("runs the full pack: source to stills, keyframe to motion, provenance persisted", async () => {
-    const { read, ws, cmp, run } = useStore(["keyframe", "square", "header", "motion"].map((s) => mkJob(s, "queued")), "t1");
+    const { read, ws, cmp, run } = seedStore(["keyframe", "square", "header", "motion"].map((s) => mkJob(s, "queued")), "t1");
     const pumped = await pumpRun(ws, cmp, { runId: run, budgetMs: 30000 });
     assert.equal(pumped.pumped, true);
     const campaign = campaignOf(read, cmp);
@@ -301,7 +316,7 @@ describe("recovery: pumpRun integration", () => {
   });
 
   it("resumes motion after restart from a preview_ready keyframe URL", async () => {
-    const { read, ws, cmp, run } = useStore([
+    const { read, ws, cmp, run } = seedStore([
       mkJob("keyframe", "preview_ready", { providerOutputUrl: KEYFRAME_OUT, outputUrl: KEYFRAME_OUT, livepeerJobId: "mjob_it_9", costUsd: 0.026 }),
       mkJob("motion", "queued")
     ], "t2");
@@ -318,7 +333,7 @@ describe("recovery: pumpRun integration", () => {
   });
 
   it("inline completion finalizes without redispatch", async () => {
-    const { read, ws, cmp, run } = useStore([mkJob("keyframe", "queued", { prompt: "INLINE still brief" })], "t3");
+    const { read, ws, cmp, run } = seedStore([mkJob("keyframe", "queued", { prompt: "INLINE still brief" })], "t3");
     const db = read();
     db.campaigns[0].runs![0].stageIds = ["keyframe"];
     await pumpRun(ws, cmp, { runId: run, budgetMs: 15000 });
@@ -335,7 +350,7 @@ describe("recovery: pumpRun integration", () => {
   });
 
   it("a failed still blocks only its dependent, never its siblings", async () => {
-    const { read, ws, cmp, run } = useStore([
+    const { read, ws, cmp, run } = seedStore([
       mkJob("keyframe", "failed", { error: "provider blew up", finishedAt: new Date().toISOString() }),
       mkJob("square", "queued"),
       mkJob("header", "queued"),
@@ -355,7 +370,7 @@ describe("recovery: pumpRun integration", () => {
   });
 
   it("status mode never calls create_media; detached mode does", async () => {
-    const { ws, cmp, run } = useStore([mkJob("keyframe", "queued"), mkJob("square", "queued")], "t5");
+    const { ws, cmp, run } = seedStore([mkJob("keyframe", "queued"), mkJob("square", "queued")], "t5");
     const before = createCalls().length;
     const status = await pumpRun(ws, cmp, { runId: run, ...STATUS_PUMP });
     assert.equal(createCalls().length, before, "status pump dispatches nothing");
@@ -365,6 +380,127 @@ describe("recovery: pumpRun integration", () => {
     assert.ok(createCalls().length > before, "detached-capable pump dispatches");
   });
 
+  it("status snapshot schedules one recovery-capable pump for an eligible restart job", async () => {
+    const { ws, cmp, run } = seedStore([
+      mkJob("square", "failed", {
+        error: "worker died: no heartbeat",
+        finishedAt: new Date().toISOString(),
+        actualCapability: IMAGE_CAP,
+        requestMeta: {
+          recoveryState: "failed",
+          providerFailureKind: "worker_reaped",
+          providerFailureDetail: "worker died: no heartbeat"
+        }
+      })
+    ], "restart-options");
+    const calls: Array<{ allowDispatch?: boolean; allowRecovery?: boolean; recoverFailed?: boolean; allowPreviewResume?: boolean }> = [];
+    await fetchRunStatusSnapshot(ws, cmp, run, async (_workspaceId, _campaignId, options) => {
+      calls.push(options);
+      return { pumped: false };
+    });
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0], {
+      runId: run,
+      budgetMs: 8 * 60 * 1000,
+      allowDispatch: true,
+      allowPreviewResume: true,
+      allowRecovery: true,
+      recoverFailed: true
+    });
+  });
+
+  it("status snapshot resumes exactly one automatic fallback after restart", async () => {
+    const { read, ws, cmp, run } = seedStore([
+      mkJob("square", "failed", {
+        error: "worker died before an output",
+        finishedAt: new Date().toISOString(),
+        actualCapability: IMAGE_CAP,
+        requestMeta: {
+          recoveryState: "failed",
+          providerFailureKind: "worker_reaped",
+          providerFailureDetail: "worker died before an output"
+        }
+      })
+    ], "restart-fallback");
+    const db = read();
+    const campaign = db.campaigns[0];
+    const storedRun = campaign.runs![0];
+    storedRun.status = "complete";
+    storedRun.finishedAt = new Date().toISOString();
+    storedRun.stageIds = ["square"];
+    campaign.status = "review";
+    const { getRunStatusSnapshot } = await import("./runner");
+    await getRunStatusSnapshot(ws, cmp, run);
+    await waitFor(() => createCalls().length === 1);
+    await waitFor(() => {
+      const current = campaignOf(read, cmp).jobs.find((j) => j.stageId === "square");
+      return current?.status === "ready_to_share" || current?.status === "preview_ready";
+    });
+    const job = campaignOf(read, cmp).jobs.find((j) => j.stageId === "square")!;
+    assert.equal(job.actualCapability, "seedream-5-lite");
+    assert.equal(job.requestMeta?.automaticRecoveryUsed, true);
+    assert.equal(createCalls().length, 1);
+  });
+
+  it("resumes a queued automatic fallback after restart without a second recovery", async () => {
+    const { read, ws, cmp, run } = seedStore([
+      mkJob("square", "queued", {
+        actualCapability: "seedream-5-lite",
+        requestMeta: {
+          recoveryState: "recovering",
+          recoveryCapability: "seedream-5-lite",
+          recoveryAttempt: 1,
+          automaticRecoveryUsed: true,
+          providerFailureKind: "worker_reaped"
+        }
+      })
+    ], "restart-queued-fallback");
+    const db = read();
+    const campaign = db.campaigns[0];
+    const storedRun = campaign.runs![0];
+    storedRun.status = "complete";
+    storedRun.finishedAt = new Date().toISOString();
+    storedRun.stageIds = ["square"];
+    campaign.status = "review";
+    const { getRunStatusSnapshot } = await import("./runner");
+    await getRunStatusSnapshot(ws, cmp, run);
+    await waitFor(() => createCalls().length === 1);
+    const job = campaignOf(read, cmp).jobs.find((j) => j.stageId === "square")!;
+    assert.equal(job.actualCapability, "seedream-5-lite");
+    assert.equal(job.requestMeta?.recoveryAttempt, 1);
+    assert.equal(createCalls()[0].model_override, "seedream-5-lite");
+    assert.equal(createCalls().length, 1);
+  });
+
+  it("does not auto-recover pinned, capped, unpriced, or second-recovery jobs", async () => {
+    const savedPrice = CAPABILITY_PRICE_MAP["seedream-5-lite"];
+    const cases: Array<{ tag: string; mutate: (job: ProductionJob, run: { spendCapUsd?: number }) => void }> = [
+      { tag: "pinned", mutate: (job) => { job.requestMeta = { ...job.requestMeta, manualCapabilityPinned: true }; } },
+      { tag: "capped", mutate: (_job, run) => { run.spendCapUsd = 0; } },
+      { tag: "unpriced", mutate: () => { delete CAPABILITY_PRICE_MAP["seedream-5-lite"]; } },
+      { tag: "second-recovery", mutate: (job) => { job.requestMeta = { ...job.requestMeta, automaticRecoveryUsed: true, recoveryAttempt: 1 }; } }
+    ];
+    try {
+      for (const testCase of cases) {
+        resetCatalogueCache();
+        const { read, ws, cmp, run } = seedStore([
+          mkJob("square", "failed", {
+            actualCapability: IMAGE_CAP,
+            requestMeta: { recoveryState: "retry_available", providerFailureKind: "worker_reaped" }
+          })
+        ], `gate-${testCase.tag}`);
+        const db = read();
+        const storedRun = db.campaigns[0].runs![0];
+        storedRun.stageIds = ["square"];
+        testCase.mutate(db.campaigns[0].jobs[0], storedRun);
+        await pumpRun(ws, cmp, { runId: run, budgetMs: 5000, recoverFailed: true });
+        assert.equal(createCalls().length, 0, `${testCase.tag} must not create a fallback`);
+      }
+    } finally {
+      CAPABILITY_PRICE_MAP["seedream-5-lite"] = savedPrice;
+    }
+  });
+
   it("route snapshot: no provider probe or dispatch; cold pricing never blocks", async () => {
     subscribeMode = "running";
     const { getRunStatusSnapshot } = await import("./runner");
@@ -372,7 +508,7 @@ describe("recovery: pumpRun integration", () => {
     // its detached worker may advance the tracked provider job, but the HTTP
     // response itself never waits on or probes Livepeer.
     // Unpriced capabilities prove the cold-pricing path (no static fallback).
-    const { read, ws, cmp, run } = useStore([
+    const { read, ws, cmp, run } = seedStore([
       mkJob("keyframe", "generating", { livepeerJobId: "mjob_it_50", capability: "test-unpriced-cap", requestedCapability: "test-unpriced-cap" }),
       mkJob("square", "failed", { error: "old failure", finishedAt: new Date().toISOString(), capability: "test-unpriced-cap", requestedCapability: "test-unpriced-cap" })
     ], "t6");
@@ -398,26 +534,69 @@ describe("recovery: pumpRun integration", () => {
   });
 
   it("replacement keeps requested and actual capabilities separate, never arrow text", async () => {
-    const { read, ws, cmp, run } = useStore([mkJob("square", "queued")], "t7");
+    const { read, ws, cmp, run } = seedStore([mkJob("square", "queued")], "t7");
     const db = read();
     db.campaigns[0].runs![0].stageIds = ["square"];
-    failCreateOnce = "Livepeer Grosvenor retired: recommended replacement is test-replacement-i2v";
+    failCreateOnce = "Livepeer Grosvenor retired: recommended replacement is seedream-5-lite";
     await pumpRun(ws, cmp, { runId: run, budgetMs: 20000 });
     const job = campaignOf(read, cmp).jobs.find((j) => j.stageId === "square")!;
     assert.equal(job.requestedCapability, IMAGE_CAP);
-    assert.equal(job.actualCapability, "test-replacement-i2v");
+    assert.equal(job.actualCapability, "seedream-5-lite");
     assert.equal(job.capability, IMAGE_CAP, "planned value untouched by display text");
     assert.ok(!job.capability.includes("→") && !(job.actualCapability ?? "").includes("→"));
     // The retry went out on the replacement model under the same run.
     const calls = createCalls();
     assert.equal(calls.length, 2);
-    assert.equal(calls[1].model_override, "test-replacement-i2v");
-    assert.equal(calls[0].idempotency_key, calls[1].idempotency_key, "same stage key across the recovery retry");
+    assert.equal(calls[1].model_override, "seedream-5-lite");
+     assert.notEqual(calls[0].idempotency_key, calls[1].idempotency_key, "automatic recovery uses a new provider key");
+  });
+
+  it("expires a stuck provider job with one best-effort cancel and removes it from polling", async () => {
+    const old = new Date(Date.now() - 60_000).toISOString();
+    const { read, ws, cmp } = seedStore([
+      mkJob("square", "generating", {
+        livepeerJobId: "mjob_stuck",
+        lastProviderJobId: "mjob_stuck",
+        dispatchStartedAt: old,
+        dispatchDeadlineAt: old,
+        dispatchBudgetSeconds: 135,
+        actualCapability: IMAGE_CAP,
+        requestMeta: { automaticRecoveryUsed: true, recoveryAttempt: 1 }
+      })
+    ], "watchdog");
+    const firstCampaign = campaignOf(read, cmp);
+    const client = new LivepeerMcpClient(livepeerConfig());
+    assert.equal(await enforceWatchdogs(client, ws, firstCampaign, firstCampaign.jobs), true);
+    const after = campaignOf(read, cmp);
+    const job = after.jobs[0];
+    assert.equal(job.status, "failed");
+    assert.equal(job.requestMeta?.recoveryState, "retry_available");
+    assert.equal(job.livepeerJobId, undefined);
+    assert.equal(job.lastProviderJobId, "mjob_stuck");
+    assert.equal(seen.filter((s) => s.tool === "cancel_job").length, 1);
+    assert.equal(await enforceWatchdogs(client, ws, after, after.jobs), false);
+    assert.equal(seen.filter((s) => s.tool === "cancel_job").length, 1);
+  });
+
+  it("automatically recovers a worker failure once with a different model and a new key", async () => {
+    const { read, ws, cmp, run } = seedStore([mkJob("square", "queued")], "fallback");
+    failCreateOnce = "worker died before an output";
+    const result = await pumpRun(ws, cmp, { runId: run, budgetMs: 20000 });
+    assert.equal(result.pumped, true);
+    const job = campaignOf(read, cmp).jobs.find((j) => j.stageId === "square")!;
+    assert.equal(job.actualCapability, "seedream-5-lite");
+    assert.equal(job.requestMeta?.automaticRecoveryUsed, true);
+    assert.equal(job.requestMeta?.recoveryCapability, "seedream-5-lite");
+    const calls = createCalls();
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].model_override, IMAGE_CAP);
+    assert.equal(calls[1].model_override, "seedream-5-lite");
+    assert.notEqual(calls[0].idempotency_key, calls[1].idempotency_key);
   });
 
   it("ledger prices the actual replacement model at the resolved duration", async () => {
     const { runSpendLedger } = await import("./runner");
-    const { read, ws, cmp, run } = useStore([
+    const { read, ws, cmp, run } = seedStore([
       mkJob("square", "ready_to_share", {
         outputUrl: SQUARE_OUT,
         providerOutputUrl: SQUARE_OUT,
@@ -438,7 +617,7 @@ describe("recovery: pumpRun integration", () => {
   });
 
   it("receipts carry full duration provenance and the actual capability", async () => {
-    const { read, ws, cmp, run } = useStore([
+    const { read, ws, cmp, run } = seedStore([
       mkJob("keyframe", "ready_to_share", { providerOutputUrl: KEYFRAME_OUT, outputUrl: KEYFRAME_OUT }),
       mkJob("motion", "queued")
     ], "t9");
@@ -457,7 +636,7 @@ describe("recovery: pumpRun integration", () => {
   });
 
   it("legacy rows without provenance fields still finalize and publish", async () => {
-    const { read, ws, cmp, run } = useStore([
+    const { read, ws, cmp, run } = seedStore([
       {
         id: "job_legacy",
         campaignId: "cmp_t10",

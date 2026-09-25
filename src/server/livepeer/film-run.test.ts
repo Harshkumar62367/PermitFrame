@@ -467,6 +467,26 @@ describe("malformed provider responses fail honestly", () => {
 });
 
 describe("cancellation isolation", () => {
+  it("expires a stuck film provider job once and clears the active provider id", async () => {
+    const { store, read } = memoryStore(seedDb(filmPlan(), "watchdog").db);
+    setRunStore(store);
+    const client = fakeClient({ submit: [submitted()], status: [status({ statusText: "rendering_scenes" })] });
+    const result = await submitFilmRun({ workspaceId: WS, campaignId: "cmp_watchdog" });
+    assert.ok(result.run);
+    await pumpFilmRun(WS, "cmp_watchdog", result.run.id, { budgetMs: 50 }, client);
+    const stored = read().campaigns[0].filmRuns![0];
+    stored.dispatchDeadlineAt = new Date(Date.now() - 1_000).toISOString();
+    await pumpFilmRun(WS, "cmp_watchdog", result.run.id, { budgetMs: 100 }, client);
+    const expired = read().campaigns[0].filmRuns![0];
+    assert.equal(expired.status, "failed");
+    assert.equal(expired.providerJobId, undefined);
+    assert.equal(expired.lastProviderJobId, "cjob_abc123");
+    assert.equal(expired.providerFailureKind, "provider_timeout");
+    assert.equal(client.calls.filter((c) => c.kind === "cancel").length, 1);
+    await pumpFilmRun(WS, "cmp_watchdog", result.run.id, { budgetMs: 100 }, client);
+    assert.equal(client.calls.filter((c) => c.kind === "cancel").length, 1);
+  });
+
   it("cancels only the owned provider job and preserves campaign assets", async () => {
     const seed = seedDb(filmPlan(), "cancel");
     seed.db.campaigns[0].jobs.push({

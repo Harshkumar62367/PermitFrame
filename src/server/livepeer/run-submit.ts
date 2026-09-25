@@ -7,6 +7,7 @@ import { normalizeQualityProfile, normalizeStagePlan } from "./plan-dag";
 import { createJobRecords } from "./pipeline";
 import { peekLivePriceMap, quoteStage } from "./pricing";
 import { resolveMotionDuration } from "./duration-policy";
+import { clearCapabilityQuarantine, selectRecoveryCapability } from "./catalogue";
 import { findActiveRun } from "./run-scope";
 import { resolveMaxConcurrency } from "./run-retry";
 
@@ -30,6 +31,8 @@ export interface SubmitInput {
    */
   jobIds?: string[];
   capabilityOverride?: string;
+  retryMode?: "same" | "backup";
+  confirmUnknownSpend?: boolean;
   idempotencyKey?: string;
   maxConcurrency?: number;
   /** Resolved in request scope; the detached pump needs it (no session there). */
@@ -183,36 +186,89 @@ export async function submitRun(input: SubmitInput): Promise<SubmitResult> {
   };
 
   const resetIds: string[] = [];
+  const backupCapabilities = new Map<string, string>();
+  if (input.retryMode === "backup" && !input.capabilityOverride?.trim()) {
+    const retryJobs = (exactJobs ?? campaign.jobs).filter(
+      (j) => j.status === "failed" && (!exactScope || exactScope.includes(j.id))
+    );
+    for (const retryJob of retryJobs) {
+      const stage = campaign.preflight?.plan.find((s) => s.id === retryJob.stageId);
+      if (!stage) return { created: false, error: `Cannot choose a backup model for ${retryJob.stageId}.` };
+      const role = retryJob.role ?? stage.role;
+      const profile = normalizeQualityProfile(stage.qualityProfile ?? retryJob.qualityProfile ?? process.env.LIVEPEER_QUALITY_PROFILE);
+      const current = retryJob.actualCapability ?? retryJob.capability;
+      const replacement = await selectRecoveryCapability({ role, profile, failedCapability: current, pinned: false });
+      if (!replacement) return { created: false, error: `No different ${role} model is currently available for ${retryJob.stageId}.` };
+      const quote = quoteStage(
+        { capability: replacement, kind: stage.kind },
+        peekLivePriceMap(),
+        stage.durationSeconds ?? 5
+      );
+      if (!quote && input.confirmUnknownSpend !== true) {
+        return { created: false, error: `The backup model ${replacement} has no usable price estimate. Confirm the spend before retrying.` };
+      }
+      backupCapabilities.set(retryJob.id, replacement);
+    }
+  }
   const owned = exactScope ? new Set(exactScope) : null;
   await write((d) => {
     const c = d.campaigns.find((x) => x.id === input.campaignId);
     if (!c) return;
-    // Resume: keep delivered stages, reset failed ones for the run's scope.
+    // Resume: keep delivered stages, reset failed, cancelled, and storage-
+    // retry stages for the run's scope. A locally cancelled stage already has
+    // a job record, so it must be explicitly re-queued rather than treated as
+    // a covered stage with nothing to dispatch.
     // Exact runs reset ONLY their listed jobs - a sibling sharing a stageId
     // is never touched merely for sharing it.
     for (const j of c.jobs) {
-      if ((j.status === "failed" || j.status === "storage_retry_needed") && (owned ? owned.has(j.id) : wanted.includes(j.stageId))) {
+      if ((j.status === "failed" || j.status === "cancelled" || j.status === "storage_retry_needed") && (owned ? owned.has(j.id) : wanted.includes(j.stageId))) {
         if (input.capabilityOverride?.trim()) j.capability = input.capabilityOverride.trim();
+        const backup = backupCapabilities.get(j.id);
+        const previousCapability = j.actualCapability ?? j.capability;
+        if (backup) {
+          j.actualCapability = backup;
+          clearCapabilityQuarantine(previousCapability);
+        } else {
+          j.actualCapability = undefined;
+          if (input.retryMode === "same") clearCapabilityQuarantine(previousCapability);
+        }
         // A user-triggered retry of a provider-terminal failure is a new
         // logical provider attempt. Keep automatic recovery inside one run
         // idempotent, but make this next run both fresh and fast-tiered so a
         // reaped worker cannot be replayed forever.
-        const hadProviderAttempt = Boolean(j.livepeerJobId);
+        const hadProviderAttempt = Boolean(j.livepeerJobId || j.lastProviderJobId || j.requestMeta?.providerFailureKind);
         j.status = "queued";
         j.error = undefined;
         j.livepeerJobId = undefined;
+        j.dispatchStartedAt = undefined;
         j.attempts = 0;
         j.dispatchedAt = undefined;
+        j.providerBudgetSeconds = undefined;
+        j.dispatchBudgetSeconds = undefined;
+        j.dispatchDeadlineAt = undefined;
+        j.providerPhase = undefined;
+        j.providerCancelAttemptedAt = undefined;
+        j.providerCancelConfirmed = undefined;
         j.finishedAt = undefined;
         j.nextAttemptAt = undefined;
         j.lastTransientError = undefined;
-        if (hadProviderAttempt) {
-          j.requestMeta = {
-            ...j.requestMeta,
-            fastTierRequested: true,
-            fallbackReason: "Previous provider attempt ended without an output; this explicit retry uses the provider fast tier."
-          };
-        }
+        const stageForJob = c.preflight?.plan.find((s) => s.id === j.stageId);
+        j.requestMeta = {
+          ...j.requestMeta,
+          recoveryState: "none",
+          manualCapabilityPinned: Boolean(input.capabilityOverride?.trim() || (!backup && stageForJob?.requestedCapability !== undefined)),
+          recoveryCapability: undefined,
+          recoveryEstimateUsd: undefined,
+          recoveryQuoteExact: undefined,
+          recoveryAttempt: 0,
+          automaticRecoveryUsed: false,
+          ...(hadProviderAttempt
+            ? {
+                fastTierRequested: true,
+                fallbackReason: "Previous provider attempt ended without an output; this explicit retry uses the provider fast tier."
+              }
+            : {})
+        };
         j.runId = run.id;
         resetIds.push(j.id);
       }
@@ -232,7 +288,10 @@ export async function submitRun(input: SubmitInput): Promise<SubmitResult> {
           { ...campaign, preflight: c.preflight },
           [stageId]
         );
-        if (input.capabilityOverride?.trim()) job.capability = input.capabilityOverride.trim();
+        if (input.capabilityOverride?.trim()) {
+          job.capability = input.capabilityOverride.trim();
+          job.requestMeta = { ...job.requestMeta, manualCapabilityPinned: true };
+        }
         job.runId = run.id;
         c.jobs.push(job);
       }
@@ -266,10 +325,19 @@ export async function submitRun(input: SubmitInput): Promise<SubmitResult> {
   // Regenerated outputs deserve a fresh storage budget: drop stale asset
   // rows so the new generation persists under the same job id.
   if (resetIds.length > 0) {
-    const { campaignAssets } = await import("../db/schema");
-    const { inArray } = await import("drizzle-orm");
-    const { getDb } = await import("../db/client");
-    await getDb().delete(campaignAssets).where(inArray(campaignAssets.jobId, resetIds)).catch(() => undefined);
+    // Storage cleanup must never undo or mask the durable queue handoff.
+    // `getDb()` itself may throw before a query promise exists (notably in
+    // memory-backed recovery/test contexts), so protect the entire cleanup
+    // path rather than only the query promise.
+    try {
+      const { campaignAssets } = await import("../db/schema");
+      const { inArray } = await import("drizzle-orm");
+      const { getDb } = await import("../db/client");
+      await getDb().delete(campaignAssets).where(inArray(campaignAssets.jobId, resetIds));
+    } catch {
+      // The regenerated provider output will still replace the stale one in
+      // the durable workspace record; orphan cleanup can be retried later.
+    }
   }
 
   // Estimate after records exist (async, never blocks submit meaningfully -

@@ -10,6 +10,9 @@ export interface RunJobState {
   outputUrl: string | null;
   costUsd: number | null;
   error: string | null;
+  providerPhase?: "preparing" | "submitted" | "generating";
+  recoveryState?: "none" | "recovering" | "retry_available" | "failed";
+  recoveryCapability?: string;
 }
 
 export interface RunStatusResponse {
@@ -26,7 +29,10 @@ export interface RunStatusResponse {
 const BACKOFF_MS = [2000, 4000, 8000, 15000, 30000];
 
 function signatureOf(d: RunStatusResponse): string {
-  return JSON.stringify([d.run?.status, d.jobs.map((j) => `${j.id}:${j.status}:${j.outputUrl ?? ""}`)]);
+  return JSON.stringify([
+    d.run?.status,
+    d.jobs.map((j) => `${j.id}:${j.status}:${j.outputUrl ?? ""}:${j.providerPhase ?? ""}:${j.recoveryState ?? ""}:${j.recoveryCapability ?? ""}`)
+  ]);
 }
 
 /**

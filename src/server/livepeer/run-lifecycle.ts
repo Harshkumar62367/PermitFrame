@@ -5,7 +5,8 @@ import { LivepeerMcpClient, livepeerConfig } from "./mcp-client";
 import { withCampaignLock } from "./mutex";
 import { fetchLivePriceMap, quoteStage } from "./pricing";
 import { isExactRun, runOwnsJob } from "./run-scope";
-import type { PumpOptions, PumpResult } from "./run-poll";
+import { isWatchdogExpired, type PumpOptions, type PumpResult } from "./run-poll";
+import { classifyProviderFailure } from "./run-retry";
 
 /**
  * Run lifecycle: failure/completion settlement, cancellation, spend
@@ -169,10 +170,20 @@ export async function cancelRunJobs(
       await withCampaignLock(campaignId, () =>
         writeWorkspace(workspaceId, (d) => {
           const j = d.campaigns.find((x) => x.id === campaignId)?.jobs.find((x) => x.id === jobId);
-          if (j && (j.status === "generating" || j.status === "queued")) {
-            j.status = "cancelled";
-            j.finishedAt = nowIso();
-          }
+           if (j && (j.status === "generating" || j.status === "queued")) {
+             j.lastProviderJobId = j.lastProviderJobId ?? j.livepeerJobId;
+             j.status = "cancelled";
+             j.livepeerJobId = undefined;
+               j.dispatchStartedAt = undefined;
+               j.dispatchedAt = undefined;
+               j.providerBudgetSeconds = undefined;
+               j.dispatchBudgetSeconds = undefined;
+             j.dispatchDeadlineAt = undefined;
+             j.providerPhase = undefined;
+             j.providerCancelConfirmed = true;
+             j.finishedAt = nowIso();
+           }
+
         })
       );
       results.push({ jobId: job.id, outcome: "cancelled", detail: attempt.note });
@@ -253,7 +264,17 @@ export async function runSpendLedger(
 export interface RunStatusSnapshot {
   run: ProductionRun;
   stages: { stageId: string; label: string; status: string; costUsd: number | null; estimateUsd: number | null; pricedCapability: string | null }[];
-  jobs: { id: string; stageId: string; status: string; outputUrl: string | null; costUsd: number | null; error: string | null }[];
+  jobs: {
+    id: string;
+    stageId: string;
+    status: string;
+    outputUrl: string | null;
+    costUsd: number | null;
+    error: string | null;
+    providerPhase?: ProductionJob["providerPhase"];
+    recoveryState?: "none" | "recovering" | "retry_available" | "failed";
+    recoveryCapability?: string;
+  }[];
   progress: { ready: number; total: number };
   estimateTotal: number | null;
   actualTotal: number;
@@ -263,6 +284,19 @@ export interface RunStatusSnapshot {
 /** Pump dependency for the status snapshot, injected by the orchestrator
  * facade (keeps this module cycle-free). */
 export type SnapshotPump = (workspaceId: string, campaignId: string, opts: PumpOptions) => Promise<PumpResult>;
+
+export function statusNeedsRecoveryPump(jobs: ProductionJob[], now = Date.now()): boolean {
+  return jobs.some((job) => {
+    if (isWatchdogExpired(job, now)) return true;
+    const meta = job.requestMeta;
+    const failureKind = meta?.providerFailureKind ?? classifyProviderFailure("", `${job.error ?? ""} ${meta?.providerFailureDetail ?? ""}`);
+    if (failureKind === "cancelled") return false;
+    if (meta?.automaticRecoveryUsed === true) return job.status === "queued";
+    if (meta?.recoveryState === "retry_available" &&
+      (job.status === "queued" || job.status === "generating" || job.status === "failed")) return true;
+    return job.status === "failed" && !!failureKind;
+  });
+}
 
 /**
  * Status-route logic: database snapshot immediately, with one detached
@@ -276,20 +310,34 @@ export async function fetchRunStatusSnapshot(
   runId: string,
   pump: SnapshotPump
 ): Promise<RunStatusSnapshot | null> {
-  // The detached pump owns provider progress. The status response is a
-  // database read, so a slow provider can never turn every UI poll into a
-  // 4-5 second request. The campaign lock coalesces duplicate browser polls.
-  void pump(workspaceId, campaignId, { runId, budgetMs: 8 * 60 * 1000 }).catch(() => undefined);
   const db = await readWorkspace(workspaceId);
   const campaign = db.campaigns.find((c) => c.id === campaignId);
   const run = campaign?.runs?.find((r) => r.id === runId);
   if (!campaign || !run) return null;
+  const jobs = (campaign.jobs ?? []).filter((j) => runOwnsJob(run, j));
+  const recoveryPump = statusNeedsRecoveryPump(jobs);
+  void pump(workspaceId, campaignId, recoveryPump
+    ? {
+        runId,
+        budgetMs: 8 * 60 * 1000,
+        allowDispatch: true,
+        allowPreviewResume: true,
+        allowRecovery: true,
+        recoverFailed: true
+      }
+    : {
+        runId,
+        budgetMs: 8 * 60 * 1000,
+        allowDispatch: false,
+        allowPreviewResume: false,
+        allowRecovery: false,
+        recoverFailed: false
+      }).catch(() => undefined);
   // Cached prices only: a cold cache yields null estimates (shown as
   // unquotable) instead of blocking on a live pricing call.
   const { peekLivePriceMap } = await import("./pricing");
   const ledger = await runSpendLedger(workspaceId, campaignId, runId, peekLivePriceMap());
   if (!ledger) return null;
-  const jobs = (campaign.jobs ?? []).filter((j) => runOwnsJob(run, j));
   const ready = jobs.filter((j) => j.status === "ready_to_share").length;
   return {
     run: ledger.run as ProductionRun,
@@ -300,7 +348,10 @@ export async function fetchRunStatusSnapshot(
       status: j.status,
       outputUrl: j.outputUrl ?? null,
       costUsd: j.costUsd ?? null,
-      error: j.error ?? null
+      error: j.error ?? null,
+      ...(j.providerPhase ? { providerPhase: j.providerPhase } : {}),
+      ...(j.requestMeta?.recoveryState ? { recoveryState: j.requestMeta.recoveryState } : {}),
+      ...(j.requestMeta?.recoveryCapability ? { recoveryCapability: j.requestMeta.recoveryCapability } : {})
     })),
     progress: { ready, total: isExactRun(run) ? (run.jobIds as string[]).length : run.stageIds.length },
     estimateTotal: ledger.estimateTotal,

@@ -3,7 +3,7 @@ import { apiPost } from "@/lib/api";
 import { newRunKey } from "@/lib/idempotency-key";
 import { useLongAction } from "@/lib/use-long-action";
 import { useInvalidateWorkspaceSnapshot } from "@/lib/use-workspace-snapshot";
-import type { Campaign } from "@/server/types";
+import { classifyReceiptForAnchor, type Campaign, type ReceiptPublishResult } from "@/server/types";
 
 /**
  * The review mutation cluster: approve, verification refresh, republish,
@@ -30,6 +30,7 @@ export function useReviewActions(campaign: Campaign, onChanged: () => Promise<vo
   const [approvedUal, setApprovedUal] = useState<string | null>(campaign.campaignUAL ?? null);
   const [republishing, setRepublishing] = useState(false);
   const [republishMsg, setRepublishMsg] = useState<string | null>(null);
+  const [republishProgress, setRepublishProgress] = useState<string | null>(null);
   const [retryingStorage, setRetryingStorage] = useState(false);
   const [storageMsg, setStorageMsg] = useState<string | null>(null);
   const invalidateSnapshot = useInvalidateWorkspaceSnapshot();
@@ -91,25 +92,63 @@ export function useReviewActions(campaign: Campaign, onChanged: () => Promise<vo
     }
   }
 
+  /**
+   * Anchor eligible receipts one at a time so progress stays honest
+   * ("Publishing 2 of 4 records…"). Each receipt persists its own
+   * publishing -> anchored | failed state server-side, so a refresh or a
+   * per-step timeout surfaces the durable outcome instead of resetting it.
+   * Already-anchored, private, non-durable, and in-flight records are never
+   * retried here - the server re-classifies every id defensively anyway.
+   */
   async function republishPending() {
     if (republishing) return;
+    const targets = campaign.receipts.filter((r) => classifyReceiptForAnchor(r) === "eligible");
+    if (targets.length === 0) {
+      setRepublishMsg("Nothing to publish - records are already published, private, not yet stored, or being published.");
+      return;
+    }
     setRepublishing(true);
     setRepublishMsg(null);
+    setRepublishProgress(null);
     setError(null);
+    const outcomes: ReceiptPublishResult[] = [];
+    let unknown = 0;
     try {
-      // Sequential ledger publishes can exceed the default 30s budget.
-      const j = await apiPost<{ republished: string[] }>(`/api/campaigns/${campaign.id}/republish`, {}, undefined, 120000);
-      setRepublishMsg(
-        j.republished.length > 0
-          ? `${j.republished.length} record${j.republished.length === 1 ? "" : "s"} published to the proof ledger.`
-          : "Nothing new published - the ledger is unreachable or records are already published. Check Settings › Asset production, then retry."
-      );
+      // Verifiable Memory finalization waits on-chain work: budget five
+      // minutes per record. A step timeout does not stop the remaining
+      // records - the timed-out record keeps finalizing server-side and the
+      // refresh below shows its persisted outcome.
+      for (let i = 0; i < targets.length; i += 1) {
+        setRepublishProgress(`Publishing ${i + 1} of ${targets.length} records…`);
+        try {
+          const j = await apiPost<{ results: ReceiptPublishResult[] }>(
+            `/api/campaigns/${campaign.id}/republish`,
+            { receiptIds: [targets[i].id] },
+            undefined,
+            300000
+          );
+          outcomes.push(...(j.results ?? []));
+        } catch (e) {
+          unknown += 1;
+          outcomes.push({
+            receiptId: targets[i].id,
+            status: "failed",
+            reason: e instanceof Error ? e.message : "Request failed."
+          });
+        }
+      }
+      const anchored = outcomes.filter((o) => o.status === "anchored").length;
+      const failed = outcomes.filter((o) => o.status === "failed").length;
+      const parts: string[] = [];
+      if (anchored > 0) parts.push(`${anchored} record${anchored === 1 ? "" : "s"} published to the proof ledger.`);
+      if (failed > 0) parts.push(`${failed} record${failed === 1 ? "" : "s"} could not be published. Retry failed records.`);
+      if (unknown > 0) parts.push(`${unknown} step${unknown === 1 ? "" : "s"} timed out - the server may still finish; refresh shows the persisted result.`);
+      setRepublishMsg(parts.length > 0 ? parts.join(" ") : "Nothing new published.");
       invalidateSnapshot();
       await onChanged();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Republish failed. The ledger may be offline - retry once it is back.");
     } finally {
       setRepublishing(false);
+      setRepublishProgress(null);
     }
   }
 
@@ -192,6 +231,7 @@ export function useReviewActions(campaign: Campaign, onChanged: () => Promise<vo
     approvedUal,
     republishing,
     republishMsg,
+    republishProgress,
     retryingStorage,
     storageMsg,
     refreshing,

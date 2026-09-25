@@ -75,6 +75,24 @@ The share link does not establish the reviewer's identity.
 
 The signed-in **Verification** page helps an owner find campaign proof. The resulting public proof page can be shared without a PermitFrame sign-in.
 
+### Share or look up a verification link
+
+After an approved campaign has a verification reference, open **Review & deliver** and select **Verify** under any generated output. This opens a URL in this form:
+
+```text
+https://your-permitframe-domain/verify/vrf_…#output-…
+```
+
+The `vrf_…` part is the campaign's verification reference. Copy that part from the URL if you need to use the signed-in **Verification** search page. The `#output-…` ending only opens a particular output on the proof page; it is optional for a campaign-level lookup.
+
+![Review and deliver cards expose Verify under each output; that link is where you open or copy the public verification reference](../public/docs/review-verify-link.png)
+
+On the **Verification** page, paste the complete `vrf_…` reference and select **Verify**. The page opens the same public proof view that a client can see. It shows only the allowlisted campaign evidence: approved shareable outputs, the claims checked before production, permission scope summary, and any finalized technical evidence. It does not expose private source media, private contact details, or full generation prompts.
+
+![The Verification page accepts a vrf_ reference and provides workspace examples with a direct Verify action](../public/docs/verification-lookup.png)
+
+**Proof bundle** is different. It downloads an offline JSON evidence file for handoff or archiving. It is not the place to obtain a `vrf_…` reference.
+
 A public proof page can include:
 
 - Approved shareable outputs.
@@ -85,6 +103,19 @@ A public proof page can include:
 - Technical record details when publication has genuinely finalized.
 
 Public proof is a point-in-time snapshot. It is not a live view of every later workspace change. When the campaign record is genuinely finalized, Technical details can show the canonical UAL, the Base Sepolia Knowledge Asset token link, and the finalization transaction link. Those are public testnet provenance links, not legal ownership evidence.
+
+### Proof ledger publishing
+
+Verification and proof-ledger publishing are related, but serve different purposes:
+
+| Action | What it creates | Required to open a `vrf_…` verification page? |
+| --- | --- | --- |
+| **Approve pack** | Owner approval and the campaign's verification snapshot/reference. | Yes. |
+| **Verify** | Opens the client-readable proof page for that reference. | This is the lookup action itself. |
+| **Proof bundle** | Downloadable JSON evidence file. | No. |
+| **Publish pending records** | Attempts to anchor eligible receipt records in the proof ledger so they can receive a permanent UAL and explorer link. | No. |
+
+Use **Publish pending records** when you want ledger-level provenance for eligible outputs. It can take longer because each record is submitted to the DKG and waits for confirmation. A published receipt should show a real UAL and explorer link in **Technical details for verification**. Private records remain in the workspace and are not publicly anchored.
 
 ## Privacy boundaries
 

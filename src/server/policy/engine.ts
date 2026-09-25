@@ -220,9 +220,16 @@ async function buildTemplatePlan(
   const effectiveProfile = normalizeQualityProfile(spec.qualityProfile ?? profile);
   if (!template.compatibleProfiles.includes(effectiveProfile)) return null;
   const roles = await resolvePlanRolesLive(effectiveProfile);
+  const quickRoles = spec.packSize === "quick" ? await resolvePlanRolesLive("draft") : null;
+  const quickImage = quickRoles && (quickRoles.conceptImage.source === "discovered" || quickRoles.conceptImage.source === "configured")
+    ? quickRoles.conceptImage.capability
+    : undefined;
+  const conceptImage = quickImage && quickImage !== roles.conceptImage.capability
+    ? { ...roles.conceptImage, capability: quickImage, fallbackFrom: `${roles.conceptImage.capability ?? "automatic"} → ${quickImage}` }
+    : roles.conceptImage;
   const byRole = {
-    conceptImage: roles.conceptImage,
-    sourceGuidedImage: roles.conceptImage,
+    conceptImage,
+    sourceGuidedImage: conceptImage,
     subjectPreservingImage: roles.subjectPreservingImage,
     productPackshot: roles.productPackshot,
     imageToVideo: roles.imageToVideo,

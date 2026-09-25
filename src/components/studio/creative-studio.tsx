@@ -69,7 +69,7 @@ export function CreativeStudio({ campaign, sourceMedia, passport, productFacts, 
   }
 
   return (
-    <div className="space-y-4">
+    <div className="min-w-0 space-y-4">
       <StudioHeader
         campaign={campaign}
         sourceMedia={sourceMedia}
@@ -98,7 +98,7 @@ export function CreativeStudio({ campaign, sourceMedia, passport, productFacts, 
               <BriefPanel campaign={campaign} passport={passport} productFacts={productFacts} onChanged={onChanged} />
             </div>
           </details>
-          <div className="grid items-stretch gap-4 xl:h-[min(720px,calc(100vh-2rem))] xl:grid-cols-[minmax(0,1.45fr)_minmax(340px,0.9fr)] min-[1600px]:grid-cols-[minmax(0,1.35fr)_minmax(380px,0.95fr)]">
+          <div className="grid min-w-0 items-stretch gap-4 min-[1450px]:h-[min(720px,calc(100vh-2rem))] min-[1450px]:grid-cols-[minmax(0,1.45fr)_minmax(340px,0.9fr)] min-[1600px]:grid-cols-[minmax(0,1.35fr)_minmax(380px,0.95fr)]">
             <CreativePlan campaign={campaign} allowed={allowed} filmMode={film.mode} onChanged={onChanged} />
             <QueuePanel campaign={campaign} allowed={allowed} onChanged={onChanged} />
           </div>
@@ -121,7 +121,7 @@ export function CreativeStudio({ campaign, sourceMedia, passport, productFacts, 
               {decision?.queriedRights.length ? (
                 <li className="flex min-w-0 gap-2">
                   <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-700 dark:text-emerald-300" aria-hidden />
-                  <span className="min-w-0 break-all">
+                  <span className="min-w-0 break-words">
                     Rights {decision.queriedRights[0]} - {passport?.platforms.join(", ")} · {passport?.countries.join(", ")}
                     {passport?.validUntil ? ` · valid to ${passport.validUntil}` : ""} · {passport?.allowedTransformations.join(", ")}
                   </span>

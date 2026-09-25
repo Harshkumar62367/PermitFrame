@@ -9,8 +9,9 @@ export type Visibility = "private" | "shared" | "public";
 /**
  * User-facing production quality profile. A product-level choice recorded on
  * the request and on every stage - never a persisted raw model assumption.
- * Missing on legacy rows means "balanced" (the default for final-quality work;
- * flux-schnell is reserved for explicit Draft previews).
+ * Missing on legacy rows means "balanced". Draft and Quick image work may
+ * use the verified fast image capability; the exact capability is always
+ * recorded separately from the profile.
  */
 export type QualityProfile = "draft" | "balanced" | "premium";
 
@@ -53,10 +54,16 @@ export type StageFidelity = "conceptual" | "product-preserving" | "property-pres
  * Explicit persisted publication state. Set ONLY from real adapter results:
  * "local" (workspace store), "shared" (DKG Shared Working Memory),
  * "anchored" (on-chain Verifiable Memory finalize succeeded),
- * "failed" (a publish was attempted and failed - retryable).
+ * "failed" (a publish was attempted and failed - retryable),
+ * "publishing" (an anchoring attempt claimed this record and has not
+ * finalized yet - a refresh-safe in-flight marker, never a success claim;
+ * claims older than PUBLISHING_CLAIM_TTL_MS are orphaned and retryable).
  * Never inferred from ID/URI shape. Missing (legacy rows) means non-public.
  */
-export type PublicationStatus = "local" | "shared" | "anchored" | "failed";
+export type PublicationStatus = "local" | "shared" | "anchored" | "failed" | "publishing";
+
+/** Age after which an unfinalized "publishing" claim is orphaned and may be retried. */
+export const PUBLISHING_CLAIM_TTL_MS = 10 * 60_000;
 
 export interface Creator {
   id: string;
@@ -246,6 +253,55 @@ export function migrateJobStatus(status: string): JobStatus {
  */
 export function hasSharableReceipt(receipt: Pick<DerivativeReceipt, "storageStatus">): boolean {
   return receipt.storageStatus === "stored";
+}
+
+/** Per-receipt outcome of a proof-ledger publish attempt. */
+export type ReceiptPublishStatus =
+  | "anchored"
+  | "already_anchored"
+  | "skipped_private"
+  | "skipped_ineligible"
+  | "publishing"
+  | "failed";
+
+export interface ReceiptPublishResult {
+  receiptId: string;
+  status: ReceiptPublishStatus;
+  ual?: string;
+  explorerUrl?: string;
+  reason?: string;
+}
+
+/**
+ * Pure per-receipt publish directive. "eligible" means the record may be
+ * offered to Verifiable Memory anchoring now (includes failed and orphaned
+ * publishing claims). Private, non-durable, already-anchored, and
+ * freshly-claimed records are never eligible. Pure so UI targeting,
+ * route guards, and tests share one definition.
+ */
+export function classifyReceiptForAnchor(
+  receipt: Pick<
+    DerivativeReceipt,
+    "ual" | "visibility" | "storageStatus" | "publicationStatus" | "publicationUpdatedAt"
+  >,
+  nowMs: number = Date.now()
+): "already_anchored" | "skipped_private" | "skipped_ineligible" | "publishing" | "eligible" {
+  // A non-empty UAL is never republished - it already resolves somewhere.
+  if (receipt.ual) return "already_anchored";
+  // Private records must never reach the shared graph.
+  if (receipt.visibility === "private") return "skipped_private";
+  // Proof only for durable outputs: provider-hosted legacy receipts wait
+  // for "Store securely" instead of publishing previews as evidence.
+  if (!hasSharableReceipt(receipt)) return "skipped_ineligible";
+  if (receipt.publicationStatus === "publishing") {
+    const claimedAt = receipt.publicationUpdatedAt ? Date.parse(receipt.publicationUpdatedAt) : NaN;
+    // A fresh claim belongs to an in-flight request - never double-publish
+    // it. An aged claim is orphaned (the attempt died without finalizing)
+    // and may be retried.
+    if (Number.isFinite(claimedAt) && nowMs - claimedAt < PUBLISHING_CLAIM_TTL_MS) return "publishing";
+    return "eligible";
+  }
+  return "eligible";
 }
 
 /**
@@ -443,6 +499,17 @@ export interface ProductionJob {
      * "Operation succeeded" - never "identity verified" (no visual
      * similarity is measured). */
     providerOperationSucceeded?: boolean;
+    recoveryState?: "none" | "recovering" | "retry_available" | "failed";
+    manualCapabilityPinned?: boolean;
+    providerFailureKind?: string;
+    providerFailureDetail?: string;
+    recoveryReason?: string;
+    recoveryCapability?: string;
+    recoveryFromCapability?: string;
+    recoveryEstimateUsd?: number;
+    recoveryQuoteExact?: boolean;
+    recoveryAttempt?: number;
+    automaticRecoveryUsed?: boolean;
     /**
      * Fidelity-gate verdict for place_subject outputs on strict-fidelity
      * stages (product/property-preserving): "passed" only when the
@@ -479,8 +546,19 @@ export interface ProductionJob {
   runId?: string;
   /** Dispatch attempts (submit calls). Retries reuse the same idempotency key. */
   attempts?: number;
+  /** When the provider submit began (before a provider id is available). */
+  dispatchStartedAt?: string;
+  providerBudgetSeconds?: number;
+  dispatchBudgetSeconds?: number;
+  /** Durable deadline for the current provider attempt. */
+  dispatchDeadlineAt?: string;
+  providerPhase?: "preparing" | "submitted" | "generating";
   /** When the provider accepted the job (async submit returned a job id). */
   dispatchedAt?: string;
+  /** Last provider id, retained for technical details after watchdog cleanup. */
+  lastProviderJobId?: string;
+  providerCancelAttemptedAt?: string;
+  providerCancelConfirmed?: boolean;
   /** Last submit attempt time (ISO). Drives backoff math. */
   lastAttemptAt?: string;
   /** Earliest next submit attempt (ISO). The pump will not redispatch before this. */
@@ -618,6 +696,10 @@ export interface DerivativeReceipt {
   approvedSourceAssetId?: string;
   /** Why resolved differs from requested, or why an op fell back. */
   fallbackReason?: string;
+  providerFailureKind?: string;
+  providerFailureDetail?: string;
+  recoveryState?: "none" | "recovering" | "retry_available" | "failed";
+  recoveryCapability?: string;
   /** True once a provider output URL landed. "Operation succeeded" -
    * never "identity verified" (no visual similarity is measured). */
   providerOperationSucceeded?: boolean;
@@ -628,6 +710,10 @@ export interface DerivativeReceipt {
   ualExplorer?: string;
   /** Explicit state from the real publish result. Missing on legacy rows (non-public). */
   publicationStatus?: PublicationStatus;
+  /** When publicationStatus was last written. Ages a "publishing" claim so orphaned attempts are retryable. */
+  publicationUpdatedAt?: string;
+  /** Short safe failure note from the last publish attempt. Raw DKG errors stay in server logs only. */
+  publicationError?: string;
   /**
    * Durable storage overlay (Cloudinary). Missing on legacy rows, which
    * render provider-hosted. `outputUrl` stays the canonical delivery URL
@@ -908,7 +994,7 @@ export const CAPABILITY_PRICE_MAP: Record<string, { unit: "image" | "second"; us
 export interface AuditEvent {
   id: string;
   at: string;
-  kind: string; // "preflight.block" | "dkg.publish" | "generation.complete" ...
+  kind: string; // "preflight.block" | "production.receipt_recorded" | "dkg.publish" ...
   summary: string;
   refs: string[];
 }

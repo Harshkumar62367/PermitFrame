@@ -14,7 +14,10 @@ export async function startProduction(
   id: string,
   capabilityOverride?: string,
   stageIds?: string[],
-  idempotencyKey?: string
+  idempotencyKey?: string,
+  jobIds?: string[],
+  retryMode?: "same" | "backup",
+  confirmUnknownSpend?: boolean
 ): Promise<{ started: boolean; runId?: string; error?: string }> {
   const campaign = await loadCampaign(id);
   if (!campaign) return { started: false, error: "Campaign not found" };
@@ -36,6 +39,9 @@ export async function startProduction(
     stageIds,
     capabilityOverride,
     idempotencyKey,
+    jobIds,
+    retryMode,
+    confirmUnknownSpend,
     workspaceId
   });
   if (!submitted.run) return { started: false, error: submitted.error ?? "Run submission failed" };

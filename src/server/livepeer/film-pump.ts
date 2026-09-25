@@ -14,10 +14,12 @@ import {
 } from "./film-job";
 import {
   checkFilmCap,
+  isFilmWatchdogExpired,
   nextFilmAction,
   type FilmRun,
   type FilmRunStatus
 } from "./film-run";
+import { classifyProviderFailure, providerWatchdogSeconds } from "./run-retry";
 import { isUsableOutputUrl } from "./plan-dag";
 import { redactSecrets } from "../dkg/edge-node-adapter";
 
@@ -36,7 +38,7 @@ export interface FilmMcpClient {
   submitCreativeJob(args: CreativeSubmitArgs): Promise<CreativeSubmitParsed>;
   confirmCreativeJob(providerJobId: string): Promise<CreativeSubmitParsed>;
   getCreativeJob(jobId: string): Promise<CreativeStatusParsed>;
-  cancelCreativeJob(jobId: string): Promise<{ cancelled: boolean; note: string }>;
+  cancelCreativeJob(jobId: string, transportTimeoutMs?: number): Promise<{ cancelled: boolean; note: string }>;
 }
 
 export interface FilmSubmitResult {
@@ -77,6 +79,53 @@ function activeFilmRun(campaign: Campaign): FilmRun | undefined {
   return [...(campaign.filmRuns ?? [])]
     .reverse()
     .find((r) => r.status !== "ready" && r.status !== "failed" && r.status !== "cancelled");
+}
+
+async function enforceFilmWatchdog(
+  workspaceId: string,
+  campaignId: string,
+  run: FilmRun,
+  client: FilmMcpClient,
+  now = Date.now()
+): Promise<boolean> {
+  if (!isFilmWatchdogExpired(run, now)) return false;
+  let providerJobId: string | undefined;
+  let shouldCancel = false;
+  await withCampaignLock(campaignId, () =>
+    writeWorkspace(workspaceId, (d: Database) => {
+      const current = d.campaigns.find((c) => c.id === campaignId)?.filmRuns?.find((r) => r.id === run.id);
+      if (!current || !isFilmWatchdogExpired(current, now)) return;
+      providerJobId = current.providerJobId;
+      current.lastProviderJobId = current.lastProviderJobId ?? current.providerJobId;
+      if (!current.watchdogCancelAttemptedAt) {
+        current.watchdogCancelAttemptedAt = nowIso();
+        shouldCancel = true;
+      }
+    })
+  );
+  let confirmed = false;
+  if (providerJobId && shouldCancel) {
+    try {
+      confirmed = (await client.cancelCreativeJob(providerJobId, 5_000)).cancelled;
+    } catch (e) {
+      logFilm("watchdog", e);
+    }
+  }
+  await writeFilmRun(workspaceId, campaignId, run.id, (current) => {
+    if (current.status === "ready" || current.status === "cancelled" || current.status === "failed") return;
+    current.status = "failed";
+    current.providerFailureKind = "provider_timeout";
+    current.providerCancelConfirmed = confirmed;
+    current.providerJobId = undefined;
+    current.dispatchStartedAt = undefined;
+    current.providerBudgetSeconds = undefined;
+    current.dispatchBudgetSeconds = undefined;
+    current.dispatchDeadlineAt = undefined;
+    current.providerStatus = "timeout";
+    current.error = "Film job exceeded its dispatch budget without a reel. No provider job remains active; submit a new run to retry.";
+    current.finishedAt = nowIso();
+  });
+  return true;
 }
 
 /**
@@ -196,6 +245,12 @@ async function failFilmRun(
     if (run.status === "ready" || run.status === "cancelled") return;
     run.status = "failed";
     run.error = error;
+    run.lastProviderJobId = run.lastProviderJobId ?? run.providerJobId;
+    run.providerJobId = undefined;
+    run.dispatchStartedAt = undefined;
+    run.providerBudgetSeconds = undefined;
+    run.dispatchBudgetSeconds = undefined;
+    run.dispatchDeadlineAt = undefined;
     run.finishedAt = nowIso();
   });
 }
@@ -247,8 +302,13 @@ async function applySubmitResponse(
   }
   await writeFilmRun(workspaceId, campaignId, run.id, (r) => {
     r.providerJobId = parsed.providerJobId as string;
+    r.lastProviderJobId = parsed.providerJobId as string;
     r.providerStatus = parsed.awaitingConfirmation ? "awaiting_confirmation" : "submitted";
     r.status = "submitting";
+    r.dispatchStartedAt = r.dispatchStartedAt ?? nowIso();
+    if (parsed.budgetSeconds !== undefined) r.providerBudgetSeconds = parsed.budgetSeconds;
+    r.dispatchBudgetSeconds = providerWatchdogSeconds(parsed.budgetSeconds);
+    r.dispatchDeadlineAt = new Date(Date.parse(r.dispatchStartedAt) + r.dispatchBudgetSeconds * 1000).toISOString();
     if (parsed.estimateUsd !== undefined) r.estimateUsd = parsed.estimateUsd;
     if (parsed.budgetUsd !== undefined && parsed.budgetUsd > 0) r.budgetCapUsd = Math.min(r.budgetCapUsd, parsed.budgetUsd);
     r.error = undefined;
@@ -289,12 +349,29 @@ async function applyStatusResponse(
     if (parsed.costUsd !== undefined) r.costUsd = parsed.costUsd;
     if (parsed.estimateUsd !== undefined) r.estimateUsd = parsed.estimateUsd;
     if (parsed.capability) r.actualCapability = parsed.capability;
+    if (parsed.budgetSeconds !== undefined) {
+      r.providerBudgetSeconds = parsed.budgetSeconds;
+      r.dispatchBudgetSeconds = providerWatchdogSeconds(parsed.budgetSeconds);
+      const anchor = Date.parse(r.dispatchStartedAt ?? "");
+      if (Number.isFinite(anchor)) r.dispatchDeadlineAt = new Date(anchor + r.dispatchBudgetSeconds * 1000).toISOString();
+    }
     if (nextStatus === "ready" && parsed.reelUrl) r.reelUrl = parsed.reelUrl;
     if (error) {
       r.error = error;
+      r.providerFailureKind = classifyProviderFailure(parsed.statusText, typeof parsed.raw.error === "string" ? parsed.raw.error : undefined) ?? "failed_without_output";
+      r.lastProviderJobId = r.lastProviderJobId ?? r.providerJobId;
+      r.providerJobId = undefined;
+      r.dispatchStartedAt = undefined;
+      r.providerBudgetSeconds = undefined;
+      r.dispatchBudgetSeconds = undefined;
+      r.dispatchDeadlineAt = undefined;
       r.finishedAt = nowIso();
     } else if (nextStatus === "ready") {
       r.error = undefined;
+      r.dispatchStartedAt = undefined;
+      r.providerBudgetSeconds = undefined;
+      r.dispatchBudgetSeconds = undefined;
+      r.dispatchDeadlineAt = undefined;
       r.finishedAt = nowIso();
     }
   });
@@ -330,19 +407,27 @@ export async function pumpFilmRun(
       if (run.status === "ready" || run.status === "failed" || run.status === "cancelled") {
         return { pumped: progressed, reason: progressed ? undefined : "settled" };
       }
+      if (await enforceFilmWatchdog(workspaceId, campaignId, run, client)) {
+        return { pumped: true, reason: "watchdog" };
+      }
       const action = nextFilmAction(run);
       if (action === "none") return { pumped: progressed, reason: "settled" };
 
       if (action === "submit") {
         if (opts.allowSubmit === false) return { pumped: progressed, reason: "read-only" };
+        await writeFilmRun(workspaceId, campaignId, run.id, (current) => {
+          if (current.providerJobId) return;
+           current.status = "submitting";
+           current.dispatchStartedAt = nowIso();
+           current.providerBudgetSeconds = undefined;
+           current.dispatchBudgetSeconds = providerWatchdogSeconds();
+          current.dispatchDeadlineAt = new Date(Date.parse(current.dispatchStartedAt) + current.dispatchBudgetSeconds * 1000).toISOString();
+        });
         try {
           const parsed = await client.submitCreativeJob(submitArgsFor(run));
           progressed = (await applySubmitResponse(workspaceId, campaignId, run, parsed, "submit")) || progressed;
         } catch (e) {
           logFilm("submit", e);
-          // The call failed before a provider id was returned: nothing is
-          // tracked, so failing honestly beats an blind resubmit that could
-          // dispatch a duplicate paid job.
           await failFilmRun(
             workspaceId,
             campaignId,

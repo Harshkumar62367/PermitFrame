@@ -71,6 +71,7 @@ export interface AsyncSubmitResult {
   status: string;
   costUsd?: number;
   capability?: string;
+  budgetSeconds?: number;
   raw: Record<string, unknown>;
 }
 
@@ -81,6 +82,7 @@ export interface MediaStatusResult {
   jobId?: string;
   costUsd?: number;
   capability?: string;
+  budgetSeconds?: number;
   /** Provider's terminal explanation, redacted before it reaches the UI. */
   error?: string;
   raw: Record<string, unknown>;
@@ -344,8 +346,9 @@ export class LivepeerMcpClient {
       20_000
     );
     assertToolOk(payload, `create_media(${action}, ${input.capability})`);
-    if (isFailed(extractStatus(payload))) {
-      throw new Error(`Livepeer job failed: ${resultText(payload).slice(0, 300)}`);
+    const submitStatus = extractStatus(payload);
+    if (isFailed(submitStatus)) {
+      throw new Error(`Livepeer job failed (${submitStatus}): ${resultText(payload).slice(0, 300)}`);
     }
     // Fast models may complete inline: carry the terminal output (plus any
     // reported cost/model) so callers finalize without a provider id.
@@ -361,6 +364,7 @@ export class LivepeerMcpClient {
       status: extractStatus(payload) || "unknown",
       costUsd: num(s.cost_paid_usd ?? s.cost_usd_estimated ?? s.cost_usd ?? s.total_cost_usd),
       capability: str(s.capability ?? s.capability_used ?? s.model ?? s.model_used),
+      ...(extractBudgetSeconds(payload) !== undefined ? { budgetSeconds: extractBudgetSeconds(payload) } : {}),
       raw: s
     };
   }
@@ -378,6 +382,7 @@ export class LivepeerMcpClient {
       jobId: extractJobId(payload) ?? jobId,
       costUsd: num(s.cost_paid_usd ?? s.cost_usd_estimated ?? s.cost_usd ?? s.total_cost_usd),
       capability: str(s.capability ?? s.capability_used ?? s.model ?? s.model_used),
+      ...(extractBudgetSeconds(payload) !== undefined ? { budgetSeconds: extractBudgetSeconds(payload) } : {}),
       error: providerError(s),
       raw: s
     };
@@ -405,6 +410,7 @@ export class LivepeerMcpClient {
       jobId: extractJobId(payload) ?? jobId,
       costUsd: num(s.cost_paid_usd ?? s.cost_usd_estimated ?? s.cost_usd ?? s.total_cost_usd),
       capability: str(s.capability ?? s.capability_used ?? s.model ?? s.model_used),
+      ...(extractBudgetSeconds(payload) !== undefined ? { budgetSeconds: extractBudgetSeconds(payload) } : {}),
       error: providerError(s),
       raw: s
     };
@@ -623,10 +629,10 @@ export class LivepeerMcpClient {
    * note or the persisted run record - the raw cause goes exclusively
    * through the redacted server log below.
    */
-  async cancelCreativeJob(jobId: string): Promise<{ cancelled: boolean; note: string }> {
+  async cancelCreativeJob(jobId: string, transportTimeoutMs = 5_000): Promise<{ cancelled: boolean; note: string }> {
     let payload: Record<string, unknown>;
     try {
-      payload = await this.callTool("cancel_creative_job", { job_id: jobId });
+      payload = await this.callTool("cancel_creative_job", { job_id: jobId }, transportTimeoutMs);
     } catch (e) {
       console.error(
         "[livepeer-mcp:cancel_creative_job]",
@@ -661,10 +667,10 @@ export class LivepeerMcpClient {
    * text and transport errors never reach the public note - the raw cause
    * goes exclusively through the redacted server log below.
    */
-  async cancelProviderJob(jobId: string): Promise<{ cancelled: boolean; note: string }> {
+  async cancelProviderJob(jobId: string, transportTimeoutMs = 5_000): Promise<{ cancelled: boolean; note: string }> {
     let payload: Record<string, unknown>;
     try {
-      payload = await this.callTool("cancel_job", { job_id: jobId });
+      payload = await this.callTool("cancel_job", { job_id: jobId }, transportTimeoutMs);
     } catch (e) {
       console.error(
         "[livepeer-mcp:cancel_job]",
@@ -831,18 +837,52 @@ function extractJobId(payload: Record<string, unknown>): string | undefined {
 function extractStatus(payload: Record<string, unknown>): string {
   const s = structured(payload) as Record<string, unknown>;
   for (const candidate of [s?.status, s?.state]) {
-    if (typeof candidate === "string") return candidate.toLowerCase();
+    if (typeof candidate === "string") return candidate.toLowerCase().replace(/[-\s]+/g, "_");
   }
-  return resultText(payload).match(/status["'\s:]+([A-Za-z_-]+)/i)?.[1]?.toLowerCase() ?? "";
+  return resultText(payload)
+    .match(/status["'\s:]+([A-Za-z_-]+)/i)?.[1]
+    ?.toLowerCase()
+    .replace(/[-\s]+/g, "_") ?? "";
 }
 
 function isFailed(status: string): boolean {
-  return ["failed", "cancelled", "canceled", "error"].includes(status);
+  return [
+    "failed",
+    "cancelled",
+    "canceled",
+    "error",
+    "reaped",
+    "worker_reaped",
+    "no_heartbeat",
+    "worker_died",
+    "provider_timeout",
+    "internal_provider_failure",
+    "failed_without_output"
+  ].includes(status);
 }
 
 /** Terminal provider states: nothing further will arrive for the job. */
 function isTerminal(status: string): boolean {
-  return ["done", "completed", "complete", "succeeded", "success", "failed", "cancelled", "canceled", "error", "timeout", "timed_out"].includes(status);
+  return [
+    "done",
+    "completed",
+    "complete",
+    "succeeded",
+    "success",
+    "failed",
+    "cancelled",
+    "canceled",
+    "error",
+    "timeout",
+    "timed_out",
+    "reaped",
+    "worker_reaped",
+    "no_heartbeat",
+    "worker_died",
+    "provider_timeout",
+    "internal_provider_failure",
+    "failed_without_output"
+  ].includes(status);
 }
 
 function extractReference(payload: Record<string, unknown>): string | undefined {
@@ -876,12 +916,41 @@ function str(value: unknown): string | undefined {
   return typeof value === "string" && value ? value : undefined;
 }
 
+export function extractBudgetSeconds(payload: Record<string, unknown>): number | undefined {
+  const s = structured(payload);
+  const keys = [
+    "budget_seconds",
+    "budgetSeconds",
+    "timeout_seconds",
+    "timeoutSeconds",
+    "max_runtime_seconds",
+    "maxRuntimeSeconds",
+    "execution_budget_seconds",
+    "executionBudgetSeconds"
+  ];
+  for (const key of keys) {
+    const value = s[key];
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) return Math.ceil(value);
+  }
+  for (const container of [s.limits, s.metadata, s.job, s.provider]) {
+    if (typeof container !== "object" || container === null) continue;
+    const nested = container as Record<string, unknown>;
+    for (const key of keys) {
+      const value = nested[key];
+      if (typeof value === "number" && Number.isFinite(value) && value > 0) return Math.ceil(value);
+    }
+  }
+  return undefined;
+}
+
 /** Extract only the provider's concise terminal explanation. */
 function providerError(value: Record<string, unknown>): string | undefined {
   const phase = value.phase;
   return str(
     value.error ??
       value.error_message ??
+      value.failure_reason ??
+      value.reason ??
       (typeof phase === "object" && phase !== null ? (phase as Record<string, unknown>).label : undefined)
   );
 }

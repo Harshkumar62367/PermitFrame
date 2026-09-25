@@ -1,15 +1,26 @@
 import { NextRequest, NextResponse } from "next/server";
 import { AuthenticationRequiredError } from "@/server/auth";
-import { getDkg } from "@/server/dkg";
-import { receiptKa } from "@/server/dkg/schemas";
-import { hasSharableReceipt } from "@/server/types";
-import { loadDb, newId, nowIso, updateDb } from "@/server/store";
+import { anchorReceipts } from "@/server/receipt-publication";
+import { loadDb } from "@/server/store";
+import { logDkgError, sanitizeDkgError } from "@/server/dkg/public-errors";
 
 export const dynamic = "force-dynamic";
 
-/** Re-publish any receipts that were stored locally (e.g. the DKG node was down at generation time). */
-export async function POST(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+/**
+ * Anchor shareable derivative receipts in on-chain Verifiable Memory.
+ * Optional body `{ receiptIds }` processes one batch (the review UI drives
+ * per-receipt calls for honest progress); omitted ids mean every receipt on
+ * the campaign. Only genuinely finalized records count as published -
+ * Shared Working Memory evidence and local-evidence locators never do.
+ * Per-receipt states persist (publishing -> anchored | failed), so refreshes
+ * and timeouts surface the durable outcome instead of resetting it.
+ */
+export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  const body = (await request.json().catch(() => ({}))) as { receiptIds?: unknown };
+  const receiptIds = Array.isArray(body.receiptIds)
+    ? body.receiptIds.filter((v): v is string => typeof v === "string")
+    : undefined;
   let db;
   try {
     db = await loadDb();
@@ -19,42 +30,18 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
     }
     throw error;
   }
-  const campaign = db.campaigns.find((c) => c.id === id);
-  if (!campaign) return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
-
-  const republished: string[] = [];
-  for (const receipt of campaign.receipts) {
-    // Proof only for durable outputs: provider-hosted legacy receipts wait
-    // for "Store securely" instead of publishing previews as evidence.
-    if (receipt.ual || !hasSharableReceipt(receipt)) continue;
-    try {
-      const record = await getDkg().publish(receiptKa(receipt), receipt.visibility);
-      await updateDb((d) => {
-        const c = d.campaigns.find((x) => x.id === id);
-        const r = c?.receipts.find((x) => x.id === receipt.id);
-        if (r) {
-          r.ual = record.ual;
-          r.ualExplorer = record.explorerUrl;
-          r.publicationStatus = record.publicationStatus;
-        }
-      });
-      republished.push(receipt.id);
-    } catch {
-      // leave unpublished but record the failed attempt so the UI can offer retry
-      await updateDb((d) => {
-        const r = d.campaigns.find((x) => x.id === id)?.receipts.find((x) => x.id === receipt.id);
-        if (r) r.publicationStatus = "failed";
-      }).catch(() => undefined);
-    }
+  if (!db.campaigns.some((c) => c.id === id)) {
+    return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
   }
-  await updateDb((d) => {
-    d.events.push({
-      id: newId("evt"),
-      at: nowIso(),
-      kind: "dkg.republish",
-      summary: `Re-published ${republished.length} receipt(s) to the proof ledger.`,
-      refs: [id]
-    });
-  });
-  return NextResponse.json({ republished });
+  try {
+    const { results } = await anchorReceipts({ campaignId: id, receiptIds });
+    // "published" means anchored only: already-anchored, skipped, failed,
+    // and in-flight records are never counted here.
+    const republished = results.filter((r) => r.status === "anchored").map((r) => r.receiptId);
+    return NextResponse.json({ results, republished });
+  } catch (error) {
+    logDkgError("republish", error);
+    const safe = sanitizeDkgError(error, "mutation");
+    return NextResponse.json({ error: safe.message, code: safe.code }, { status: safe.status });
+  }
 }

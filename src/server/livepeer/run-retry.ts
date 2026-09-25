@@ -1,6 +1,13 @@
 import type { ProductionJob } from "../types";
 import { resolveEntitlements } from "../entitlements";
 import { maskOperationalDetail } from "../dkg/public-errors";
+export {
+  DEFAULT_PROVIDER_BUDGET_SECONDS,
+  PROVIDER_WATCHDOG_GRACE_SECONDS,
+  MAX_PROVIDER_WATCHDOG_SECONDS,
+  DEFAULT_PROVIDER_WATCHDOG_SECONDS,
+  providerWatchdogSeconds
+} from "./provider-watchdog";
 
 /**
  * Execution tuning: retry classification, backoff math, error redaction,
@@ -23,6 +30,35 @@ export function resolveMaxConcurrency(): number {
 export function maxDispatchAttempts(): number {
   const env = Number.parseInt(process.env.LIVEPEER_MAX_ATTEMPTS ?? "", 10);
   return Number.isInteger(env) && env > 0 ? env : 5;
+}
+
+export type ProviderFailureKind =
+  | "worker_reaped"
+  | "no_heartbeat"
+  | "worker_died"
+  | "provider_timeout"
+  | "internal_provider_failure"
+  | "failed_without_output";
+
+export function classifyProviderFailure(status: string, detail = ""): ProviderFailureKind | undefined {
+  const text = `${status} ${detail}`.toLowerCase().replace(/[_-]+/g, " ");
+  if (/(network timeout|transport timeout|socket hang up|fetch failed|aborted)/.test(text) && !/(provider|worker|job failed)/.test(text)) return undefined;
+  if (/reaped|reap/.test(text)) return "worker_reaped";
+  if (/no heartbeat|heartbeat missing|heartbeat timeout/.test(text)) return "no_heartbeat";
+  if (/worker died|worker death|worker crashed/.test(text)) return "worker_died";
+  if (/provider timeout|provider timed out|timed out|timeout/.test(text)) return "provider_timeout";
+  if (/internal provider failure|internal error|provider internal/.test(text)) return "internal_provider_failure";
+  if (/failed without output|failed without an output|failed no output|no output|without an output/.test(text)) return "failed_without_output";
+  return undefined;
+}
+
+export function isRetryableProviderFailure(kind: ProviderFailureKind | undefined): boolean {
+  return kind !== undefined;
+}
+
+export function maxAutomaticRecoveryAttempts(): number {
+  const env = Number.parseInt(process.env.LIVEPEER_MAX_RECOVERY_ATTEMPTS ?? "", 10);
+  return Number.isInteger(env) && env > 0 ? Math.min(env, 1) : 1;
 }
 
 const BACKOFF_BASE_MS = 30_000;

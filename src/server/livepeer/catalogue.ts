@@ -40,8 +40,9 @@ export interface PlanRoles {
  * snapshot still reports it available, otherwise the next preference wins
  * and the substitution is recorded.
  *
- * flux-schnell appears ONLY in the draft concept list: it is the Draft
- * preview model, never a default final-quality model.
+ * flux-schnell is the verified fast image pick for Draft and Quick work.
+ * It is not treated as universally healthy: dispatch-time discovery and the
+ * short-lived worker health breaker still gate every use.
  */
 const ROLE_PREFERENCE: Record<StageRole, Record<QualityProfile, string[]>> = {
   conceptImage: {
@@ -121,6 +122,39 @@ let cached: { snapshot: CatalogueSnapshot; expiresAt: number } | null = null;
 let pending: Promise<CatalogueSnapshot> | null = null;
 let cachedTools: { tools: string[]; expiresAt: number } | null = null;
 let pendingTools: Promise<string[]> | null = null;
+const CAPABILITY_HEALTH_TTL_MS = 10 * 60 * 1000;
+const capabilityHealth = new Map<string, { until: number; reason: string }>();
+
+export function quarantineCapability(capability: string, reason = "provider worker failure", now = Date.now()): void {
+  if (!capability) return;
+  capabilityHealth.set(capability, { until: now + CAPABILITY_HEALTH_TTL_MS, reason: reason.slice(0, 200) });
+}
+
+export function isCapabilityQuarantined(capability: string, now = Date.now()): boolean {
+  const entry = capabilityHealth.get(capability);
+  if (!entry) return false;
+  if (entry.until <= now) {
+    capabilityHealth.delete(capability);
+    return false;
+  }
+  return true;
+}
+
+export function clearCapabilityQuarantine(capability: string): void {
+  capabilityHealth.delete(capability);
+}
+
+export function resetCapabilityHealth(): void {
+  capabilityHealth.clear();
+}
+
+export function resetCatalogueCache(): void {
+  cached = null;
+  pending = null;
+  cachedTools = null;
+  pendingTools = null;
+  capabilityHealth.clear();
+}
 
 function normalize(raw: unknown): CataloguedCapability[] {
   const list = (raw as { capabilities?: unknown })?.capabilities;
@@ -195,6 +229,41 @@ function pick(available: Set<string>, preference: string[]): string | null {
   return null;
 }
 
+export function capabilityEligibleForRole(capability: string, role: StageRole): boolean {
+  const rolePreferences = Object.values(ROLE_PREFERENCE[role] ?? {}).flat();
+  const preferences = role === "imageToVideo"
+    ? ["ltx-25-i2v-fast", "pixverse-i2v", "kling-v3-turbo-i2v", "kling-v3-turbo-pro-i2v", "seedance-mini-i2v", "seedance-i2v", "veo-i2v", ...rolePreferences]
+    : rolePreferences;
+  return preferences.includes(capability);
+}
+
+export async function selectRecoveryCapability(input: {
+  role: StageRole;
+  profile: QualityProfile;
+  failedCapability: string;
+  pinned?: boolean;
+}): Promise<string | null> {
+  if (input.pinned) return null;
+  let snapshot: CatalogueSnapshot;
+  try {
+    snapshot = await fetchCapabilityCatalogue();
+  } catch {
+    return null;
+  }
+  if (!snapshot.reachable) return null;
+  const available = new Set(
+    snapshot.capabilities
+      .filter((c) => c.availability === "available" && !isCapabilityQuarantined(c.name))
+      .map((c) => c.name)
+  );
+  available.delete(input.failedCapability);
+  const fallbackFirst = input.role === "imageToVideo"
+    ? ["ltx-25-i2v-fast", "pixverse-i2v", "kling-v3-turbo-i2v", "kling-v3-turbo-pro-i2v", "seedance-mini-i2v", "seedance-i2v", "veo-i2v"]
+    : [];
+  const preferences = [...fallbackFirst, ...(ROLE_PREFERENCE[input.role]?.[input.profile] ?? [])];
+  return pick(available, [...new Set(preferences)]);
+}
+
 export interface ResolvedRole {
   /** Model for create_media dispatch, or null for tool-backed / unresolvable roles. */
   capability: string | null;
@@ -227,7 +296,9 @@ const MODEL_CHOICE_DESCRIPTION_MAX = 200;
 export function modelChoicesForOverride(snapshot: CatalogueSnapshot, key: ModelOverrideRole): ModelChoice[] {
   if (!snapshot.reachable) return [];
   const available = new Set(
-    snapshot.capabilities.filter((c) => c.availability === "available").map((c) => c.name)
+    snapshot.capabilities
+      .filter((c) => c.availability === "available" && !isCapabilityQuarantined(c.name))
+      .map((c) => c.name)
   );
   const family: StageRole = key === "conceptImage" ? "conceptImage" : "imageToVideo";
   const names: string[] = [];
@@ -299,7 +370,9 @@ export function resolveRole(role: StageRole, profile: QualityProfile, input: Rol
 export function roleCapabilities(snapshot: CatalogueSnapshot): PlanRoles {
   if (!snapshot.reachable) return { image: null, motion: null };
   const available = new Set(
-    snapshot.capabilities.filter((c) => c.availability === "available").map((c) => c.name)
+    snapshot.capabilities
+      .filter((c) => c.availability === "available" && !isCapabilityQuarantined(c.name))
+      .map((c) => c.name)
   );
   const image = resolveRole("conceptImage", DEFAULT_QUALITY_PROFILE, { available });
   const motion = resolveRole("imageToVideo", DEFAULT_QUALITY_PROFILE, { available });
@@ -337,7 +410,9 @@ export function resolvePlanRolesFromSnapshot(
 ): ResolvedPlanRoles {
   const available = new Set(
     snapshot.reachable
-      ? snapshot.capabilities.filter((c) => c.availability === "available").map((c) => c.name)
+      ? snapshot.capabilities
+          .filter((c) => c.availability === "available" && !isCapabilityQuarantined(c.name))
+          .map((c) => c.name)
       : []
   );
   const input: RoleResolutionInput = { available, tools };
@@ -429,19 +504,22 @@ export async function resolvePlanCapabilities(): Promise<{
  * missing model.
  */
 export async function assertCapabilityAvailable(capability: string): Promise<void> {
+  const unavailable = () =>
+    new Error(
+      `Capability "${capability}" is not currently available on the Creative surface - retry once it returns to discovery, or pick a listed model.`
+    );
+  if (isCapabilityQuarantined(capability)) throw unavailable();
   let snapshot: CatalogueSnapshot;
   try {
     snapshot = await fetchCapabilityCatalogue();
   } catch {
-    return; // discovery unreachable: let the render attempt speak for itself
+    return;
   }
   if (!snapshot.reachable) return;
   const available = new Set(
-    snapshot.capabilities.filter((c) => c.availability === "available").map((c) => c.name)
+    snapshot.capabilities
+      .filter((c) => c.availability === "available" && !isCapabilityQuarantined(c.name))
+      .map((c) => c.name)
   );
-  if (!available.has(capability)) {
-    throw new Error(
-      `Capability "${capability}" is not currently available on the Creative surface - retry once it returns to discovery, or pick a listed model.`
-    );
-  }
+  if (!available.has(capability)) throw unavailable();
 }

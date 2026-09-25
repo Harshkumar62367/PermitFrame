@@ -9,12 +9,12 @@ import type { LivepeerMcpClient } from "./mcp-client";
 import type { PreservationDecision } from "./preservation-policy";
 import { nowIso } from "../store";
 import { readWorkspace, writeWorkspace } from "./run-store";
-import { assertCapabilityAvailable } from "./catalogue";
+import { assertCapabilityAvailable, capabilityEligibleForRole, quarantineCapability, selectRecoveryCapability } from "./catalogue";
 import { MODEL_OVERRIDE_UNAVAILABLE } from "./template-catalogue";
 import { revalidateCampaignAuthorization } from "../policy/authorization";
 import { peekLivePriceMap, quoteStage, stageSpendingCeiling } from "./pricing";
 import { resolveMotionDuration } from "./duration-policy";
-import { isUsableOutputUrl } from "./plan-dag";
+import { isUsableOutputUrl, normalizeQualityProfile } from "./plan-dag";
 import { failStageJobs } from "./pipeline";
 import { withCampaignLock } from "./mutex";
 import {
@@ -25,12 +25,16 @@ import {
   resolvePreservation,
   type PreservationCallOutcome
 } from "./preservation-policy";
-import { preservationContextFor, type DispatchSlot } from "./run-scope";
+import { preservationContextFor, runOwnsJob, type DispatchSlot } from "./run-scope";
 import { finalizeDispatchedJob } from "./run-finalize";
 import {
+  classifyProviderFailure,
   classifySubmitError,
   computeBackoffMs,
+  DEFAULT_PROVIDER_WATCHDOG_SECONDS,
+  maxAutomaticRecoveryAttempts,
   maxDispatchAttempts,
+  providerWatchdogSeconds,
   redactSubmitError
 } from "./run-retry";
 
@@ -106,12 +110,28 @@ export function isDispatchableJob(
   return job.status === "queued" || (job.status === "generating" && !job.outputUrl && !job.livepeerJobId);
 }
 
-function jobIdempotencyKey(campaignId: string, run: ProductionRun, job: ProductionJob): string {
-  // A key is stable for transport retries inside one run, but an explicit
-  // user retry creates a new run and must be a NEW provider attempt. Using
-  // only the durable job id caused Livepeer to replay an already-terminal
-  // failed job forever while the UI said "Retry".
-  return `pf_${campaignId}_${run.id}_${job.stageId}_${job.id}`;
+export function jobIdempotencyKey(campaignId: string, run: ProductionRun, job: ProductionJob): string {
+  const recovery = job.requestMeta?.automaticRecoveryUsed === true;
+  const suffix = recovery ? `_recovery_${job.requestMeta?.recoveryAttempt ?? 1}` : "";
+  return `pf_${campaignId}_${run.id}_${job.stageId}_${job.id}${suffix}`;
+}
+
+export type ProviderRecoveryAction = "recovering" | "retry_available" | "failed" | "ignored";
+
+export interface ProviderRecoveryInput {
+  workspaceId: string;
+  campaignId: string;
+  jobId: string;
+  kind?: string;
+  detail?: string;
+  status?: string;
+  costUsd?: number;
+  capability?: string;
+}
+
+function recoveryError(detail: string, kind?: string): string {
+  const safe = redactSubmitError(detail || "The provider ended this stage without an output.");
+  return `${kind ? `${kind}: ` : ""}${safe}`.slice(0, 400);
 }
 
 /**
@@ -188,7 +208,13 @@ async function trackPreservationJob(
       const j = d.campaigns.find((x) => x.id === campaignId)?.jobs.find((x) => x.id === jobId);
       if (j && j.status === "generating") {
         j.livepeerJobId = providerJobId;
-        j.dispatchedAt = nowIso();
+        j.lastProviderJobId = providerJobId;
+        const at = nowIso();
+         j.dispatchedAt = at;
+         j.providerBudgetSeconds = undefined;
+         j.dispatchBudgetSeconds = DEFAULT_PROVIDER_WATCHDOG_SECONDS;
+        j.dispatchDeadlineAt = new Date(Date.now() + DEFAULT_PROVIDER_WATCHDOG_SECONDS * 1000).toISOString();
+        j.providerPhase = "submitted";
         j.requestMeta = { ...j.requestMeta, preservationPendingTool: tool };
       }
     })
@@ -229,7 +255,14 @@ export async function failPreservationTool(
       if (j.status === "generating" || j.status === "queued") {
         j.status = "queued";
         j.livepeerJobId = undefined;
+        j.dispatchStartedAt = undefined;
         j.dispatchedAt = undefined;
+        j.providerBudgetSeconds = undefined;
+        j.dispatchBudgetSeconds = undefined;
+        j.dispatchDeadlineAt = undefined;
+        j.providerPhase = undefined;
+        j.providerCancelAttemptedAt = undefined;
+        j.providerCancelConfirmed = undefined;
       }
     })
   );
@@ -329,10 +362,20 @@ export async function dispatchSlot(
     // the static safe message (zero create_media calls happen above or
     // below this point). Automatic stages keep the detailed provider error.
     const pinned = stage.requestedCapability;
-    const message =
-      pinned !== undefined && dispatchCap === pinned ? MODEL_OVERRIDE_UNAVAILABLE : (error as Error).message;
-    await failStageJobs(campaign.id, stage.id, message, workspaceId, run.jobIds);
-    return true;
+     const message =
+       pinned !== undefined && dispatchCap === pinned ? MODEL_OVERRIDE_UNAVAILABLE : (error as Error).message;
+     if (job.requestMeta?.automaticRecoveryUsed === true) {
+       await prepareProviderRecovery({
+         workspaceId,
+         campaignId: campaign.id,
+         jobId: job.id,
+         kind: "failed_without_output",
+         detail: message
+       });
+     } else {
+       await failStageJobs(campaign.id, stage.id, message, workspaceId, run.jobIds);
+     }
+     return true;
   }
 
   // Preservation policy: strongest honest path for this stage, validated
@@ -382,10 +425,16 @@ export async function dispatchSlot(
       if (!isDispatchableJob(j)) return;
       c.status = "generating";
       j.status = "generating";
-      j.startedAt = nowIso();
+      const startedAt = nowIso();
+      j.startedAt = startedAt;
       j.runId = run.id;
       j.attempts = (j.attempts ?? 0) + 1;
-      j.lastAttemptAt = nowIso();
+      j.lastAttemptAt = startedAt;
+      j.dispatchStartedAt = startedAt;
+      j.providerBudgetSeconds = undefined;
+      j.dispatchBudgetSeconds = providerWatchdogSeconds();
+      j.dispatchDeadlineAt = new Date(Date.parse(startedAt) + j.dispatchBudgetSeconds * 1000).toISOString();
+      j.providerPhase = "preparing";
       // A fresh attempt clears any prior backoff; failures re-arm it below.
       j.nextAttemptAt = undefined;
       j.lastTransientError = undefined;
@@ -401,11 +450,14 @@ export async function dispatchSlot(
         )
       };
       if (!j.requestedCapability) j.requestedCapability = stage.capability;
+      if (stage.requestedCapability !== undefined && j.requestMeta?.manualCapabilityPinned === undefined) {
+        j.requestMeta = { ...j.requestMeta, manualCapabilityPinned: true };
+      }
       if (!j.qualityProfile) j.qualityProfile = stage.qualityProfile;
       if (!j.role) j.role = stage.role;
       // Structured actual capability: what this dispatch sends. The planned
       // value in j.capability is never overwritten with display text.
-      j.actualCapability = j.capability;
+      j.actualCapability = dispatchCap;
       claimed = true;
     })
   );
@@ -570,80 +622,125 @@ export async function dispatchSlot(
   try {
     submitted = await client.submitMedia(base);
   } catch (error) {
-    const replacement = (error as Error).message.match(/recommended replacement is ([a-z0-9-]+)/i);
+    const message = error instanceof Error ? error.message : "Submit failed.";
+    const replacement = message.match(/recommended replacement is ([a-z0-9-]+)/i);
     if (!replacement) {
-      await recordDispatchFailure(workspaceId, campaign, job, stage, error);
+      await recordDispatchFailure(workspaceId, campaign, job, error);
       return true;
     }
-    // The replacement model gets its own duration resolution + pricing:
-    // different buckets or limits may apply. Rejections fail honestly;
-    // the retry keeps the requested length, never the old numbers.
     const replacementCap = replacement[1];
-    let replacementInput = { ...base, capability: replacementCap };
+    const role = job.role ?? stage.role;
+    if (!capabilityEligibleForRole(replacementCap, role)) {
+      await prepareProviderRecovery({
+        workspaceId,
+        campaignId: campaign.id,
+        jobId: job.id,
+        kind: "failed_without_output",
+        detail: message
+      });
+      return true;
+    }
+    let replacementDurationSeconds = durationSeconds;
     if (isVideo) {
-      const re = resolveMotionDuration(requestedSeconds, replacementCap);
-      if (!re.ok) {
+      const resolved = resolveMotionDuration(requestedSeconds, replacementCap);
+      if (!resolved.ok) {
         await failStageJobs(
           campaign.id,
           stage.id,
-          `"${stage.label}": replacement model ${replacementCap} rejected the length - ${re.error}`,
+          `"${stage.label}": replacement model ${replacementCap} rejected the length - ${resolved.error}`,
           workspaceId,
           run.jobIds
         );
         return true;
       }
-      const reQuote = quoteStage({ capability: replacementCap, kind: job.kind }, live, re.resolvedSeconds);
-      const reCeiling = stageSpendingCeiling({ capability: replacementCap, kind: job.kind }, live, re.resolvedSeconds);
-      // The replacement may price differently - re-check the run cap before spending.
-      const reCapGate = shouldDispatchUnderCap(
-        spentUsd,
-        reQuote ? reQuote.usd : null,
-        run.spendCapUsd ?? campaign.request.productionSpec?.maxSpendCapUsd
-      );
-      if (!reCapGate.ok) {
-        await failStageJobs(campaign.id, stage.id, reCapGate.reason ?? "Spend cap reached.", workspaceId, run.jobIds);
-        return true;
-      }
-      replacementInput = {
-        ...replacementInput,
-        maxCostUsd: reCeiling,
-        inputs: { aspect_ratio: stage.format, duration: re.resolvedSeconds }
-      };
+      replacementDurationSeconds = resolved.resolvedSeconds;
       await withCampaignLock(campaign.id, () =>
         writeWorkspace(workspaceId, (d) => {
           const c = d.campaigns.find((x) => x.id === campaign.id);
           const st = c?.preflight?.plan.find((s) => s.id === stage.id);
           if (st) {
-            st.durationSeconds = re.resolvedSeconds;
-            st.requestedDurationSeconds = re.requestedSeconds;
-            if (re.adjustmentReason) st.durationNote = re.adjustmentReason;
-            st.durationSource = re.source;
+            st.durationSeconds = resolved.resolvedSeconds;
+            st.requestedDurationSeconds = resolved.requestedSeconds;
+            if (resolved.adjustmentReason) st.durationNote = resolved.adjustmentReason;
+            st.durationSource = resolved.source;
           }
           const j = c?.jobs.find((x) => x.id === job.id);
           if (j?.requestMeta) {
-            j.requestMeta.durationSeconds = re.resolvedSeconds;
-            j.requestMeta.requestedDurationSeconds = re.requestedSeconds;
-            if (re.adjustmentReason) j.requestMeta.durationNote = re.adjustmentReason;
-            j.requestMeta.durationSource = re.source;
+            j.requestMeta.durationSeconds = resolved.resolvedSeconds;
+            j.requestMeta.requestedDurationSeconds = resolved.requestedSeconds;
+            if (resolved.adjustmentReason) j.requestMeta.durationNote = resolved.adjustmentReason;
+            j.requestMeta.durationSource = resolved.source;
           }
         })
       );
     }
-    try {
-      submitted = await client.submitMedia(replacementInput);
-    } catch (second) {
-      await recordDispatchFailure(workspaceId, campaign, job, stage, second);
+    const replacementQuote = quoteStage(
+      { capability: replacementCap, kind: job.kind },
+      live,
+      replacementDurationSeconds || 5
+    );
+    if (!replacementQuote) {
+      await failStageJobs(
+        campaign.id,
+        stage.id,
+        `Provider recommended ${replacementCap}, but no usable price estimate is available; choose another model before retrying.`,
+        workspaceId,
+        run.jobIds
+      );
       return true;
     }
+    const replacementCapGate = shouldDispatchUnderCap(
+      spentUsd,
+      replacementQuote.usd,
+      run.spendCapUsd ?? campaign.request.productionSpec?.maxSpendCapUsd
+    );
+    if (!replacementCapGate.ok) {
+      await failStageJobs(campaign.id, stage.id, replacementCapGate.reason ?? "Spend cap reached.", workspaceId, run.jobIds);
+      return true;
+    }
+    try {
+      await assertCapabilityAvailable(replacementCap);
+    } catch (availabilityError) {
+      await failStageJobs(campaign.id, stage.id, (availabilityError as Error).message, workspaceId, run.jobIds);
+      return true;
+    }
+    const recoveryJob: ProductionJob = {
+      ...job,
+      requestMeta: {
+        ...job.requestMeta,
+        recoveryState: "recovering",
+        providerFailureKind: classifyProviderFailure(message) ?? "failed_without_output",
+        providerFailureDetail: redactSubmitError(message),
+        recoveryReason: `Provider recommended ${replacementCap}: ${redactSubmitError(message)}`,
+        recoveryCapability: replacementCap,
+        recoveryFromCapability: dispatchCap,
+        recoveryEstimateUsd: replacementQuote.usd,
+        recoveryQuoteExact: replacementQuote.exact,
+        recoveryAttempt: 1,
+        automaticRecoveryUsed: true
+      }
+    };
+    const replacementInput = {
+      ...base,
+      capability: replacementCap,
+      maxCostUsd: stageSpendingCeiling({ capability: replacementCap, kind: job.kind }, live, replacementDurationSeconds || 5),
+      inputs: { aspect_ratio: stage.format, ...(isVideo ? { duration: replacementDurationSeconds } : {}) },
+      idempotencyKey: jobIdempotencyKey(campaign.id, run, recoveryJob)
+    };
     await withCampaignLock(campaign.id, () =>
       writeWorkspace(workspaceId, (d) => {
         const j = d.campaigns.find((x) => x.id === campaign.id)?.jobs.find((x) => x.id === job.id);
-        // Structured substitution: planned capability untouched, actual
-        // tracks the replacement. UI derives its friendly label from these
-        // fields - never from formatted text.
-        if (j) j.actualCapability = replacementCap;
+        if (!j) return;
+        j.actualCapability = replacementCap;
+        j.requestMeta = { ...j.requestMeta, ...recoveryJob.requestMeta };
       })
     );
+    try {
+      submitted = await client.submitMedia(replacementInput);
+    } catch (second) {
+      await recordDispatchFailure(workspaceId, campaign, job, second);
+      return true;
+    }
   }
   const outcome = classifySubmitResult(submitted);
   if (outcome.action === "finalize") {
@@ -674,12 +771,178 @@ export async function dispatchSlot(
     writeWorkspace(workspaceId, (d) => {
       const j = d.campaigns.find((x) => x.id === campaign.id)?.jobs.find((x) => x.id === job.id);
       if (j && j.status === "generating" && outcome.action === "track") {
+        const at = nowIso();
         j.livepeerJobId = outcome.jobId;
-        j.dispatchedAt = nowIso();
+        j.lastProviderJobId = outcome.jobId;
+        j.dispatchedAt = at;
+        if (submitted.budgetSeconds !== undefined) j.providerBudgetSeconds = submitted.budgetSeconds;
+        j.dispatchBudgetSeconds = providerWatchdogSeconds(submitted.budgetSeconds);
+        j.dispatchDeadlineAt = new Date(Date.parse(at) + j.dispatchBudgetSeconds * 1000).toISOString();
+        j.providerPhase = "submitted";
       }
     })
   );
   return true;
+}
+
+export async function prepareProviderRecovery(input: ProviderRecoveryInput): Promise<ProviderRecoveryAction> {
+  const db = await readWorkspace(input.workspaceId);
+  const campaign = db.campaigns.find((c) => c.id === input.campaignId);
+  const job = campaign?.jobs.find((j) => j.id === input.jobId);
+  const stage = campaign?.preflight?.plan.find((s) => s.id === job?.stageId);
+  const failedRecovery = !!job && job.status === "failed" && isProviderRecoveryCandidate(job);
+  if (!campaign || !job || !stage || ((job.status !== "generating" && job.status !== "queued") && !failedRecovery)) return "ignored";
+  if (job.requestMeta?.preservationPendingTool) return "ignored";
+
+  const failedCapability = input.capability ?? job.actualCapability ?? job.capability;
+  const classified = classifyProviderFailure(input.status ?? "", input.detail ?? "");
+  const failureKind = classified ?? input.kind ?? "failed_without_output";
+  const safeDetail = recoveryError(input.detail ?? "The provider ended this stage without an output.", failureKind);
+  quarantineCapability(failedCapability, failureKind);
+
+  const writeFailure = async (state: "retry_available" | "failed", reason: string): Promise<ProviderRecoveryAction> => {
+    await withCampaignLock(input.campaignId, () =>
+      writeWorkspace(input.workspaceId, (d) => {
+        const c = d.campaigns.find((x) => x.id === input.campaignId);
+        const j = c?.jobs.find((x) => x.id === input.jobId);
+        if (!c || !j || ((j.status !== "generating" && j.status !== "queued") && !(j.status === "failed" && isProviderRecoveryCandidate(j)))) return;
+        if (j.dispatchStartedAt !== job.dispatchStartedAt || j.livepeerJobId !== job.livepeerJobId) return;
+        j.status = "failed";
+        j.error = reason.slice(0, 400);
+        j.finishedAt = nowIso();
+        j.lastProviderJobId = j.lastProviderJobId ?? j.livepeerJobId;
+        if (input.costUsd !== undefined) j.costUsd = input.costUsd;
+        j.livepeerJobId = undefined;
+
+        j.dispatchStartedAt = undefined;
+        j.dispatchedAt = undefined;
+        j.providerBudgetSeconds = undefined;
+        j.dispatchBudgetSeconds = undefined;
+        j.dispatchDeadlineAt = undefined;
+        j.providerPhase = undefined;
+        j.nextAttemptAt = undefined;
+        j.requestMeta = {
+          ...j.requestMeta,
+          recoveryState: state,
+          providerFailureKind: failureKind,
+          providerFailureDetail: safeDetail,
+          recoveryReason: reason.slice(0, 400)
+        };
+        c.status = "review";
+      })
+    );
+    return state;
+  };
+
+  if (input.status && /cancel(?:led|ed)/i.test(input.status) && !classified) {
+    return writeFailure("failed", `Provider cancellation was recorded: ${safeDetail}`);
+  }
+
+  const alreadyRecovered = job.requestMeta?.automaticRecoveryUsed === true || (job.requestMeta?.recoveryAttempt ?? 0) >= maxAutomaticRecoveryAttempts();
+  const pinned = stage.requestedCapability !== undefined || job.requestMeta?.manualCapabilityPinned === true;
+  if (alreadyRecovered || pinned) {
+    return writeFailure("retry_available", pinned ? `Provider issue: ${safeDetail} Choose another model or retry manually.` : `Provider issue: ${safeDetail} Retry is available.`);
+  }
+
+  const profile = normalizeQualityProfile(stage.qualityProfile ?? job.qualityProfile ?? process.env.LIVEPEER_QUALITY_PROFILE);
+  const role = job.role ?? stage.role;
+  const replacement = await selectRecoveryCapability({ role, profile, failedCapability, pinned });
+  if (!replacement) {
+    return writeFailure("failed", `Provider issue: ${safeDetail} No different ${role} model is currently available.`);
+  }
+
+  const durationSeconds = stage.kind === "image-to-video"
+    ? resolveMotionDuration(stage.requestedDurationSeconds ?? stage.durationSeconds ?? 5, replacement)
+    : { ok: true as const, resolvedSeconds: stage.durationSeconds ?? 0, requestedSeconds: stage.requestedDurationSeconds ?? stage.durationSeconds ?? 0, source: stage.durationSource };
+  if (!durationSeconds.ok) {
+    return writeFailure("failed", `Provider issue: ${safeDetail} ${durationSeconds.error}`);
+  }
+  const quote = quoteStage(
+    { capability: replacement, kind: stage.kind },
+    peekLivePriceMap(),
+    durationSeconds.resolvedSeconds || 5
+  );
+  if (!quote) {
+    return writeFailure("retry_available", `Provider issue: ${safeDetail} A price estimate for ${replacement} is unavailable; confirm the backup spend before retrying.`);
+  }
+  const run = campaign.runs?.find((r) => r.id === job.runId);
+  const spentUsd = campaign.jobs
+    .filter((j) => (run ? runOwnsJob(run, j) : j.stageId === job.stageId))
+    .reduce((sum, j) => sum + (j.costUsd ?? 0), 0);
+  const capUsd = run?.spendCapUsd ?? campaign.request.productionSpec?.maxSpendCapUsd;
+  const capGate = shouldDispatchUnderCap(spentUsd, quote.usd, capUsd);
+  if (!capGate.ok) {
+    return writeFailure("failed", capGate.reason ?? `Backup model ${replacement} is unavailable within the spend cap.`);
+  }
+
+  await withCampaignLock(input.campaignId, () =>
+    writeWorkspace(input.workspaceId, (d) => {
+      const c = d.campaigns.find((x) => x.id === input.campaignId);
+      const j = c?.jobs.find((x) => x.id === input.jobId);
+      if (!c || !j || ((j.status !== "generating" && j.status !== "queued") && !(j.status === "failed" && isProviderRecoveryCandidate(j)))) return;
+      if (j.dispatchStartedAt !== job.dispatchStartedAt || j.livepeerJobId !== job.livepeerJobId) return;
+      j.status = "queued";
+      j.error = undefined;
+      j.lastProviderJobId = j.lastProviderJobId ?? j.livepeerJobId;
+      if (input.costUsd !== undefined) j.costUsd = input.costUsd;
+      j.livepeerJobId = undefined;
+      j.dispatchStartedAt = undefined;
+      j.dispatchedAt = undefined;
+      j.providerBudgetSeconds = undefined;
+      j.dispatchBudgetSeconds = undefined;
+      j.dispatchDeadlineAt = undefined;
+      j.providerPhase = undefined;
+      j.finishedAt = undefined;
+      j.nextAttemptAt = new Date(Date.now() + 2_000).toISOString();
+      j.actualCapability = replacement;
+      j.requestMeta = {
+        ...j.requestMeta,
+        recoveryState: "recovering",
+        providerFailureKind: failureKind,
+        providerFailureDetail: safeDetail,
+        recoveryReason: `Provider issue: ${safeDetail}`,
+        recoveryFromCapability: failedCapability,
+        recoveryCapability: replacement,
+        recoveryEstimateUsd: quote.usd,
+        recoveryQuoteExact: quote.exact,
+        recoveryAttempt: 1,
+        automaticRecoveryUsed: true
+      };
+      c.status = "generating";
+    })
+  );
+  return "recovering";
+}
+
+export function isProviderRecoveryCandidate(job: ProductionJob): boolean {
+  const meta = job.requestMeta;
+  const failureKind = meta?.providerFailureKind ?? classifyProviderFailure("", `${job.error ?? ""} ${meta?.providerFailureDetail ?? ""}`);
+  if (meta?.automaticRecoveryUsed === true || failureKind === "cancelled") return false;
+  if (meta?.recoveryState === "retry_available" && (job.status === "failed" || job.status === "queued")) return true;
+  return job.status === "failed" && !!failureKind;
+}
+
+export async function prepareFailedProviderRecoveries(
+  workspaceId: string,
+  campaignId: string,
+  jobs: ProductionJob[]
+): Promise<boolean> {
+  let changed = false;
+  for (const job of jobs) {
+    if (!isProviderRecoveryCandidate(job)) continue;
+    const action = await prepareProviderRecovery({
+      workspaceId,
+      campaignId,
+      jobId: job.id,
+      kind: job.requestMeta?.providerFailureKind ?? "failed_without_output",
+      detail: job.requestMeta?.providerFailureDetail ?? job.error,
+      status: job.requestMeta?.providerFailureKind,
+      ...(job.costUsd !== undefined ? { costUsd: job.costUsd } : {}),
+      ...(job.actualCapability ? { capability: job.actualCapability } : {})
+    });
+    if (action !== "ignored") changed = true;
+  }
+  return changed;
 }
 
 /**
@@ -692,10 +955,21 @@ async function recordDispatchFailure(
   workspaceId: string,
   campaign: Campaign,
   job: ProductionJob,
-  stage: { id: string },
   error: unknown
 ): Promise<void> {
   const message = error instanceof Error ? error.message : "Submit failed.";
+  const providerFailure = classifyProviderFailure(message);
+  if (providerFailure) {
+    await prepareProviderRecovery({
+      workspaceId,
+      campaignId: campaign.id,
+      jobId: job.id,
+      kind: providerFailure,
+      detail: message,
+      status: message
+    });
+    return;
+  }
   const kind = classifySubmitError(message);
   const now = nowIso();
   let exhausted = false;
@@ -706,10 +980,18 @@ async function recordDispatchFailure(
       const attempts = j.attempts ?? 1;
       j.lastAttemptAt = now;
       j.lastTransientError = redactSubmitError(message);
-      if (kind === "terminal" || attempts >= maxDispatchAttempts()) {
+      if (kind === "terminal" || attempts >= maxDispatchAttempts() || j.requestMeta?.automaticRecoveryUsed === true) {
         exhausted = true;
         return;
       }
+      j.status = "queued";
+      j.livepeerJobId = undefined;
+      j.dispatchStartedAt = undefined;
+      j.dispatchedAt = undefined;
+      j.providerBudgetSeconds = undefined;
+      j.dispatchBudgetSeconds = undefined;
+      j.dispatchDeadlineAt = undefined;
+      j.providerPhase = undefined;
       j.nextAttemptAt = new Date(Date.now() + computeBackoffMs(attempts)).toISOString();
     })
   );
@@ -727,6 +1009,10 @@ async function recordDispatchFailure(
         j.status = "failed";
         j.error = reason.slice(0, 400);
         j.finishedAt = nowIso();
+        j.providerBudgetSeconds = undefined;
+        j.dispatchBudgetSeconds = undefined;
+        j.dispatchDeadlineAt = undefined;
+        j.requestMeta = { ...j.requestMeta, recoveryState: "failed", recoveryReason: reason.slice(0, 400) };
       }
     })
   );

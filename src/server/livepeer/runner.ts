@@ -1,6 +1,6 @@
 import type { ProductionStagePlan } from "../types";
-import { sha256 } from "../store";
-import { readWorkspace } from "./run-store";
+import { nowIso, sha256 } from "../store";
+import { readWorkspace, writeWorkspace } from "./run-store";
 import { LivepeerMcpClient, livepeerConfig } from "./mcp-client";
 import {
   decideStageRuns,
@@ -18,10 +18,11 @@ import {
   selectDispatchable,
   selectExactSlots
 } from "./run-scope";
-import { dispatchSlot } from "./run-dispatch";
-import { delay, pollJob, resolveProgressHold, type PumpOptions, type PumpResult } from "./run-poll";
+import { dispatchSlot, prepareFailedProviderRecoveries } from "./run-dispatch";
+import { delay, enforceWatchdogs, pollJob, resolveProgressHold, type PumpOptions, type PumpResult } from "./run-poll";
 import { resolveSourceMediaUrl } from "../cloudinary";
-import { completeRun, failRunStages, fetchRunStatusSnapshot, type RunStatusSnapshot } from "./run-lifecycle";
+import { withCampaignLock } from "./mutex";
+import { completeRun, failRunStages, fetchRunStatusSnapshot, statusNeedsRecoveryPump, type RunStatusSnapshot } from "./run-lifecycle";
 
 /**
  * Compatibility facade + pump orchestration (target <250 lines).
@@ -66,6 +67,25 @@ export async function pumpRun(
   }
 }
 
+async function reopenRunForRecovery(workspaceId: string, campaignId: string, runId: string): Promise<boolean> {
+  let reopened = false;
+  await withCampaignLock(campaignId, () =>
+    writeWorkspace(workspaceId, (d) => {
+      const campaign = d.campaigns.find((c) => c.id === campaignId);
+      const run = campaign?.runs?.find((r) => r.id === runId);
+      if (!campaign || !run || run.status !== "complete") return;
+      run.status = "active";
+      delete run.finishedAt;
+      delete run.note;
+      run.updatedAt = nowIso();
+      campaign.status = "generating";
+      campaign.updatedAt = nowIso();
+      reopened = true;
+    })
+  );
+  return reopened;
+}
+
 async function pumpRunInner(
   workspaceId: string,
   campaignId: string,
@@ -78,15 +98,44 @@ async function pumpRunInner(
 
   for (;;) {
     if (Date.now() >= deadline) return { pumped: progressed, reason: progressed ? undefined : "budget" };
-    const db = await readWorkspace(workspaceId);
-    const campaign = db.campaigns.find((c) => c.id === campaignId);
+    let db = await readWorkspace(workspaceId);
+    let campaign = db.campaigns.find((c) => c.id === campaignId);
     if (!campaign) return { pumped: progressed, reason: "not-found" };
     if (campaign.preflight?.decision !== "allow") return { pumped: progressed, reason: "blocked" };
 
-    const run = opts.runId
+    let run = opts.runId
       ? campaign.runs?.find((r) => r.id === opts.runId)
-      : [...(campaign.runs ?? [])].reverse().find((r) => r.status === "active");
-    if (!run || run.status !== "active") return { pumped: progressed, reason: "no-active-run" };
+      : [...(campaign?.runs ?? [])].reverse().find((r) => r.status === "active");
+    if (!run) return { pumped: progressed, reason: "no-active-run" };
+    const ownedJobs = campaign.jobs.filter((j) => runOwnsJob(run!, j));
+    let recoveredFailed = false;
+    if (opts.recoverFailed && opts.allowRecovery !== false) {
+      recoveredFailed = await prepareFailedProviderRecoveries(workspaceId, campaignId, ownedJobs);
+    }
+    const restartWork = recoveredFailed || statusNeedsRecoveryPump(ownedJobs);
+    if (run.status !== "active") {
+      if (
+        run.status !== "complete" ||
+        !restartWork ||
+        !(await reopenRunForRecovery(workspaceId, campaignId, run.id))
+      ) {
+        return { pumped: progressed, reason: "no-active-run" };
+      }
+      db = await readWorkspace(workspaceId);
+      campaign = db.campaigns.find((c) => c.id === campaignId);
+      run = opts.runId
+        ? campaign?.runs?.find((r) => r.id === opts.runId)
+        : [...(campaign?.runs ?? [])].reverse().find((r) => r.status === "active");
+      if (!campaign || !run) return { pumped: progressed, reason: "no-active-run" };
+    } else if (recoveredFailed) {
+      db = await readWorkspace(workspaceId);
+      campaign = db.campaigns.find((c) => c.id === campaignId);
+      run = opts.runId
+        ? campaign?.runs?.find((r) => r.id === opts.runId)
+        : [...(campaign?.runs ?? [])].reverse().find((r) => r.status === "active");
+      if (!campaign || !run) return { pumped: progressed, reason: "no-active-run" };
+    }
+    if (restartWork) progressed = true;
 
     const profile = normalizeQualityProfile(
       campaign.request.qualityProfile ?? process.env.LIVEPEER_QUALITY_PROFILE
@@ -98,21 +147,26 @@ async function pumpRunInner(
       await failRunStages(workspaceId, campaignId, run, `Production plan is invalid: ${(error as Error).message}`);
       return { pumped: progressed, reason: "invalid-plan" };
     }
-    const sourceMedia = db.sourceMedia.find((m) => m.id === campaign.sourceMediaId);
-    // THE single resolution for this pump pass: URL registrations pass
-    // through, uploaded private copies become a time-limited download URL.
-    // The resolved value - never the stored reference - threads through
-    // planning, dispatch, and the byte-for-byte ownership check, and is
-    // never persisted. Nothing downstream may resolve again.
+    const sourceMedia = db.sourceMedia.find((m) => m.id === campaign!.sourceMediaId);
     const resolveSource = opts.resolveSourceUrl ?? resolveSourceMediaUrl;
     const sourceMediaUrl = sourceMedia ? resolveSource(sourceMedia) : undefined;
+    let runJobs = campaign.jobs.filter((j) => runOwnsJob(run!, j));
+    if (await enforceWatchdogs(client, workspaceId, campaign, runJobs, Date.now(), opts.allowRecovery !== false)) {
+      progressed = true;
+      db = await readWorkspace(workspaceId);
+      campaign = db.campaigns.find((c) => c.id === campaignId);
+      if (!campaign) return { pumped: progressed, reason: "not-found" };
+      run = opts.runId
+        ? campaign.runs?.find((r) => r.id === opts.runId)
+        : [...(campaign?.runs ?? [])].reverse().find((r) => r.status === "active");
+      if (!run || run.status !== "active") return { pumped: progressed, reason: "no-active-run" };
+      runJobs = campaign.jobs.filter((j) => runOwnsJob(run!, j));
+    }
     // Exact runs bypass stage decisions entirely: owned derivative jobs get
     // one slot each (never first-match-by-stage), and no fail decision for
     // a stage can touch a job outside the exact list.
     const exact = isExactRun(run);
     const decisions = exact ? [] : decideStageRuns(stages, campaign.jobs, sourceMediaUrl, run.stageIds);
-
-    const runJobs = campaign.jobs.filter((j) => runOwnsJob(run, j));
     const inFlight = runJobs.filter((j) => j.status === "generating" && j.livepeerJobId);
 
     // 1) Poll in-flight provider jobs (parallel network, serialized writes).
@@ -120,7 +174,7 @@ async function pumpRunInner(
     // keeps GETs inside the browser timeout), long on detached pumps.
     const holdSeconds = resolveProgressHold(opts.progressHoldSeconds);
     const pollResults = await Promise.allSettled(
-      inFlight.map((job) => pollJob(client, workspaceId, campaign, job, holdSeconds))
+       inFlight.map((job) => pollJob(client, workspaceId, campaign, job, holdSeconds, opts.allowRecovery !== false))
     );
     if (pollResults.some((r) => r.status === "fulfilled" && r.value)) progressed = true;
 
@@ -233,8 +287,10 @@ export async function getRunStatusSnapshot(
 
 export type { SubmitErrorKind, PlaceSubjectMode } from "./run-retry";
 export {
-  DEFAULT_MAX_CONCURRENCY, resolveMaxConcurrency, maxDispatchAttempts, computeBackoffMs,
-  classifySubmitError, isBackoffPending, redactSubmitError, placeSubjectMode, qualityCheckEnabled
+  DEFAULT_MAX_CONCURRENCY, resolveMaxConcurrency, maxDispatchAttempts, maxAutomaticRecoveryAttempts,
+  computeBackoffMs, classifySubmitError, classifyProviderFailure, isBackoffPending, redactSubmitError,
+  placeSubjectMode, qualityCheckEnabled, DEFAULT_PROVIDER_BUDGET_SECONDS, PROVIDER_WATCHDOG_GRACE_SECONDS,
+  MAX_PROVIDER_WATCHDOG_SECONDS, DEFAULT_PROVIDER_WATCHDOG_SECONDS, providerWatchdogSeconds
 } from "./run-retry";
 export type { DispatchSlot } from "./run-scope";
 export {
@@ -242,13 +298,14 @@ export {
 } from "./run-scope";
 export type { JobNextAction, PumpResult, PumpOptions } from "./run-poll";
 export {
-  nextJobAction, STATUS_PUMP, resolveProgressHold, pollProviderJob
+  nextJobAction, STATUS_PUMP, resolveProgressHold, pollProviderJob, watchdogDeadlineMs,
+  isWatchdogExpired, enforceWatchdogs
 } from "./run-poll";
-export type { SubmitOutcome } from "./run-dispatch";
-export { classifySubmitResult, shouldDispatchUnderCap, provenanceMeta } from "./run-dispatch";
+export type { SubmitOutcome, ProviderRecoveryAction, ProviderRecoveryInput } from "./run-dispatch";
+export { classifySubmitResult, shouldDispatchUnderCap, provenanceMeta, jobIdempotencyKey, prepareProviderRecovery } from "./run-dispatch";
 export type { SubmitInput, SubmitResult } from "./run-submit";
 export { submitRun } from "./run-submit";
 export type { DispatchInput, PreservationOutcome } from "./run-finalize";
 export { finalizedPreviewFields } from "./run-finalize";
 export type { CancelSplit, CancelResult, RunStatusSnapshot } from "./run-lifecycle";
-export { splitCancelTargets, cancelRunJobs, runSpendLedger } from "./run-lifecycle";
+export { splitCancelTargets, cancelRunJobs, runSpendLedger, statusNeedsRecoveryPump } from "./run-lifecycle";

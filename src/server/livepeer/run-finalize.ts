@@ -6,6 +6,7 @@ import { readWorkspace, writeWorkspace } from "./run-store";
 import { LivepeerMcpClient, livepeerConfig } from "./mcp-client";
 import { persistPreviewInBackground } from "./pipeline";
 import { withCampaignLock } from "./mutex";
+import { clearCapabilityQuarantine } from "./catalogue";
 import { qualityCheckEnabled } from "./run-retry";
 import { resolveSourceMediaUrl } from "../cloudinary";
 import { isStrictFidelity } from "./preservation-policy";
@@ -109,9 +110,19 @@ export async function finalizeDispatchedJob(
       const actual = result.capability ?? j.actualCapability ?? j.capability;
       Object.assign(j, finalizedPreviewFields(result));
       j.actualCapability = actual;
+      j.lastProviderJobId = result.livepeerJobId ?? j.lastProviderJobId ?? j.livepeerJobId;
+      j.dispatchStartedAt = undefined;
+      j.providerBudgetSeconds = undefined;
+      j.dispatchBudgetSeconds = undefined;
+      j.dispatchDeadlineAt = undefined;
+      j.providerPhase = undefined;
+      j.providerCancelAttemptedAt = undefined;
+      j.providerCancelConfirmed = undefined;
+      clearCapabilityQuarantine(actual);
       if (result.preservation) {
         j.requestMeta = {
           ...j.requestMeta,
+          recoveryState: "none",
           preservationActualCapability: result.preservation.actualCapability,
           preservationEvidenceLevel: result.preservation.evidenceLevel,
           providerOperationSucceeded: result.preservation.providerOperationSucceeded,

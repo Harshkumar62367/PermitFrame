@@ -4,9 +4,9 @@ import { writeWorkspace } from "./run-store";
 import { withCampaignLock } from "./mutex";
 import { nowIso } from "../store";
 import { finalizeDispatchedJob } from "./run-finalize";
-import { failPreservationTool } from "./run-dispatch";
+import { failPreservationTool, prepareProviderRecovery } from "./run-dispatch";
 import { FIDELITY_REFUSAL, isStrictFidelity } from "./preservation-policy";
-import { redactSubmitError } from "./run-retry";
+import { classifyProviderFailure, redactSubmitError, DEFAULT_PROVIDER_WATCHDOG_SECONDS, MAX_PROVIDER_WATCHDOG_SECONDS, providerWatchdogSeconds } from "./run-retry";
 
 /**
  * Provider polling: progress-hold probing, timeout guards, per-job poll
@@ -56,6 +56,8 @@ export interface PumpOptions {
    * pump the route triggers alongside.
    */
   allowPreviewResume?: boolean;
+  allowRecovery?: boolean;
+  recoverFailed?: boolean;
   /**
    * Source-delivery resolver for one pump pass. Defaults to the production
    * resolver (URL passthrough, time-limited download URLs for uploads).
@@ -72,14 +74,16 @@ export interface PumpOptions {
  * (typical path ≈ 3-4s). Detached pumps use longer holds and full dispatch
  * via explicit PumpOptions.
  */
-export const STATUS_PUMP: Required<Pick<PumpOptions, "budgetMs" | "progressHoldSeconds">> & {
+export const STATUS_PUMP: Required<Pick<PumpOptions, "budgetMs" | "progressHoldSeconds" | "allowRecovery" | "recoverFailed">> & {
   allowDispatch: false;
   allowPreviewResume: false;
 } = {
   budgetMs: 4000,
   progressHoldSeconds: 3,
   allowDispatch: false,
-  allowPreviewResume: false
+  allowPreviewResume: false,
+  allowRecovery: false,
+  recoverFailed: false
 };
 
 /** Clamp a progress hold to the provider-supported 1-25s window. */
@@ -94,7 +98,110 @@ export function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** Provider probe without state: progress hold first, status endpoint fallback. No DB. */
+export function watchdogDeadlineMs(job: ProductionJob, now = Date.now()): number {
+  const explicit = Date.parse(job.dispatchDeadlineAt ?? "");
+  if (Number.isFinite(explicit)) return explicit;
+  const anchor = Date.parse(job.dispatchedAt ?? job.dispatchStartedAt ?? "");
+  const seconds = job.providerBudgetSeconds !== undefined
+    ? providerWatchdogSeconds(job.providerBudgetSeconds)
+    : job.dispatchBudgetSeconds !== undefined && Number.isFinite(job.dispatchBudgetSeconds) && job.dispatchBudgetSeconds > 0
+      ? Math.min(MAX_PROVIDER_WATCHDOG_SECONDS, job.dispatchBudgetSeconds)
+      : DEFAULT_PROVIDER_WATCHDOG_SECONDS;
+  return Number.isFinite(anchor) ? anchor + seconds * 1000 : now + seconds * 1000;
+}
+
+export function isWatchdogExpired(job: ProductionJob, now = Date.now()): boolean {
+  return (job.status === "generating" || job.status === "queued") && watchdogDeadlineMs(job, now) <= now;
+}
+
+export async function enforceWatchdogs(
+  client: import("./mcp-client").LivepeerMcpClient,
+  workspaceId: string,
+  campaign: Campaign,
+  jobs: ProductionJob[],
+  now = Date.now(),
+  allowRecovery = true
+): Promise<boolean> {
+  let changed = false;
+  for (const candidate of jobs) {
+    if (!isWatchdogExpired(candidate, now)) continue;
+    let providerJobId: string | undefined;
+    let cancelAttempted = false;
+    let pendingTool: "place_subject" | "create_variations" | undefined;
+    await withCampaignLock(campaign.id, () =>
+      writeWorkspace(workspaceId, (d) => {
+        const j = d.campaigns.find((c) => c.id === campaign.id)?.jobs.find((x) => x.id === candidate.id);
+        if (!j || !isWatchdogExpired(j, now)) return;
+        providerJobId = j.livepeerJobId;
+        pendingTool = j.requestMeta?.preservationPendingTool;
+        j.lastProviderJobId = j.lastProviderJobId ?? j.livepeerJobId;
+        if (!j.providerCancelAttemptedAt) {
+          j.providerCancelAttemptedAt = nowIso();
+          cancelAttempted = true;
+        }
+      })
+    );
+    if (pendingTool) {
+      await failPreservationTool(
+        workspaceId,
+        campaign.id,
+        candidate.id,
+        pendingTool,
+        "Preservation provider job exceeded its dispatch budget without an output."
+      );
+      changed = true;
+      continue;
+    }
+    let confirmed = false;
+    if (providerJobId && cancelAttempted) {
+      const result = await client.cancelProviderJob(providerJobId, 5_000);
+      confirmed = result.cancelled;
+    }
+    await withCampaignLock(campaign.id, () =>
+      writeWorkspace(workspaceId, (d) => {
+        const j = d.campaigns.find((c) => c.id === campaign.id)?.jobs.find((x) => x.id === candidate.id);
+        if (!j || (j.status !== "generating" && j.status !== "queued")) return;
+        j.providerCancelConfirmed = confirmed;
+        j.livepeerJobId = undefined;
+        j.dispatchStartedAt = undefined;
+        j.dispatchedAt = undefined;
+        j.providerBudgetSeconds = undefined;
+        j.dispatchBudgetSeconds = undefined;
+        j.dispatchDeadlineAt = undefined;
+        j.providerPhase = undefined;
+      })
+    );
+    if (allowRecovery) {
+      await prepareProviderRecovery({
+        workspaceId,
+        campaignId: campaign.id,
+        jobId: candidate.id,
+        kind: "provider_timeout",
+        detail: "The provider job exceeded its dispatch budget without an output."
+      });
+    } else {
+      await withCampaignLock(campaign.id, () =>
+        writeWorkspace(workspaceId, (d) => {
+          const j = d.campaigns.find((c) => c.id === campaign.id)?.jobs.find((x) => x.id === candidate.id);
+          if (!j || (j.status !== "generating" && j.status !== "queued")) return;
+          j.status = "failed";
+          j.error = "The provider job exceeded its dispatch budget without an output.";
+          j.finishedAt = nowIso();
+          j.requestMeta = {
+            ...j.requestMeta,
+            recoveryState: "retry_available",
+            providerFailureKind: "provider_timeout",
+            providerFailureDetail: "The provider job exceeded its dispatch budget without an output.",
+            recoveryReason: "The provider job exceeded its dispatch budget without an output."
+          };
+        })
+      );
+    }
+    changed = true;
+  }
+  return changed;
+}
+
 export async function pollProviderJob(
   client: import("./mcp-client").LivepeerMcpClient,
   providerJobId: string,
@@ -136,7 +243,8 @@ export async function pollJob(
   workspaceId: string,
   campaign: Campaign,
   job: ProductionJob,
-  holdSeconds: number
+  holdSeconds: number,
+  allowRecovery = true
 ): Promise<boolean> {
   if (!job.livepeerJobId) return false;
   let status;
@@ -145,6 +253,24 @@ export async function pollJob(
   } catch {
     return false; // transient probe failure - next pump retries, nothing lost
   }
+  await withCampaignLock(campaign.id, () =>
+    writeWorkspace(workspaceId, (d) => {
+      const j = d.campaigns.find((c) => c.id === campaign.id)?.jobs.find((x) => x.id === job.id);
+      if (!j || j.status !== "generating" || j.livepeerJobId !== job.livepeerJobId) return;
+      j.lastProviderJobId = j.lastProviderJobId ?? j.livepeerJobId;
+      if (status.costUsd !== undefined) j.costUsd = status.costUsd;
+      if (status.capability) j.actualCapability = status.capability;
+      if (status.budgetSeconds !== undefined) {
+        j.providerBudgetSeconds = status.budgetSeconds;
+        j.dispatchBudgetSeconds = providerWatchdogSeconds(status.budgetSeconds);
+        const anchor = Date.parse(j.dispatchedAt ?? j.dispatchStartedAt ?? "");
+        if (Number.isFinite(anchor)) {
+          j.dispatchDeadlineAt = new Date(anchor + j.dispatchBudgetSeconds * 1000).toISOString();
+        }
+      }
+      if (!status.terminal) j.providerPhase = "generating";
+    })
+  );
   // Preservation-owned provider job: the handle was persisted by
   // trackPreservationJob, so this poll attributes to the preservation tool
   // (never to a create_media render that never happened).
@@ -224,16 +350,73 @@ export async function pollJob(
     const detail = providerReason
       ? `Livepeer ended this stage (${status.status}): ${providerReason}`
       : `Livepeer job ended (${status.status}) without an output.`;
-    await withCampaignLock(campaign.id, () =>
-      writeWorkspace(workspaceId, (d) => {
-        const j = d.campaigns.find((x) => x.id === campaign.id)?.jobs.find((x) => x.id === job.id);
-        if (j && j.status === "generating") {
+    const failureKind = classifyProviderFailure(status.status, status.error ?? detail);
+    if (!failureKind) {
+      await withCampaignLock(campaign.id, () =>
+        writeWorkspace(workspaceId, (d) => {
+          const c = d.campaigns.find((x) => x.id === campaign.id);
+          const j = c?.jobs.find((x) => x.id === job.id);
+          if (!c || !j || j.status !== "generating") return;
           j.status = "failed";
           j.error = detail.slice(0, 400);
           j.finishedAt = nowIso();
-        }
-      })
-    );
+          j.lastProviderJobId = j.lastProviderJobId ?? j.livepeerJobId;
+          j.livepeerJobId = undefined;
+          j.dispatchStartedAt = undefined;
+          j.dispatchedAt = undefined;
+          j.providerBudgetSeconds = undefined;
+        j.dispatchBudgetSeconds = undefined;
+          j.dispatchDeadlineAt = undefined;
+          j.providerPhase = undefined;
+          j.requestMeta = {
+            ...j.requestMeta,
+            recoveryState: "failed",
+            providerFailureKind: "cancelled",
+            providerFailureDetail: redactSubmitError(detail),
+            recoveryReason: detail.slice(0, 400)
+          };
+          c.status = "review";
+        })
+      );
+      return true;
+    }
+    if (!allowRecovery) {
+      await withCampaignLock(campaign.id, () =>
+        writeWorkspace(workspaceId, (d) => {
+          const j = d.campaigns.find((x) => x.id === campaign.id)?.jobs.find((x) => x.id === job.id);
+          if (!j || j.status !== "generating") return;
+          j.status = "failed";
+          j.error = detail.slice(0, 400);
+          j.finishedAt = nowIso();
+          j.lastProviderJobId = j.lastProviderJobId ?? j.livepeerJobId;
+          j.livepeerJobId = undefined;
+          j.dispatchStartedAt = undefined;
+          j.dispatchedAt = undefined;
+          j.providerBudgetSeconds = undefined;
+        j.dispatchBudgetSeconds = undefined;
+          j.dispatchDeadlineAt = undefined;
+          j.providerPhase = undefined;
+          j.requestMeta = {
+            ...j.requestMeta,
+            recoveryState: "retry_available",
+            providerFailureKind: failureKind,
+            providerFailureDetail: redactSubmitError(detail),
+            recoveryReason: detail.slice(0, 400)
+          };
+        })
+      );
+      return true;
+    }
+    await prepareProviderRecovery({
+      workspaceId,
+      campaignId: campaign.id,
+      jobId: job.id,
+      kind: failureKind,
+      detail,
+      status: status.status,
+      ...(status.costUsd !== undefined ? { costUsd: status.costUsd } : {}),
+      ...(status.capability ? { capability: status.capability } : {})
+    });
     return true;
   }
   return false;

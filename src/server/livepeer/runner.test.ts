@@ -19,6 +19,14 @@ import {
   isBackoffPending,
   redactSubmitError,
   maxDispatchAttempts,
+  classifyProviderFailure,
+  DEFAULT_PROVIDER_WATCHDOG_SECONDS,
+  MAX_PROVIDER_WATCHDOG_SECONDS,
+  providerWatchdogSeconds,
+  watchdogDeadlineMs,
+  isWatchdogExpired,
+  statusNeedsRecoveryPump,
+  jobIdempotencyKey,
   provenanceMeta,
   finalizedPreviewFields
 } from "./runner";
@@ -106,6 +114,87 @@ describe("resume actions", () => {
     assert.equal(nextJobAction(job({ id: "d", stageId: "s", status: "ready_to_share" })), "ignore");
     assert.equal(nextJobAction(job({ id: "e", stageId: "s", status: "failed" })), "ignore");
     assert.equal(nextJobAction(job({ id: "f", stageId: "s", status: "preview_ready" })), "ignore");
+  });
+});
+
+describe("provider watchdog and recovery policy", () => {
+  it("classifies worker failures and keeps cancellation non-retryable", () => {
+    assert.equal(classifyProviderFailure("reaped", ""), "worker_reaped");
+    assert.equal(classifyProviderFailure("failed", "no heartbeat from worker"), "no_heartbeat");
+    assert.equal(classifyProviderFailure("failed", "worker died"), "worker_died");
+    assert.equal(classifyProviderFailure("provider timeout", ""), "provider_timeout");
+    assert.equal(classifyProviderFailure("failed", "internal provider failure"), "internal_provider_failure");
+    assert.equal(classifyProviderFailure("failed", "completed without an output"), "failed_without_output");
+    assert.equal(classifyProviderFailure("cancelled", ""), undefined);
+    assert.equal(classifyProviderFailure("network timeout", ""), undefined);
+  });
+
+  it("uses the default 120-second budget plus grace and honors a provider budget", () => {
+    const now = Date.parse("2026-01-01T00:00:00.000Z");
+    const pending = job({
+      id: "watch",
+      stageId: "s",
+      status: "generating",
+      dispatchStartedAt: "2026-01-01T00:00:00.000Z",
+      dispatchBudgetSeconds: DEFAULT_PROVIDER_WATCHDOG_SECONDS
+    });
+    assert.equal(providerWatchdogSeconds(120), 135);
+    assert.equal(providerWatchdogSeconds(100_000), MAX_PROVIDER_WATCHDOG_SECONDS);
+    assert.equal(watchdogDeadlineMs(pending, now), now + DEFAULT_PROVIDER_WATCHDOG_SECONDS * 1000);
+    assert.equal(isWatchdogExpired(pending, now + DEFAULT_PROVIDER_WATCHDOG_SECONDS * 1000 - 1), false);
+    assert.equal(isWatchdogExpired(pending, now + DEFAULT_PROVIDER_WATCHDOG_SECONDS * 1000), true);
+    const reported = { ...pending, providerBudgetSeconds: 120 };
+    assert.equal(watchdogDeadlineMs(reported, now), now + 135_000);
+  });
+
+  it("derives the explicit provider-facing states without changing the stored job status", async () => {
+    const { queueDisplayState } = await import("@/components/studio/studio-model");
+    const base = job({ id: "ui", stageId: "s", status: "generating" });
+    assert.equal(queueDisplayState({ ...base, providerPhase: "preparing" }), "preparing");
+    assert.equal(queueDisplayState({ ...base, providerPhase: "submitted" }), "submitted");
+    assert.equal(queueDisplayState({ ...base, providerPhase: "generating" }), "generating");
+    assert.equal(queueDisplayState({ ...base, requestMeta: { recoveryState: "recovering" } }), "recovering");
+    assert.equal(queueDisplayState({ ...base, status: "failed", requestMeta: { recoveryState: "retry_available" } }), "retry_available");
+    assert.equal(queueDisplayState({ ...base, status: "failed", requestMeta: { recoveryState: "failed" } }), "failed_model");
+  });
+
+  it("marks only restart-eligible jobs for a recovery-capable status pump", () => {
+    const now = Date.parse("2026-01-01T00:00:00.000Z");
+    const stale = job({
+      id: "stale",
+      stageId: "s",
+      status: "generating",
+      dispatchStartedAt: "2025-12-31T23:00:00.000Z",
+      dispatchDeadlineAt: "2025-12-31T23:02:00.000Z"
+    });
+    const failed = job({ id: "failed", stageId: "s", status: "failed", requestMeta: { providerFailureKind: "worker_reaped" } });
+    const rawFailed = job({ id: "raw-failed", stageId: "s", status: "failed", error: "worker died: no heartbeat" });
+    const used = job({ id: "used", stageId: "s", status: "failed", requestMeta: { automaticRecoveryUsed: true, providerFailureKind: "worker_reaped" } });
+    const queuedRecovery = job({ id: "queued-recovery", stageId: "s", status: "queued", requestMeta: { automaticRecoveryUsed: true, recoveryState: "recovering" } });
+    const cancelled = job({ id: "cancelled", stageId: "s", status: "failed", requestMeta: { providerFailureKind: "cancelled" } });
+    assert.equal(statusNeedsRecoveryPump([stale], now), true);
+    assert.equal(statusNeedsRecoveryPump([failed], now), true);
+    assert.equal(statusNeedsRecoveryPump([rawFailed], now), true);
+    assert.equal(statusNeedsRecoveryPump([used], now), false);
+    assert.equal(statusNeedsRecoveryPump([queuedRecovery], now), true);
+    assert.equal(statusNeedsRecoveryPump([cancelled], now), false);
+  });
+
+  it("keeps recovery copy customer-safe while retaining diagnostics separately", async () => {
+    const { queueCustomerMessage } = await import("@/components/studio/studio-model");
+    const raw = "worker died: no heartbeat from provider";
+    const base = job({ id: "copy", stageId: "s", status: "generating", error: raw, requestMeta: { recoveryReason: raw } });
+    assert.equal(queueCustomerMessage({ ...base, requestMeta: { recoveryState: "recovering" } }, "recovering"), "The generation provider had an issue. Trying one available backup model.");
+    assert.equal(queueCustomerMessage({ ...base, status: "failed", requestMeta: { recoveryState: "retry_available" } }, "retry_available"), "This generation could not finish. Try again or choose another model.");
+    assert.equal(queueCustomerMessage({ ...base, status: "failed", requestMeta: { recoveryState: "failed" } }, "failed_model"), "This generation could not finish with an available model.");
+    assert.doesNotMatch(queueCustomerMessage(base, "recovering") ?? "", /worker died|no heartbeat/);
+  });
+
+  it("uses a new provider key for the one automatic recovery attempt", () => {
+    const run = { id: "run_1", campaignId: "cmp", stageIds: ["s"], status: "active" as const, maxConcurrency: 1, createdAt: "", updatedAt: "" };
+    const original = job({ id: "j", stageId: "s", status: "queued" });
+    const recovered = { ...original, requestMeta: { automaticRecoveryUsed: true, recoveryAttempt: 1 } };
+    assert.notEqual(jobIdempotencyKey("cmp", run, original), jobIdempotencyKey("cmp", run, recovered));
   });
 });
 

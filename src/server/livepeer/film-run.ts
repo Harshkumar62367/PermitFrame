@@ -1,4 +1,5 @@
 import type { FilmPlan, FilmScene } from "./film-plan";
+import { DEFAULT_PROVIDER_WATCHDOG_SECONDS, MAX_PROVIDER_WATCHDOG_SECONDS, providerWatchdogSeconds } from "./provider-watchdog";
 
 /**
  * Durable FilmRun: one paid provider film job owned by exactly one run,
@@ -77,6 +78,14 @@ export interface FilmRun {
   actualCapability?: string;
   /** Owned provider job id (cjob_*); persisted before any poll/confirm. */
   providerJobId?: string;
+  lastProviderJobId?: string;
+  dispatchStartedAt?: string;
+  providerBudgetSeconds?: number;
+  dispatchBudgetSeconds?: number;
+  dispatchDeadlineAt?: string;
+  watchdogCancelAttemptedAt?: string;
+  watchdogCancelConfirmed?: boolean;
+  providerFailureKind?: string;
   costUsd?: number;
   /** Final reel file URL - HTTPS-verified before ready, never otherwise. */
   reelUrl?: string;
@@ -139,6 +148,22 @@ export function checkFilmCap(budgetCapUsd: number, estimateUsd: number | undefin
 /** Active (billable-or-pending) film runs for progress display. */
 export function isActiveFilmStatus(status: FilmRunStatus): boolean {
   return status === "confirmed" || status === "submitting" || status === "generating_scenes" || status === "assembling_reel";
+}
+
+export function filmWatchdogDeadlineMs(run: Pick<FilmRun, "dispatchDeadlineAt" | "dispatchStartedAt" | "providerBudgetSeconds" | "dispatchBudgetSeconds">, now = Date.now()): number {
+  const explicit = Date.parse(run.dispatchDeadlineAt ?? "");
+  if (Number.isFinite(explicit)) return explicit;
+  const anchor = Date.parse(run.dispatchStartedAt ?? "");
+  const seconds = run.providerBudgetSeconds !== undefined
+    ? providerWatchdogSeconds(run.providerBudgetSeconds)
+    : run.dispatchBudgetSeconds !== undefined && Number.isFinite(run.dispatchBudgetSeconds) && run.dispatchBudgetSeconds > 0
+      ? Math.min(MAX_PROVIDER_WATCHDOG_SECONDS, run.dispatchBudgetSeconds)
+      : DEFAULT_PROVIDER_WATCHDOG_SECONDS;
+  return Number.isFinite(anchor) ? anchor + seconds * 1000 : now + seconds * 1000;
+}
+
+export function isFilmWatchdogExpired(run: Pick<FilmRun, "status" | "dispatchDeadlineAt" | "dispatchStartedAt" | "providerBudgetSeconds" | "dispatchBudgetSeconds">, now = Date.now()): boolean {
+  return isActiveFilmStatus(run.status) && filmWatchdogDeadlineMs(run, now) <= now;
 }
 
 /** Display label for the film lifecycle, including pre-run Planning. */

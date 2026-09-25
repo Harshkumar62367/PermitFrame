@@ -37,6 +37,9 @@ const STATE_META: Record<DeliverableState, { label: string; className: string }>
   ready: { label: "Not started", className: "bg-muted text-muted-foreground" },
   queued: { label: "Queued", className: "bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-800" },
   running: { label: "Generating", className: "bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-800" },
+  recovering: { label: "Recovering", className: "bg-violet-50 text-violet-700 ring-violet-600/20 dark:bg-violet-950/40 dark:text-violet-300 dark:ring-violet-800" },
+  retry_available: { label: "Retry available", className: "bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-800" },
+  failed_model: { label: "Needs retry", className: "bg-rose-50 text-rose-700 ring-rose-600/20 dark:bg-rose-950/40 dark:text-rose-300 dark:ring-rose-800" },
   partial: { label: "Partial", className: "bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-800" },
   done: { label: "Complete", className: "bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-950/40 dark:text-emerald-300 dark:ring-emerald-800" },
   review: { label: "Needs ratio review", className: "bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-800" },
@@ -88,7 +91,9 @@ export function CreativePlan({ campaign, allowed, filmMode, onChanged }: Creativ
   const [selected, setSelected] = useState<string[] | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [handoffDelayed, setHandoffDelayed] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const invalidateSnapshot = useInvalidateWorkspaceSnapshot();
 
   const unsupportedReasonByStageId = useMemo(
@@ -162,7 +167,9 @@ export function CreativePlan({ campaign, allowed, filmMode, onChanged }: Creativ
   async function generate() {
     if (busy || selectedStages.length === 0) return;
     setBusy(true);
+    setHandoffDelayed(false);
     setError(null);
+    setNotice(null);
     try {
       // Client-generated run key: double-clicks and retries replay the same
       // run instead of dispatching duplicate paid jobs.
@@ -181,25 +188,30 @@ export function CreativePlan({ campaign, allowed, filmMode, onChanged }: Creativ
       ]);
       if (!handoff) {
         setConfirming(false);
-        setError("Your request is being processed. Please stay on this page while it starts.");
+        setHandoffDelayed(true);
+        setNotice("Your request is being processed. Please stay on this page while it starts.");
         invalidateSnapshot();
         void onChanged();
       }
       await submit;
       setConfirming(false);
+      setHandoffDelayed(false);
       setError(null);
+      setNotice(null);
       invalidateSnapshot();
       await onChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Generation failed to start. Nothing was spent.");
+      setNotice(null);
       setConfirming(false);
     } finally {
+      setHandoffDelayed(false);
       setBusy(false);
     }
   }
 
   return (
-    <section aria-label="Creative plan" className="flex min-w-0 flex-col rounded-2xl border border-border bg-card p-4 xl:h-full xl:min-h-0 xl:overflow-hidden">
+    <section aria-label="Creative plan" className="flex min-w-0 flex-col rounded-2xl border border-border bg-card p-4 min-[1450px]:h-full min-[1450px]:min-h-0 min-[1450px]:overflow-hidden">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h3 className="text-[15px] font-semibold tracking-tight">Creative plan</h3>
@@ -240,7 +252,7 @@ export function CreativePlan({ campaign, allowed, filmMode, onChanged }: Creativ
         <p className="mt-4 text-[13px] text-muted-foreground">No approved plan stages - re-check rights to rebuild the plan.</p>
       )}
 
-      <div className="pf-pane-scroll mt-3 space-y-2 xl:min-h-0 xl:flex-1 xl:overflow-y-auto xl:pr-1">
+      <div className="pf-pane-scroll mt-3 space-y-2 min-[1450px]:min-h-0 min-[1450px]:flex-1 min-[1450px]:overflow-y-auto min-[1450px]:pr-1">
         {deliverables.map((d) => {
           const stageIds = d.stages.map((s) => s.id);
           const state = deliverableState(campaign.jobs, stageIds, blockedStageIds);
@@ -358,9 +370,10 @@ export function CreativePlan({ campaign, allowed, filmMode, onChanged }: Creativ
                             {stage.label}
                           </span>
                           {unsupportedReason && <span className="sr-only">{unsupportedReason}</span>}
-                          {job && job.status === "generating" && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-amber-600" aria-hidden />}
-                          {job && job.status === "queued" && <CircleDashed className="h-3.5 w-3.5 shrink-0 text-amber-600" aria-hidden />}
-                          {job && job.status === "failed" && <X className="h-3.5 w-3.5 shrink-0 text-rose-600" aria-hidden />}
+                           {job && (job.status === "generating" || job.requestMeta?.recoveryState === "recovering") && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-amber-600" aria-hidden />}
+                           {job && job.status === "queued" && <CircleDashed className="h-3.5 w-3.5 shrink-0 text-amber-600" aria-hidden />}
+                           {job && (job.status === "failed" || job.requestMeta?.recoveryState === "retry_available") && <X className="h-3.5 w-3.5 shrink-0 text-rose-600" aria-hidden />}
+
                           {attention && (
                             <span
                               className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500 dark:bg-amber-400"
@@ -405,6 +418,7 @@ export function CreativePlan({ campaign, allowed, filmMode, onChanged }: Creativ
       </div>
 
       {error && <p role="alert" className="mt-3 break-words text-[12px] text-rose-600 dark:text-rose-300">{error}</p>}
+      {notice && <p role="status" className="mt-3 break-words text-[12px] text-muted-foreground">{notice}</p>}
 
       <div className="mt-3 border-t border-border pt-3">
         {hasMotion && !confirming && selectedStages.length > 0 && (
@@ -432,7 +446,7 @@ export function CreativePlan({ campaign, allowed, filmMode, onChanged }: Creativ
           className="mt-3 w-full rounded-full bg-emerald-700 font-medium text-emerald-50 hover:bg-emerald-600 disabled:opacity-50 dark:bg-emerald-500 dark:text-emerald-950 dark:hover:bg-emerald-400"
         >
           <Sparkles className="h-4 w-4" aria-hidden />
-          {busy ? "Starting…" : `Generate selected assets${selectedStages.length > 0 ? ` (${selectedStages.length})` : ""}`}
+          {busy ? (handoffDelayed ? "Request submitted" : "Starting…") : `Generate selected assets${selectedStages.length > 0 ? ` (${selectedStages.length})` : ""}`}
         </Button>
         {filmMode === "campaign_film" && (
           <p className="mt-1.5 text-[11.5px] leading-relaxed text-muted-foreground">

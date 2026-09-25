@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { campaignOutcome, OutcomeBadge } from "@/components/campaign-outcome";
 import type { Campaign } from "@/server/types";
-import { deliveryBlockReason, hasSharableReceipt, isActiveJobStatus, isDeliverableReceipt } from "@/server/types";
+import { deliveryBlockReason, classifyReceiptForAnchor, hasSharableReceipt, isActiveJobStatus, isDeliverableReceipt } from "@/server/types";
 import { deriveQualityReview } from "@/server/livepeer/quality-review";
 import { canCreateVariations } from "./studio-model";
 import { useReviewActions } from "./use-review-actions";
@@ -55,7 +55,25 @@ export function ReviewSection({ campaign, onChanged }: ReviewSectionProps) {
   // outputs stay previewable until stored via the action below.
   const sharable = campaign.receipts.some((r) => hasSharableReceipt(r));
   const legacyHosted = campaign.receipts.filter((r) => !hasSharableReceipt(r));
-  const pendingRecords = campaign.receipts.filter((r) => !r.ual);
+  // Proof-ledger grouping, all from persisted state so a refresh shows the
+  // durable outcome: only durable, non-private records without a UAL can
+  // anchor; failed and orphaned-publishing records stay actionable; fresh
+  // publishing claims belong to an in-flight request.
+  const anchorable = campaign.receipts.filter((r) => hasSharableReceipt(r) && r.visibility !== "private");
+  const anchoredRecords = anchorable.filter((r) => r.ual);
+  const publishingRecords = anchorable.filter((r) => !r.ual && classifyReceiptForAnchor(r) === "publishing");
+  // Older generation flows attempted publication automatically. Those rows
+  // have the old bare `failed` marker but no manual-action failure note, so
+  // surface them as ordinary unpublished records rather than implying the
+  // user pressed Publish. Explicit anchor attempts always persist a safe
+  // `publicationError` and remain retryable failures.
+  const failedRecords = anchorable.filter((r) => !r.ual && r.publicationStatus === "failed" && !!r.publicationError);
+  const pendingRecords = anchorable.filter(
+    (r) => !r.ual && (r.publicationStatus !== "failed" || !r.publicationError) && classifyReceiptForAnchor(r) !== "publishing"
+  );
+  const privateRecords = campaign.receipts.filter((r) => r.visibility === "private");
+  const actionableRecords = campaign.receipts.filter((r) => classifyReceiptForAnchor(r) === "eligible");
+  const allAnchored = anchorable.length > 0 && anchoredRecords.length === anchorable.length;
   const outcome = campaignOutcome({
     status: campaign.status,
     decision: campaign.preflight?.decision ?? null,
@@ -195,7 +213,7 @@ export function ReviewSection({ campaign, onChanged }: ReviewSectionProps) {
             : "Public verification is pending for this record - approve again to publish it."}
         </p>
       )}
-      {pendingRecords.length > 0 && (
+      {actionableRecords.length > 0 && (
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <Button
             variant="outline"
@@ -203,19 +221,42 @@ export function ReviewSection({ campaign, onChanged }: ReviewSectionProps) {
             onClick={() => void actions.republishPending()}
             disabled={actions.republishing || active}
             aria-busy={actions.republishing}
-            title={active ? "Wait for production to finish before publishing records" : "Publish locally saved records to the proof ledger - already-published ones are skipped"}
+            title={active ? "Wait for production to finish before publishing records" : "Publish eligible records to the proof ledger - already-published, private, non-durable, and in-flight records are skipped"}
             className="rounded-full"
           >
-            {actions.republishing ? "Publishing…" : `Publish ${pendingRecords.length} pending record${pendingRecords.length === 1 ? "" : "s"}`}
+            {actions.republishing
+              ? (actions.republishProgress ?? "Publishing…")
+              : pendingRecords.length > 0
+                ? `Publish ${actionableRecords.length} pending record${actionableRecords.length === 1 ? "" : "s"}`
+                : `Retry ${failedRecords.length} failed record${failedRecords.length === 1 ? "" : "s"}`}
           </Button>
           {actions.republishMsg && <p role="status" className="break-words text-[12px] text-muted-foreground">{actions.republishMsg}</p>}
-          {!actions.republishMsg && (
-            <p className="w-full text-[12px] leading-relaxed text-muted-foreground">
-              Saved locally because the ledger was unreachable when generated. Publishing writes each to the proof ledger
-              (giving it a permanent UAL and explorer link) - safe to retry, already-published records are skipped.
-            </p>
-          )}
         </div>
+      )}
+      {publishingRecords.length > 0 && !actions.republishing && (
+        <p role="status" className="mt-3 break-words text-[12px] text-muted-foreground">
+          Publishing proof records. You can safely refresh this page.
+        </p>
+      )}
+      {pendingRecords.length > 0 && (
+        <p role="status" className="mt-3 break-words text-[12px] text-muted-foreground">
+          {pendingRecords.length} record{pendingRecords.length === 1 ? "" : "s"} are ready to publish to the proof ledger.
+        </p>
+      )}
+      {failedRecords.length > 0 && (
+        <p role="alert" className="mt-3 break-words text-[12px] text-rose-600 dark:text-rose-300">
+          {failedRecords.length} record{failedRecords.length === 1 ? "" : "s"} could not be published. Retry failed records.
+        </p>
+      )}
+      {allAnchored && (
+        <p role="status" className="mt-3 break-words text-[12px] text-muted-foreground">
+          {anchoredRecords.length} record{anchoredRecords.length === 1 ? "" : "s"} published to the proof ledger.
+        </p>
+      )}
+      {privateRecords.length > 0 && (
+        <p className="mt-3 break-words text-[12px] text-muted-foreground">
+          Private records stay in this workspace and are not published publicly.
+        </p>
       )}
       <ReviewStorageNotices
         legacyCount={legacyHosted.length}

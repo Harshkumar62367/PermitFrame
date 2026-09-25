@@ -106,6 +106,7 @@ export interface CreativeSubmitParsed {
   estimateUsd?: number;
   budgetUsd?: number;
   budgetRemainingUsd?: number;
+  budgetSeconds?: number;
   /** Over-cap refusal: nothing staged, nothing dispatched. */
   budgetExceeded?: { estimateUsd?: number; budgetUsd?: number; note: string };
   raw: Record<string, unknown>;
@@ -132,14 +133,19 @@ export interface CreativeStatusParsed {
   costUsd?: number;
   estimateUsd?: number;
   capability?: string;
+  budgetSeconds?: number;
   raw: Record<string, unknown>;
 }
 
 const TERMINAL_STATES = [
   "completed", "complete", "succeeded", "success", "delivered", "done",
-  "failed", "cancelled", "canceled", "error", "timeout", "timed_out"
+  "failed", "cancelled", "canceled", "error", "timeout", "timed_out",
+  "reaped", "worker_reaped", "no_heartbeat", "worker_died", "provider_timeout", "internal_provider_failure", "failed_without_output"
 ];
-const FAILED_STATES = ["failed", "cancelled", "canceled", "error", "timeout", "timed_out"];
+const FAILED_STATES = [
+  "failed", "cancelled", "canceled", "error", "timeout", "timed_out",
+  "reaped", "worker_reaped", "no_heartbeat", "worker_died", "provider_timeout", "internal_provider_failure", "failed_without_output"
+];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -180,9 +186,12 @@ export function extractCreativeJobId(payload: Record<string, unknown>): string |
 function extractCreativeStatus(payload: Record<string, unknown>): string {
   const s = structuredOf(payload);
   for (const candidate of [s.status, s.state, s.phase]) {
-    if (typeof candidate === "string" && candidate) return candidate.toLowerCase();
+    if (typeof candidate === "string" && candidate) return candidate.toLowerCase().replace(/[-\s]+/g, "_");
   }
-  return contentText(payload).match(/status["'\s:]+([A-Za-z_-]+)/i)?.[1]?.toLowerCase() ?? "";
+  return contentText(payload)
+    .match(/status["'\s:]+([A-Za-z_-]+)/i)?.[1]
+    ?.toLowerCase()
+    .replace(/[-\s]+/g, "_") ?? "";
 }
 
 function isHttpsUrl(value: unknown): value is string {
@@ -239,6 +248,15 @@ function extractCapability(payload: Record<string, unknown>): string | undefined
   return str(s.capability ?? s.capability_used ?? s.model ?? s.model_used);
 }
 
+function extractBudgetSeconds(payload: Record<string, unknown>): number | undefined {
+  const s = structuredOf(payload);
+  for (const key of ["budget_seconds", "budgetSeconds", "timeout_seconds", "timeoutSeconds", "max_runtime_seconds"]) {
+    const value = s[key];
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) return Math.ceil(value);
+  }
+  return undefined;
+}
+
 function detectBudgetExceeded(payload: Record<string, unknown>): { estimateUsd?: number; budgetUsd?: number; note: string } | undefined {
   const s = structuredOf(payload);
   const code = str(s.code ?? (isRecord(s.error) ? s.error.code : undefined));
@@ -270,6 +288,7 @@ export function parseCreativeSubmit(payload: Record<string, unknown>): CreativeS
     estimateUsd: num(raw.estimate_usd ?? raw.estimateUsd),
     budgetUsd: num(raw.budget_usd ?? raw.budgetUsd),
     budgetRemainingUsd: num(raw.budget_remaining_usd ?? raw.budgetRemainingUsd),
+    ...(extractBudgetSeconds(payload) !== undefined ? { budgetSeconds: extractBudgetSeconds(payload) } : {}),
     ...(budgetExceeded ? { budgetExceeded } : {}),
     raw
   };
@@ -290,6 +309,7 @@ export function parseCreativeStatus(payload: Record<string, unknown>): CreativeS
     costUsd: extractCost(payload),
     estimateUsd: num(raw.estimate_usd ?? raw.estimateUsd),
     capability: extractCapability(payload),
+    ...(extractBudgetSeconds(payload) !== undefined ? { budgetSeconds: extractBudgetSeconds(payload) } : {}),
     raw
   };
 }

@@ -13,7 +13,7 @@ import { cn } from "@/lib/utils";
 import type { Campaign, ProductionJob, ProductionStagePlan } from "@/server/types";
 import { deliveryBlockedJobIds, isActiveJobStatus } from "@/server/types";
 import { deriveQualityReview } from "@/server/livepeer/quality-review";
-import { formatUsd, plainActivity, displayCapability, queueStatusForJob } from "./studio-model";
+import { formatUsd, plainActivity, displayCapability, queueCustomerMessage, queueDisplayState, queueStatusForJob } from "./studio-model";
 
 interface QueuePanelProps {
   campaign: Campaign;
@@ -23,15 +23,20 @@ interface QueuePanelProps {
 
 const STATUS_META: Record<string, { label: string; className: string }> = {
   queued: { label: "Queued", className: "bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-800" },
+  preparing: { label: "Preparing request", className: "bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-800" },
+  submitted: { label: "Submitted to provider", className: "bg-sky-50 text-sky-700 ring-sky-600/20 dark:bg-sky-950/40 dark:text-sky-300 dark:ring-sky-800" },
   waiting: { label: "Waiting for dependency", className: "bg-muted text-muted-foreground ring-border" },
   generating: { label: "Generating", className: "bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-800" },
+  recovering: { label: "Recovering", className: "bg-violet-50 text-violet-700 ring-violet-600/20 dark:bg-violet-950/40 dark:text-violet-300 dark:ring-violet-800" },
+  retry_available: { label: "Retry available", className: "bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-800" },
+  failed_model: { label: "Could not finish", className: "bg-rose-50 text-rose-700 ring-rose-600/20 dark:bg-rose-950/40 dark:text-rose-300 dark:ring-rose-800" },
   preview_ready: { label: "Checking quality", className: "bg-sky-50 text-sky-700 ring-sky-600/20 dark:bg-sky-950/40 dark:text-sky-300 dark:ring-sky-800" },
   storage_pending: { label: "Saving", className: "bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-800" },
   storage_retry_needed: { label: "Retry needed", className: "bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-800" },
   retrying: { label: "Retrying soon", className: "bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-800" },
   ready_to_share: { label: "Ready", className: "bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-950/40 dark:text-emerald-300 dark:ring-emerald-800" },
   needs_review: { label: "Needs ratio review", className: "bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-800" },
-  failed: { label: "Failed", className: "bg-rose-50 text-rose-700 ring-rose-600/20 dark:bg-rose-950/40 dark:text-rose-300 dark:ring-rose-800" },
+  failed: { label: "Could not finish", className: "bg-rose-50 text-rose-700 ring-rose-600/20 dark:bg-rose-950/40 dark:text-rose-300 dark:ring-rose-800" },
   cancelled: { label: "Cancelled", className: "bg-muted text-muted-foreground ring-border" }
 };
 
@@ -44,15 +49,16 @@ function displayStatus(
   // Backoff scheduled by the runner: the next pump dispatches once the
   // window passes (the claim clears it). No clock reads here - staleness
   // is bounded by the polling cadence, which always pumps on load.
-  if ((job.status === "queued" || job.status === "generating") && job.nextAttemptAt) {
+  const state = queueDisplayState(job);
+  if ((state === "queued" || state === "generating") && job.nextAttemptAt) {
     return "retrying";
   }
-  if (job.status === "queued") {
+  if (state === "queued") {
     const stage = plan?.find((s) => s.id === job.stageId);
     const deps = stage?.dependsOnStageIds ?? (stage?.kind === "image-to-video" ? ["keyframe"] : []);
     if (deps.some((d) => !readyStages.has(d))) return "waiting";
   }
-  return job.status;
+  return state;
 }
 
 /**
@@ -67,6 +73,7 @@ export function QueuePanel({ campaign, allowed, onChanged }: QueuePanelProps) {
   const [refineFor, setRefineFor] = useState<string | null>(null);
   const [instructions, setInstructions] = useState("");
   const [detailsFor, setDetailsFor] = useState<string | null>(null);
+  const [backupConfirmFor, setBackupConfirmFor] = useState<string | null>(null);
   const [cancelNote, setCancelNote] = useState<string | null>(null);
   const invalidateSnapshot = useInvalidateWorkspaceSnapshot();
 
@@ -105,19 +112,54 @@ export function QueuePanel({ campaign, allowed, onChanged }: QueuePanelProps) {
     setError(null);
     try {
       await apiPost(`/api/campaigns/${campaign.id}/produce`, {
-        stageIds: failed.map((j) => j.stageId),
+        jobIds: failed.map((j) => j.id),
+        retryMode: "same",
         idempotencyKey: newRunKey("retry")
       });
       invalidateSnapshot();
       await onChanged();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Retry failed to start.");
-    } finally {
+     } catch {
+       setError("Retry could not start. Try again.");
+     } finally {
       setBusy(null);
     }
   }
 
-  async function cancelJob(jobId: string) {
+  async function retryJob(jobId: string, mode: "same" | "backup", confirmed = false) {
+    if (busy) return;
+    if (mode === "backup" && !confirmed) {
+      const job = campaign.jobs.find((candidate) => candidate.id === jobId);
+      if (job?.requestMeta?.recoveryReason?.toLowerCase().includes("price estimate")) {
+        setBackupConfirmFor(jobId);
+        return;
+      }
+    }
+    setBusy(`${mode}-${jobId}`);
+    setError(null);
+    setBackupConfirmFor(null);
+    try {
+      await apiPost(`/api/campaigns/${campaign.id}/produce`, {
+        jobIds: [jobId],
+        retryMode: mode,
+        ...(mode === "backup" && confirmed ? { confirmUnknownSpend: true } : {}),
+        idempotencyKey: newRunKey(mode === "backup" ? "backup" : "retry")
+      });
+      invalidateSnapshot();
+      await onChanged();
+     } catch (e) {
+       const message = e instanceof Error ? e.message : "Retry failed to start.";
+       if (mode === "backup" && !confirmed && /price estimate|confirm the spend/i.test(message)) {
+         setError(null);
+         setBackupConfirmFor(jobId);
+         } else {
+           setError("Retry could not start. Try again.");
+         }
+     } finally {
+       setBusy(null);
+     }
+   }
+
+   async function cancelJob(jobId: string) {
     if (busy) return;
     setBusy(`cancel-${jobId}`);
     setError(null);
@@ -127,13 +169,21 @@ export function QueuePanel({ campaign, allowed, onChanged }: QueuePanelProps) {
         `/api/campaigns/${campaign.id}/cancel`,
         { jobIds: [jobId] }
       );
-      const first = result.results[0];
-      setCancelNote(first ? `${first.outcome}: ${first.detail}` : "Cancel requested.");
+       const first = result.results[0];
+       setCancelNote(
+         first?.outcome === "cancelled"
+           ? "Cancellation confirmed."
+           : first?.outcome === "provider-refused"
+             ? "The provider could not confirm cancellation."
+             : first?.outcome === "cancel-requested"
+               ? "Cancellation requested."
+               : "Cancellation status updated."
+       );
       invalidateSnapshot();
       await onChanged();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Cancel failed.");
-    } finally {
+     } catch {
+       setError("Cancellation request did not complete. Refresh the queue to check the current stage status.");
+     } finally {
       setBusy(null);
     }
   }
@@ -148,15 +198,15 @@ export function QueuePanel({ campaign, allowed, onChanged }: QueuePanelProps) {
       setInstructions("");
       invalidateSnapshot();
       await onChanged();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Refinement failed to start. Your instructions are preserved.");
-    } finally {
+     } catch {
+       setError("Refinement could not start. Your instructions are preserved.");
+     } finally {
       setBusy(null);
     }
   }
 
   return (
-    <section aria-label="Generation queue" className="flex min-w-0 flex-col rounded-2xl border border-border bg-card p-4 xl:h-full xl:min-h-0 xl:overflow-hidden">
+    <section aria-label="Generation queue" className="flex min-w-0 flex-col rounded-2xl border border-border bg-card p-4 min-[1450px]:h-full min-[1450px]:min-h-0 min-[1450px]:overflow-hidden">
       <div className="flex items-center justify-between gap-2">
         <h3 className="text-[15px] font-semibold tracking-tight">Queue</h3>
         {total > 0 && (
@@ -184,29 +234,30 @@ export function QueuePanel({ campaign, allowed, onChanged }: QueuePanelProps) {
           </p>
         </div>
       ) : (
-        <ul className="pf-pane-scroll mt-3 space-y-2 xl:min-h-0 xl:flex-1 xl:overflow-y-auto xl:pr-1">
+        <ul className="pf-pane-scroll mt-3 space-y-2 p-px min-[1450px]:min-h-0 min-[1450px]:flex-1 min-[1450px]:overflow-y-auto min-[1450px]:pr-1">
           {campaign.jobs.map((job) => {
             const stage = campaign.preflight?.plan.find((s) => s.id === job.stageId);
             const blocked = blockedJobIds.has(job.id);
-            const shown = queueStatusForJob(displayStatus(job, plan, readyStages), blocked);
-            const meta = STATUS_META[shown] ?? STATUS_META.queued;
+             const shown = queueStatusForJob(displayStatus(job, plan, readyStages), blocked);
+             const customerMessage = queueCustomerMessage(job, shown);
+             const meta = STATUS_META[shown] ?? STATUS_META.queued;
             const refining = refineFor === job.id;
             // A rejected submit has no provider id even though its local
             // status was advanced to generating. It has never been billed
             // and can be cancelled locally before its retry window opens.
-            const cancellable = (job.status === "queued" || job.status === "generating") && !job.livepeerJobId;
+             const cancellable = (job.status === "queued" || job.status === "generating") && allowed;
             return (
               <li
                 key={job.id}
                 className="min-w-0 rounded-xl bg-muted/50 p-3 ring-1 ring-border"
               >
                 <div className="flex items-center gap-2">
-                  {job.status === "generating" && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-amber-600" aria-hidden />}
+                  {(shown === "preparing" || shown === "submitted" || shown === "generating" || shown === "recovering") && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-amber-600" aria-hidden />}
                   {job.status === "queued" && shown === "waiting" && <Hourglass className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />}
                   {job.status === "queued" && shown !== "waiting" && <CircleDashed className="h-3.5 w-3.5 shrink-0 text-amber-600" aria-hidden />}
                   {job.status === "storage_pending" && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-amber-600" aria-hidden />}
                   {job.status === "ready_to_share" && !blocked && <Check className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" aria-hidden />}
-                  {job.status === "failed" && <X className="h-3.5 w-3.5 shrink-0 text-rose-600 dark:text-rose-300" aria-hidden />}
+                  {(shown === "failed_model" || shown === "retry_available" || job.status === "failed") && <X className="h-3.5 w-3.5 shrink-0 text-rose-600 dark:text-rose-300" aria-hidden />}
                   {job.status === "cancelled" && <X className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />}
                   <p className="min-w-0 flex-1 truncate text-[12.5px] font-medium">{stage?.label ?? job.stageId}</p>
                   <span className={cn("shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ring-1", meta.className)}>
@@ -225,20 +276,21 @@ export function QueuePanel({ campaign, allowed, onChanged }: QueuePanelProps) {
                       type="button"
                       onClick={() => void cancelJob(job.id)}
                       disabled={busy !== null}
-                      title="Cancel before dispatch - nothing has been spent on this stage"
+                       title={job.livepeerJobId ? "Request provider cancellation" : "Cancel before dispatch - nothing has been spent on this stage"}
                       className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium text-muted-foreground underline-offset-2 ring-1 ring-border hover:text-foreground hover:underline"
                     >
                       {busy === `cancel-${job.id}` ? "Cancelling…" : "Cancel"}
                     </button>
                   )}
                 </div>
-                <p className="mt-1 truncate font-mono text-[10px] text-muted-foreground" title={displayCapability(job)}>
-                  {displayCapability(job)}
-                  {typeof job.costUsd === "number" && ` · ${formatUsd(job.costUsd)}`}
-                </p>
-                {isActiveJobStatus(job.status) && (
+                 {typeof job.costUsd === "number" && (
+                   <p className="mt-1 truncate font-mono text-[10px] text-muted-foreground">
+                     {formatUsd(job.costUsd)}
+                   </p>
+                 )}
+                 {isActiveJobStatus(job.status) && shown !== "recovering" && (
                   <p className="mt-1 animate-pulse text-[12px] font-medium text-amber-700 dark:text-amber-300" role="status">
-                    {plainActivity(job.stageId, stage?.label ?? job.stageId, job.status)}
+                    {plainActivity(job.stageId, stage?.label ?? job.stageId, shown)}
                   </p>
                 )}
                 {job.outputUrl && (job.status === "ready_to_share" || job.status === "preview_ready" || job.status === "storage_pending" || job.status === "storage_retry_needed") && (
@@ -257,11 +309,12 @@ export function QueuePanel({ campaign, allowed, onChanged }: QueuePanelProps) {
                 {job.status === "storage_pending" && (
                   <p className="mt-1.5 text-[11px] text-muted-foreground">Saving securely. Not share-ready yet.</p>
                 )}
-                {shown === "retrying" && (
-                  <p className="mt-1.5 text-[11px] text-muted-foreground" role="status">
-                    Submit hiccup - retrying automatically{job.lastTransientError ? `: ${job.lastTransientError}` : "."} Nothing extra is spent: retries reuse the same provider key.
-                  </p>
-                )}
+                 {customerMessage && (
+                   <p className="mt-1.5 text-[11px] text-muted-foreground" role="status">
+                     {customerMessage}
+                   </p>
+                 )}
+
                 {job.status === "storage_retry_needed" && (
                   <p className="mt-1.5 text-[11px] text-amber-700 dark:text-amber-300">
                     Preview kept - secure storage needs a retry. Use “Retry secure storage” in Review &amp; deliver.
@@ -272,13 +325,33 @@ export function QueuePanel({ campaign, allowed, onChanged }: QueuePanelProps) {
                     Stored and reviewable below - not deliverable to clients until the ratio matches the planned placement. Generation succeeded; nothing was deleted.
                   </p>
                 )}
-                {job.error && (
-                  <p className="mt-1.5 break-words text-[11.5px] text-rose-600 dark:text-rose-300">{job.error}</p>
-                )}
-                {job.humanSummary && (
-                  <p className="mt-1 break-words text-[11.5px] italic text-muted-foreground">{job.humanSummary}</p>
-                )}
-                <button
+                 {job.humanSummary && (
+                   <p className="mt-1 break-words text-[11.5px] italic text-muted-foreground">{job.humanSummary}</p>
+                 )}
+                 {(shown === "retry_available" || shown === "failed_model" || job.status === "failed") && (
+                   <div className="mt-2 flex flex-wrap gap-1.5">
+                     <Button
+                       variant="outline"
+                       size="sm"
+                       onClick={() => void retryJob(job.id, "backup")}
+                       disabled={!allowed || busy !== null}
+                       className="h-7 rounded-full px-2.5 text-[11px]"
+                     >
+                       {busy === `backup-${job.id}` ? "Starting…" : "Retry with backup model"}
+                     </Button>
+                     <Button
+                       variant="ghost"
+                       size="sm"
+                       onClick={() => void retryJob(job.id, "same")}
+                       disabled={!allowed || busy !== null}
+                       className="h-7 rounded-full px-2.5 text-[11px]"
+                     >
+                       {busy === `same-${job.id}` ? "Starting…" : "Retry same model"}
+                     </Button>
+                   </div>
+                 )}
+                 <button
+
                   type="button"
                   onClick={() => setDetailsFor(detailsFor === job.id ? null : job.id)}
                   aria-expanded={detailsFor === job.id}
@@ -293,12 +366,56 @@ export function QueuePanel({ campaign, allowed, onChanged }: QueuePanelProps) {
                       <dt className="shrink-0 text-muted-foreground">capability</dt>
                       <dd className="min-w-0 break-all text-right" title={displayCapability(job)}>{displayCapability(job)}</dd>
                     </div>
-                    <div className="flex justify-between gap-2">
-                      <dt className="shrink-0 text-muted-foreground">provider job</dt>
-                      <dd className="min-w-0 truncate text-right" title={job.livepeerJobId ?? "not reported yet"}>{job.livepeerJobId ?? "not reported yet"}</dd>
-                    </div>
-                    <div className="flex justify-between gap-2">
-                      <dt className="shrink-0 text-muted-foreground">request</dt>
+                     <div className="flex justify-between gap-2">
+
+                       <dt className="shrink-0 text-muted-foreground">provider job</dt>
+                       <dd className="min-w-0 truncate text-right" title={job.lastProviderJobId ?? job.livepeerJobId ?? "not reported yet"}>{job.lastProviderJobId ?? job.livepeerJobId ?? "not reported yet"}</dd>
+                     </div>
+                     <div className="flex justify-between gap-2">
+                       <dt className="shrink-0 text-muted-foreground">dispatch</dt>
+                       <dd className="min-w-0 text-right">
+                         {job.providerPhase ?? "not recorded"}{job.dispatchBudgetSeconds ? ` · ${job.dispatchBudgetSeconds}s budget` : ""}{job.dispatchDeadlineAt ? ` · deadline ${new Date(job.dispatchDeadlineAt).toLocaleTimeString()}` : ""}
+                       </dd>
+                     </div>
+                      {job.requestMeta?.providerFailureKind && (
+                        <div className="flex justify-between gap-2">
+                          <dt className="shrink-0 text-muted-foreground">failure</dt>
+                          <dd className="min-w-0 break-words text-right">{job.requestMeta.providerFailureKind}</dd>
+                        </div>
+                      )}
+                      {job.requestMeta?.providerFailureDetail && (
+                        <div className="flex justify-between gap-2">
+                          <dt className="shrink-0 text-muted-foreground">failure detail</dt>
+                          <dd className="min-w-0 break-words text-right">{job.requestMeta.providerFailureDetail}</dd>
+                        </div>
+                      )}
+                      {job.error && (
+                        <div className="flex justify-between gap-2">
+                          <dt className="shrink-0 text-muted-foreground">error</dt>
+                          <dd className="min-w-0 break-words text-right">{job.error}</dd>
+                        </div>
+                      )}
+                      {job.lastTransientError && (
+                        <div className="flex justify-between gap-2">
+                          <dt className="shrink-0 text-muted-foreground">last transient error</dt>
+                          <dd className="min-w-0 break-words text-right">{job.lastTransientError}</dd>
+                        </div>
+                      )}
+                      {job.requestMeta?.recoveryReason && (
+                        <div className="flex justify-between gap-2">
+                          <dt className="shrink-0 text-muted-foreground">recovery reason</dt>
+                          <dd className="min-w-0 break-words text-right">{job.requestMeta.recoveryReason}</dd>
+                        </div>
+                      )}
+                      {job.requestMeta?.recoveryCapability && (
+                       <div className="flex justify-between gap-2">
+                         <dt className="shrink-0 text-muted-foreground">backup model</dt>
+                         <dd className="min-w-0 break-all text-right">{job.requestMeta.recoveryCapability}</dd>
+                       </div>
+                     )}
+                     <div className="flex justify-between gap-2">
+                       <dt className="shrink-0 text-muted-foreground">request</dt>
+
                       <dd className="min-w-0 text-right" title={job.requestMeta?.durationNote ?? undefined}>
                         {[job.requestMeta?.aspectRatio, job.requestMeta?.durationSeconds ? `${job.requestMeta.durationSeconds}s${job.requestMeta?.requestedDurationSeconds !== undefined && job.requestMeta.requestedDurationSeconds !== job.requestMeta.durationSeconds ? ` (requested ${job.requestMeta.requestedDurationSeconds}s)` : ""}` : null, job.requestMeta?.sourceKind === "prior-output" ? "prior stage output" : job.requestMeta?.sourceKind === "source-media" ? "source media" : null].filter(Boolean).join(" · ") || "-"}
                       </dd>
@@ -383,8 +500,23 @@ export function QueuePanel({ campaign, allowed, onChanged }: QueuePanelProps) {
         </ul>
       )}
 
-      {error && <p role="alert" className="mt-3 break-words text-[12px] text-rose-600 dark:text-rose-300">{error}</p>}
-      {cancelNote && <p role="status" className="mt-3 break-words text-[12px] text-muted-foreground">{cancelNote}</p>}
+       {error && <p role="alert" className="mt-3 break-words text-[12px] text-rose-600 dark:text-rose-300">{error}</p>}
+       {backupConfirmFor && (
+         <div className="mt-3 rounded-xl border border-amber-600/30 bg-amber-50/70 p-3 text-[12px] dark:bg-amber-950/30" role="alertdialog" aria-label="Confirm backup model spend">
+           <p className="font-medium">Confirm backup model spend</p>
+           <p className="mt-1 text-muted-foreground">The provider did not return a usable price estimate for this backup. Confirm only if you accept the possible additional charge.</p>
+           <div className="mt-2 flex gap-1.5">
+             <Button size="sm" onClick={() => void retryJob(backupConfirmFor, "backup", true)} disabled={busy !== null} className="h-7 rounded-full px-2.5 text-[11px]">
+               {busy === `backup-${backupConfirmFor}` ? "Starting…" : "Confirm and retry"}
+             </Button>
+             <Button variant="ghost" size="sm" onClick={() => setBackupConfirmFor(null)} disabled={busy !== null} className="h-7 rounded-full px-2.5 text-[11px]">
+               Keep current model
+             </Button>
+           </div>
+         </div>
+       )}
+       {cancelNote && <p role="status" className="mt-3 break-words text-[12px] text-muted-foreground">{cancelNote}</p>}
+
 
       {failed.length > 0 && (
         <Button

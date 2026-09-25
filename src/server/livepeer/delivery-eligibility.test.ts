@@ -395,6 +395,26 @@ describe("finalization atomicity (workspace seam)", () => {
     assert.deepEqual(publicOutputsForShare(after, null).map((o) => o.id), []);
   });
 
+  it("finalization never starts ledger publication without an explicit publish action", async () => {
+    const { store, read } = memoryStore(seed("storage_retry_needed"));
+    setRunStore(store);
+    const publicationEventsBefore = read().events.filter((event) => event.kind === "dkg.publish").length;
+
+    assert.deepEqual(
+      await finalizeStoredDelivery({
+        workspaceId: WS,
+        campaignId: "cmp_1",
+        jobId: "job_1",
+        asset: { storageStatus: "stored", storageUrl: "https://cdn.example/square.png", storagePublicId: "a1", storageWidth: 1024, storageHeight: 1024 }
+      }),
+      { finalized: true }
+    );
+
+    const receipt = read().campaigns[0].receipts[0];
+    assert.equal(receipt.publicationStatus, undefined);
+    assert.equal(read().events.filter((event) => event.kind === "dkg.publish").length, publicationEventsBefore);
+  });
+
   it("repeated finalization never duplicates receipts or clobbers state", async () => {
     const { store, read } = memoryStore(seed("storage_pending"));
     setRunStore(store);
@@ -480,7 +500,7 @@ describe("finalization atomicity (workspace seam)", () => {
       publish: idleLedger.publish
     });
     assert.equal(read().campaigns[0].receipts.length, 1);
-    assert.equal(read().events.filter((e) => e.kind === "dkg.publish").length, 1);
+    assert.equal(read().events.filter((e) => e.kind === "production.receipt_recorded").length, 1);
     assert.equal(idleLedger.calls(), 0);
     // Ledger failure after local persistence leaves receipt and job intact.
     ledger.fail();

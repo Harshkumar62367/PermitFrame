@@ -7,7 +7,17 @@ export interface Deliverable {
   platforms: string;
   stages: ProductionStagePlan[];
 }
-export type DeliverableState = "ready" | "queued" | "running" | "partial" | "done" | "failed" | "review";
+export type DeliverableState =
+  | "ready"
+  | "queued"
+  | "running"
+  | "recovering"
+  | "retry_available"
+  | "partial"
+  | "done"
+  | "failed"
+  | "failed_model"
+  | "review";
 
 /**
  * Groups the approved plan stages into the three selectable deliverables.
@@ -88,12 +98,17 @@ export function deliverableState(
 ): DeliverableState {
   const mine = jobsForStages(jobs, stageIds);
   if (mine.length === 0) return "ready";
+  if (mine.some((j) => (j.status === "generating" || j.status === "queued") && j.requestMeta?.recoveryState === "recovering")) return "recovering";
+  if (mine.some((j) => j.status === "failed" && j.requestMeta?.recoveryState === "retry_available")) return "retry_available";
   const states = new Set(mine.map((j) => j.status));
   if (states.has("generating") || states.has("preview_ready") || states.has("storage_pending")) return "running";
   if (states.has("queued")) return states.size === 1 ? "queued" : "partial";
   if (states.has("failed") || states.has("cancelled") || states.has("storage_retry_needed")) {
     const settled = mine.every((j) => j.status === "failed" || j.status === "cancelled" || j.status === "storage_retry_needed" || j.status === "ready_to_share");
-    return settled && mine.some((j) => j.status !== "ready_to_share") ? "failed" : "partial";
+    if (settled && mine.some((j) => j.status !== "ready_to_share")) {
+      return mine.some((j) => j.requestMeta?.recoveryState === "failed") ? "failed_model" : "failed";
+    }
+    return "partial";
   }
   if (mine.every((j) => j.status === "ready_to_share")) {
     return stageIds.some((id) => blockedStageIds.has(id)) ? "review" : "done";
@@ -108,6 +123,36 @@ export function deliverableState(
  */
 export function queueStatusForJob(status: string, blocked: boolean): string {
   return blocked && status === "ready_to_share" ? "needs_review" : status;
+}
+
+export function queueDisplayState(job: ProductionJob): string {
+  const active = job.status === "generating" || job.status === "queued";
+  if (active && job.requestMeta?.recoveryState === "recovering") return "recovering";
+  if (job.status === "failed" && job.requestMeta?.recoveryState === "retry_available") return "retry_available";
+  if (job.status === "failed" && job.requestMeta?.recoveryState === "failed") return "failed_model";
+  if (job.status === "generating" && job.providerPhase === "preparing") return "preparing";
+  if (job.status === "generating" && job.providerPhase === "submitted") return "submitted";
+  return job.status;
+}
+
+export const QUEUE_CUSTOMER_MESSAGES = {
+  recovering: "The generation provider had an issue. Trying one available backup model.",
+  retryAvailable: "This generation could not finish. Try again or choose another model.",
+  permanentFailure: "This generation could not finish with an available model.",
+  retrying: "The provider request will be tried again automatically."
+} as const;
+
+export function queueCustomerMessage(
+  job: Pick<ProductionJob, "status" | "requestMeta">,
+  state: string
+): string | undefined {
+  if (state === "recovering") return QUEUE_CUSTOMER_MESSAGES.recovering;
+  if (state === "retry_available") return QUEUE_CUSTOMER_MESSAGES.retryAvailable;
+  if (state === "failed_model" || (job.status === "failed" && state !== "retry_available")) {
+    return QUEUE_CUSTOMER_MESSAGES.permanentFailure;
+  }
+  if (state === "retrying") return QUEUE_CUSTOMER_MESSAGES.retrying;
+  return undefined;
 }
 
 /**
@@ -199,15 +244,22 @@ const STAGE_PLAIN: Record<string, string> = {
  * Plain-language activity for a job - "Creating vertical motion creative"
  * instead of MCP jargon. Falls back to the plan label for unknown stages.
  */
-export function plainActivity(stageId: string, label: string, status: ProductionJob["status"]): string {
+export function plainActivity(stageId: string, label: string, status: ProductionJob["status"] | string): string {
   const what = STAGE_PLAIN[stageId] ?? label.toLowerCase();
+  const subject = `${what.charAt(0).toUpperCase() + what.slice(1)}`;
+  if (status === "preparing") return `Preparing request for ${what}…`;
+  if (status === "submitted") return `Submitted ${what} to provider`;
+  if (status === "recovering") return `Recovering ${what} with an available backup model`;
+  if (status === "retry_available") return `Retry available for ${what}`;
+  if (status === "failed_model") return `Could not finish ${what}`;
+  if (status === "retrying") return `Retrying ${what} automatically`;
   if (status === "generating") return `Creating ${what}…`;
-  if (status === "queued") return `Queued - ${what}`;
+  if (status === "queued") return "Waiting to start…";
   if (status === "storage_pending") return `Generated - saving ${what} securely…`;
   if (status === "preview_ready") return `Checking ${what} quality…`;
-  if (status === "ready_to_share") return `${what.charAt(0).toUpperCase() + what.slice(1)} ready`;
-  if (status === "cancelled") return `${what.charAt(0).toUpperCase() + what.slice(1)} cancelled`;
-  return `${what.charAt(0).toUpperCase() + what.slice(1)} failed`;
+  if (status === "ready_to_share") return `${subject} ready`;
+  if (status === "cancelled") return `${subject} cancelled`;
+  return `${subject} failed`;
 }
 
 /**

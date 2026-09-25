@@ -34,6 +34,8 @@ function presentationFor(kind: string): ActivityPresentation {
     return { icon: ShieldCheck, label: "Approved to create", href: (i) => (i.campaignId ? `/campaigns/${i.campaignId}` : null) };
   if (kind === "production.start" || kind === "production.run")
     return { icon: Play, label: kind === "production.start" ? "Production started" : "Production output completed", href: (i) => (i.campaignId ? `/campaigns/${i.campaignId}` : null) };
+  if (kind === "production.receipt_recorded")
+    return { icon: Fingerprint, label: "Output receipt recorded", href: (i) => (i.campaignId ? `/campaigns/${i.campaignId}` : null) };
   if (kind === "dkg.publish")
     return { icon: Fingerprint, label: "Derivative receipt published", href: (i) => (i.campaignId ? `/campaigns/${i.campaignId}` : null) };
   if (kind === "campaign.approved")

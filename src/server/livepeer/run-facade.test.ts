@@ -237,6 +237,21 @@ describe("facade behavior preservation", () => {
     assert.equal(seen.filter((s) => s.tool === "create_media").length, 2);
   });
 
+  it("re-queues a cancelled stage when it is selected again", async () => {
+    const { read, ws } = useStore([mkJob("keyframe", "job_cancelled", "cancelled")], null);
+
+    const submitted = await submitRun({
+      campaignId: "cmp_facade",
+      stageIds: ["keyframe"],
+      workspaceId: ws
+    });
+
+    assert.equal(submitted.created, true);
+    const queued = campaignOf(read).jobs.find((job) => job.id === "job_cancelled");
+    assert.equal(queued?.status, "queued");
+    assert.equal(queued?.runId, submitted.run?.id);
+  });
+
   it("exact-job variation run isolates derivatives through the facade", async () => {
     const { read, ws } = useStore(
       [

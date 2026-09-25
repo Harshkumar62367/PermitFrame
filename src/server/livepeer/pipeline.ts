@@ -138,7 +138,8 @@ export async function persistPreviewInBackground(input: {
     // compare-and-set claim (preview_ready only) and the complete receipt
     // land in ONE workspace mutation via persistLocalDelivery - no observer
     // can read Ready without the receipt, and a duplicate worker finalizes
-    // nothing. Ledger publication follows local persistence, never before.
+    // nothing. Anchoring is an explicit Review & deliver action, never an
+    // automatic consequence of generation.
     const { receiptId, claimed } = await persistLocalDelivery({
       campaignId: input.campaignId,
       jobId: input.jobId,
@@ -148,7 +149,7 @@ export async function persistPreviewInBackground(input: {
       scope,
       claimFrom: "preview_ready"
     });
-    if (claimed && receiptId) {
+    if (claimed && receiptId && input.publish) {
       await publishReceiptToLedger({ campaignId: input.campaignId, receiptId, scope, publish: input.publish }).catch(() => undefined);
     }
     return;
@@ -173,7 +174,7 @@ export async function persistPreviewInBackground(input: {
     const canonicalUrl = outcome.asset.secureUrl;
     // Atomic local finalization: ready_to_share, canonical URL, completion
     // fields, and the complete receipt (ratio block included) land in ONE
-    // write. Ledger publication follows and can never gate them.
+    // write. Ledger anchoring is initiated only from Review & deliver.
     const { receiptId } = await persistLocalDelivery({
       campaignId: input.campaignId,
       jobId: input.jobId,
@@ -187,7 +188,9 @@ export async function persistPreviewInBackground(input: {
       },
       scope
     });
-    await publishReceiptToLedger({ campaignId: input.campaignId, receiptId, scope, publish: input.publish }).catch(() => undefined);
+    if (receiptId && input.publish) {
+      await publishReceiptToLedger({ campaignId: input.campaignId, receiptId, scope, publish: input.publish }).catch(() => undefined);
+    }
     if (receiptId) {
       await getDb()
         .update(campaignAssets)
@@ -324,8 +327,13 @@ export function buildReceipt(
     ...(job.requestMeta?.preservationRequestedCapability ? { preservationRequestedCapability: job.requestMeta.preservationRequestedCapability } : {}),
     ...(job.requestMeta?.preservationActualCapability ? { preservationActualCapability: job.requestMeta.preservationActualCapability } : {}),
     ...(job.requestMeta?.approvedSourceAssetId ? { approvedSourceAssetId: job.requestMeta.approvedSourceAssetId } : {}),
-    ...(job.requestMeta?.fallbackReason ? { fallbackReason: job.requestMeta.fallbackReason } : {}),
-    ...(job.requestMeta?.providerOperationSucceeded !== undefined
+     ...(job.requestMeta?.fallbackReason ? { fallbackReason: job.requestMeta.fallbackReason } : {}),
+     ...(job.requestMeta?.providerFailureKind ? { providerFailureKind: job.requestMeta.providerFailureKind } : {}),
+     ...(job.requestMeta?.providerFailureDetail ? { providerFailureDetail: job.requestMeta.providerFailureDetail } : {}),
+     ...(job.requestMeta?.recoveryState ? { recoveryState: job.requestMeta.recoveryState } : {}),
+     ...(job.requestMeta?.recoveryCapability ? { recoveryCapability: job.requestMeta.recoveryCapability } : {}),
+     ...(job.requestMeta?.providerOperationSucceeded !== undefined
+
       ? { providerOperationSucceeded: job.requestMeta.providerOperationSucceeded }
       : {}),
     generatedAt: nowIso(),
@@ -408,7 +416,7 @@ export async function persistLocalDelivery(input: LocalDeliveryInput): Promise<{
     d.events.push({
       id: newId("evt"),
       at: nowIso(),
-      kind: "dkg.publish",
+      kind: "production.receipt_recorded",
       summary: `Derivative receipt ${receipt.id} recorded for stage "${receipt.label}".`,
       refs: [input.campaignId, receipt.id]
     });
@@ -473,10 +481,9 @@ export async function publishReceiptToLedger(input: {
 
 /**
  * Full receipt flow preserving the original contract: atomic local
- * finalization first (job + receipt + block in one write), ledger
- * publication after. Returns the receipt id, or "" when campaign/job
- * are missing. The optional publish hook is the test seam for deferred
- * or failing DKG; production always uses the real adapter.
+ * finalization first (job + receipt + block in one write). Anchoring is
+ * deliberately opt-in through the optional publish hook; production uses
+ * the explicit Review & deliver publication action instead.
  */
 export async function publishReceipt(
   campaignId: string,
@@ -496,7 +503,9 @@ export async function publishReceipt(
     scope
   });
   if (!receiptId) return "";
-  await publishReceiptToLedger({ campaignId, receiptId, scope, publish: opts?.publish }).catch(() => undefined);
+  if (opts?.publish) {
+    await publishReceiptToLedger({ campaignId, receiptId, scope, publish: opts.publish }).catch(() => undefined);
+  }
   return receiptId;
 }
 
@@ -638,7 +647,9 @@ export async function finalizeStoredDelivery(input: {
     scope: input.workspaceId
   });
   if (!receiptId) return { finalized: false };
-  await publishReceiptToLedger({ campaignId: input.campaignId, receiptId, scope: input.workspaceId, publish: input.publish }).catch(() => undefined);
+  if (input.publish) {
+    await publishReceiptToLedger({ campaignId: input.campaignId, receiptId, scope: input.workspaceId, publish: input.publish }).catch(() => undefined);
+  }
   try {
     await getDb()
       .update(campaignAssets)
