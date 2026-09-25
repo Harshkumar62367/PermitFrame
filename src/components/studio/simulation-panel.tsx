@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ChevronDown, Gauge } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,6 +12,30 @@ import { apiPost, ApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 const PLATFORMS = ["instagram", "tiktok", "youtube", "linkedin"];
+const SIMULATION_TIMEOUT_MS = 120_000;
+type SimulationDraft = { platform: string; country: string; claims: string };
+const EMPTY_DRAFT: SimulationDraft = { platform: "", country: "", claims: "" };
+
+function draftStorageKey(campaignId: string): string {
+  return `permitframe:permission-simulation:${campaignId}`;
+}
+
+/** Keep retry inputs across a refresh, without persisting a what-if result. */
+function loadDraft(campaignId: string): SimulationDraft {
+  if (typeof window === "undefined") return EMPTY_DRAFT;
+  try {
+    const raw: unknown = JSON.parse(window.sessionStorage.getItem(draftStorageKey(campaignId)) ?? "null");
+    if (!raw || typeof raw !== "object") return EMPTY_DRAFT;
+    const value = raw as Record<string, unknown>;
+    return {
+      platform: typeof value.platform === "string" ? value.platform : "",
+      country: typeof value.country === "string" ? value.country : "",
+      claims: typeof value.claims === "string" ? value.claims : ""
+    };
+  } catch {
+    return EMPTY_DRAFT;
+  }
+}
 
 interface SimResult {
   decision: string;
@@ -30,11 +54,20 @@ interface SimulationPanelProps {
  * the studio. What-if only - it never changes the campaign.
  */
 export function SimulationPanel({ campaignId, sparqlPreview }: SimulationPanelProps) {
-  const [sim, setSim] = useState({ platform: "", country: "", claims: "" });
+  const [sim, setSim] = useState<SimulationDraft>(() => loadDraft(campaignId));
   const [simResult, setSimResult] = useState<SimResult | null>(null);
   const [simError, setSimError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [showSparql, setShowSparql] = useState(false);
+
+  useEffect(() => {
+    try {
+      window.sessionStorage.setItem(draftStorageKey(campaignId), JSON.stringify(sim));
+    } catch {
+      // Storage is an optional convenience; the simulator still works when
+      // it is unavailable (for example, a browser privacy setting).
+    }
+  }, [campaignId, sim]);
 
   async function runSimulation() {
     if (busy) return;
@@ -42,20 +75,19 @@ export function SimulationPanel({ campaignId, sparqlPreview }: SimulationPanelPr
     setSimError(null);
     setBusy(true);
     try {
-      // What-if only: persists nothing, so the default bounded timeout stays
-      // (never the 120s mutation policy). Only the timeout wording improves -
-      // a slow simulation implies nothing was saved.
+      // Simulation performs the same live ledger reads as a permission
+      // re-check. It persists nothing, but needs the same two-minute budget.
       const j = await apiPost<{ decision: SimResult }>(`/api/campaigns/${campaignId}/simulate`, {
         platform: sim.platform || undefined,
         country: sim.country || undefined,
         requestedClaims: sim.claims ? sim.claims.split(",").map((c) => c.trim()).filter(Boolean) : undefined
-      });
+      }, undefined, SIMULATION_TIMEOUT_MS);
       setSimResult(j.decision);
     } catch (e) {
       // Simulator inputs are preserved for retry.
       setSimError(
         e instanceof ApiError && e.status === 0
-          ? "The permission simulation is taking longer than expected. Try again in a moment."
+          ? "The permission simulation did not finish within two minutes. Try again in a moment."
           : e instanceof Error ? e.message : "Simulation failed. Your inputs are preserved."
       );
     } finally {

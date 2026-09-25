@@ -12,13 +12,15 @@ import { readWorkspace, writeWorkspace } from "./run-store";
 import { assertCapabilityAvailable } from "./catalogue";
 import { MODEL_OVERRIDE_UNAVAILABLE } from "./template-catalogue";
 import { revalidateCampaignAuthorization } from "../policy/authorization";
-import { fetchLivePriceMap, quoteStage, stageSpendingCeiling } from "./pricing";
+import { peekLivePriceMap, quoteStage, stageSpendingCeiling } from "./pricing";
 import { resolveMotionDuration } from "./duration-policy";
 import { isUsableOutputUrl } from "./plan-dag";
 import { failStageJobs } from "./pipeline";
 import { withCampaignLock } from "./mutex";
 import {
   classifyPreservationResult,
+  FIDELITY_REFUSAL,
+  isStrictFidelity,
   preservationOperationKey,
   resolvePreservation,
   type PreservationCallOutcome
@@ -104,8 +106,12 @@ export function isDispatchableJob(
   return job.status === "queued" || (job.status === "generating" && !job.outputUrl && !job.livepeerJobId);
 }
 
-function jobIdempotencyKey(campaignId: string, job: ProductionJob): string {
-  return `pf_${campaignId}_${job.stageId}_${job.id}`;
+function jobIdempotencyKey(campaignId: string, run: ProductionRun, job: ProductionJob): string {
+  // A key is stable for transport retries inside one run, but an explicit
+  // user retry creates a new run and must be a NEW provider attempt. Using
+  // only the durable job id caused Livepeer to replay an already-terminal
+  // failed job forever while the UI said "Retry".
+  return `pf_${campaignId}_${run.id}_${job.stageId}_${job.id}`;
 }
 
 /**
@@ -305,7 +311,11 @@ export async function dispatchSlot(
       })
     );
   }
-  const live = await fetchLivePriceMap();
+  // Pricing is display/ceiling enrichment, never a reason to leave a
+  // user-approved job looking queued. A cold MCP pricing session can take
+  // minutes to initialize; the static quote fallback keeps the cap safe
+  // while the actual generation starts immediately.
+  const live = peekLivePriceMap();
   const quote = quoteStage({ capability: dispatchCap, kind: job.kind }, live, durationSeconds);
   const capGate = shouldDispatchUnderCap(spentUsd, quote ? quote.usd : null, run.spendCapUsd ?? campaign.request.productionSpec?.maxSpendCapUsd);
   if (!capGate.ok) {
@@ -356,8 +366,9 @@ export async function dispatchSlot(
     maxCostUsd: stageSpendingCeiling({ capability: dispatchCap, kind: job.kind }, live, durationSeconds),
     inputs: { aspect_ratio: stage.format, ...(isVideo ? { duration: durationSeconds } : {}) },
     qualityProfile: stage.qualityProfile,
+    preferFast: job.requestMeta?.fastTierRequested === true,
     sessionId: campaign.id,
-    idempotencyKey: jobIdempotencyKey(campaign.id, job)
+    idempotencyKey: jobIdempotencyKey(campaign.id, run, job)
   };
 
   // Mark generating + provenance first (compare-and-set inside the lock -
@@ -433,7 +444,7 @@ export async function dispatchSlot(
         scenes: [job.prompt],
         maxCostUsd: base.maxCostUsd,
         sessionId: campaign.id,
-        idempotencyKey: preservationOperationKey(jobIdempotencyKey(campaign.id, job), "place")
+        idempotencyKey: preservationOperationKey(jobIdempotencyKey(campaign.id, run, job), "place")
       });
       placeOutcome = classifyPreservationResult(placed?.outputUrls, placed?.jobId);
       placeCostUsd = placed?.costUsd;
@@ -449,7 +460,7 @@ export async function dispatchSlot(
         modelNote: "place_subject operation succeeded",
         preservation: {
           actualCapability: "place_subject",
-          evidenceLevel: "subject-preserving",
+          evidenceLevel: preservation.evidenceLevel,
           providerOperationSucceeded: true
         }
       });
@@ -461,6 +472,13 @@ export async function dispatchSlot(
       // preservation job is pending (selectors skip generating jobs that
       // hold a provider id).
       await trackPreservationJob(workspaceId, campaign.id, job.id, "place_subject", placeOutcome.jobId);
+      return true;
+    }
+    // Strict fidelity never queues a generic substitute after a failed
+    // place_subject: fail the stage with the exact fidelity message. No
+    // fallback record (none occurs), no second paid call, nothing charged.
+    if (isStrictFidelity(stage.fidelity)) {
+      await failStageJobs(campaign.id, stage.id, `"${stage.label}": ${FIDELITY_REFUSAL}`, workspaceId, run.jobIds);
       return true;
     }
     await recordPreservationFallback(
@@ -508,7 +526,7 @@ export async function dispatchSlot(
         count: 1,
         maxCostUsd: base.maxCostUsd,
         sessionId: campaign.id,
-        idempotencyKey: preservationOperationKey(jobIdempotencyKey(campaign.id, job), "vary")
+        idempotencyKey: preservationOperationKey(jobIdempotencyKey(campaign.id, run, job), "vary")
       });
       varyOutcome = classifyPreservationResult(varied?.outputUrls, varied?.jobId);
       variedCostUsd = varied?.costUsd;

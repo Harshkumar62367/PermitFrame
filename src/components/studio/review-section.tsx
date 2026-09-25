@@ -141,7 +141,7 @@ export function ReviewSection({ campaign, onChanged }: ReviewSectionProps) {
       {productionReceipts.length > 0 && (
         <p role="status" className="mt-3 break-words text-[12px] text-muted-foreground">
           Pack review: {packDelivered} deliverable · {packBlocked} ratio-blocked · {packAttention} flagged for attention · {packUnassessed} unassessed.
-          Advisory flags need human judgment - only ratio mismatches refuse approval automatically.
+          Advisory flags need human judgment - ratio mismatches and failed identity checks refuse approval automatically. Product- and property-preserving outputs earn their pill only when the identity check passes; reference-guided outputs never claim preservation.
         </p>
       )}
 

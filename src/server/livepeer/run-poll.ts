@@ -5,6 +5,8 @@ import { withCampaignLock } from "./mutex";
 import { nowIso } from "../store";
 import { finalizeDispatchedJob } from "./run-finalize";
 import { failPreservationTool } from "./run-dispatch";
+import { FIDELITY_REFUSAL, isStrictFidelity } from "./preservation-policy";
+import { redactSubmitError } from "./run-retry";
 
 /**
  * Provider polling: progress-hold probing, timeout guards, per-job poll
@@ -184,6 +186,28 @@ export async function pollJob(
   }
   if (status.terminal && !status.outputUrl) {
     if (pendingTool) {
+      // Strict fidelity never re-queues a generic render after the
+      // preservation tool dies: fail the job with the exact fidelity
+      // message instead. The dead handle is dropped and the tool marked
+      // exhausted so nothing retries or substitutes it.
+      const stageFidelity = campaign.preflight?.plan.find((s) => s.id === job.stageId)?.fidelity;
+      if (pendingTool === "place_subject" && isStrictFidelity(stageFidelity)) {
+        await withCampaignLock(campaign.id, () =>
+          writeWorkspace(workspaceId, (d) => {
+            const j = d.campaigns.find((x) => x.id === campaign.id)?.jobs.find((x) => x.id === job.id);
+            if (!j || (j.status !== "generating" && j.status !== "queued")) return;
+            const failed = new Set(j.requestMeta?.preservationFailedTools ?? []);
+            failed.add(pendingTool);
+            j.requestMeta = { ...j.requestMeta, preservationFailedTools: [...failed], providerOperationSucceeded: false };
+            delete j.requestMeta?.preservationPendingTool;
+            j.status = "failed";
+            j.error = FIDELITY_REFUSAL.slice(0, 400);
+            j.livepeerJobId = undefined;
+            j.finishedAt = nowIso();
+          })
+        );
+        return true;
+      }
       // Confirmed terminal preservation failure: exhaust the tool and
       // re-queue for exactly one guided render. The dead handle is gone,
       // so this is the only fallback - never a second preservation call.
@@ -196,12 +220,16 @@ export async function pollJob(
       );
       return true;
     }
+    const providerReason = status.error ? redactSubmitError(status.error) : "";
+    const detail = providerReason
+      ? `Livepeer ended this stage (${status.status}): ${providerReason}`
+      : `Livepeer job ended (${status.status}) without an output.`;
     await withCampaignLock(campaign.id, () =>
       writeWorkspace(workspaceId, (d) => {
         const j = d.campaigns.find((x) => x.id === campaign.id)?.jobs.find((x) => x.id === job.id);
         if (j && j.status === "generating") {
           j.status = "failed";
-          j.error = `Livepeer job ended (${status.status}) without an output.`;
+          j.error = detail.slice(0, 400);
           j.finishedAt = nowIso();
         }
       })

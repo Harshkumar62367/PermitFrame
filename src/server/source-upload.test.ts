@@ -396,7 +396,7 @@ describe("authorization still binds uploaded media to its creator", () => {
   });
 });
 
-describe("workspace overview never renders upload references", () => {
+describe("workspace overview uses safe upload previews", () => {
   function dbWith(media: SourceMedia): Database {
     const db = emptyDb();
     db.sourceMedia = [media];
@@ -430,9 +430,9 @@ describe("workspace overview never renders upload references", () => {
     return db;
   }
 
-  it("falls back to generated output instead of the upload reference", () => {
+  it("renders an image upload through the same-origin preview route", () => {
     const view = buildWorkspaceOverview(dbWith(uploadMedia()), "ws", []);
-    assert.equal(view.campaigns[0].thumbnailUrl, null);
+    assert.equal(view.campaigns[0].thumbnailUrl, "/api/media/med_up/preview");
   });
 
   it("URL media still renders as the thumbnail", () => {

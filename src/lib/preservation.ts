@@ -14,11 +14,12 @@ export type PreservationMode = "source-guided-generation" | "subject-placement" 
  * What the finished output may truthfully be described as:
  * - "source-guided": composed with the approved reference as guidance.
  * - "subject-preserving": the subject-placement operation succeeded.
- * - "product-preserving": the product-photo operation succeeded.
+ * - "product-preserving": identity check passed on a product-preserving stage.
+ * - "property-preserving": identity check passed on a property-preserving stage.
  * - "none": no preservation claim (legacy rows, motion/audio stages,
  *   or a variation derived from a prior output rather than the source).
  */
-export type PreservationEvidenceLevel = "source-guided" | "subject-preserving" | "product-preserving" | "none";
+export type PreservationEvidenceLevel = "source-guided" | "subject-preserving" | "product-preserving" | "property-preserving" | "none";
 
 export interface PreservationProvenance {
   preservationRequested?: PreservationMode;
@@ -53,8 +54,7 @@ export function normalizePreservation(row: PreservationProvenance | undefined | 
   return { ...row, preservationEvidenceLevel: row.preservationEvidenceLevel ?? "none" };
 }
 
-export function preservationIndicator(row: PreservationProvenance | undefined | null): PreservationIndicator {
-  const p = normalizePreservation(row);
+export function preservationIndicator(row: PreservationProvenance | undefined | null): PreservationIndicator {  const p = normalizePreservation(row);
   const fallbackUsed = typeof p.fallbackReason === "string" && p.fallbackReason.length > 0;
   const fallbackSuffix = fallbackUsed ? " Preservation fallback used." : "";
   switch (p.preservationEvidenceLevel) {
@@ -99,4 +99,44 @@ export function preservationIndicator(row: PreservationProvenance | undefined | 
           : "No source-preservation claim is recorded for this output."
       };
   }
+}
+
+/** Honest copy for conceptual (reference-guided) outputs. Never a preservation claim. */
+export const REFERENCE_GUIDED_COPY = "Reference-guided - exact identity is not guaranteed.";
+
+/** Customer-facing fidelity pill per output. Null = no pill (unknown/legacy). */
+export interface FidelityPill {
+  label: "Product preserved" | "Property preserved" | "Reference-guided" | "Preservation failed";
+  tone: "emerald" | "rose" | "muted";
+}
+
+/**
+ * Fidelity pill from receipt-level fields. Labels are earned, never
+ * defaulted: "preserved" requires a passed fidelity check on a strict
+ * stage; "Reference-guided" requires a conceptual source-guided image
+ * render; anything unverified or legacy renders nothing.
+ */
+export function fidelityPillFor(
+  receipt: {
+    sourceFidelity?: "conceptual" | "product-preserving" | "property-preserving";
+    fidelityCheck?: "passed" | "failed";
+    role?: string;
+    mediaType?: string;
+  } | null | undefined
+): FidelityPill | null {
+  if (!receipt) return null;
+  if (receipt.fidelityCheck === "failed") return { label: "Preservation failed", tone: "rose" };
+  if (receipt.fidelityCheck === "passed") {
+    if (receipt.sourceFidelity === "product-preserving") return { label: "Product preserved", tone: "emerald" };
+    if (receipt.sourceFidelity === "property-preserving") return { label: "Property preserved", tone: "emerald" };
+    return null;
+  }
+  if (
+    (receipt.sourceFidelity === undefined || receipt.sourceFidelity === "conceptual") &&
+    receipt.role === "sourceGuidedImage" &&
+    receipt.mediaType === "image"
+  ) {
+    return { label: "Reference-guided", tone: "muted" };
+  }
+  return null;
 }

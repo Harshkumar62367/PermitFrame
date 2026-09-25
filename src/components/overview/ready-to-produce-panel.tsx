@@ -31,7 +31,9 @@ export function ReadyToProducePanel({ campaign }: { campaign: SnapshotCampaign }
     setBusy(true);
     setError(null);
     try {
-      await apiPost(`/api/campaigns/${campaign.id}/produce`);
+      // Producing does its live rights check and persists an idempotent run
+      // before returning. Give that initial handoff enough time to finish.
+      await apiPost(`/api/campaigns/${campaign.id}/produce`, undefined, undefined, 90_000);
       invalidateSnapshot();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Production failed to start.");

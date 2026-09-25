@@ -7,9 +7,9 @@ PermitFrame separates campaign authorization from media production. The first qu
 A campaign can only use inputs that the workspace has recorded:
 
 - A creator label for the person appearing.
-- A public source-media reference owned or controlled by that creator.
+- A source-media record owned or controlled by that creator: either a public URL reference or a private workspace upload.
 - A creator-attested permission covering the media, platform, territory, expiry, and required transformations.
-- Optional brand rules for approved and prohibited claims.
+- A brand rule for the product, with approved and prohibited claims or explicit no-claim guidance.
 
 A creator record is not a permission. A consent request is not active permission until the creator attests it.
 
@@ -36,6 +36,10 @@ PermitFrame uses OriginTrail DKG knowledge to make campaign rights decisions and
 
 A creator's consent is a link-based attestation. It records a declaration and its integrity. It does not independently verify identity, legal ownership, or legal compliance.
 
+An approved campaign shows the recorded rights passport, the constraints carried into generation, and a read-only permission simulator. The simulator is for checking a hypothetical platform, territory, or claim; it never changes the campaign.
+
+![Approved campaign permission view showing the rights passport, compiled constraints, permission simulator, and an empty review-and-deliver state](../public/docs/permission-review-delivery.png)
+
 The proof lifecycle remains explicit:
 
 ```text
@@ -47,6 +51,40 @@ Shared Working Memory evidence is not an on-chain public proof record. A campaig
 ## 4. Build the production plan
 
 A production plan is the spendable interpretation of the campaign. It lists the stages, formats, duration, quality profile, model choices, and outputs that can be produced.
+
+### The automatic starter plan
+
+When a campaign passes its initial permission check, PermitFrame creates and approves a small **default starter plan** automatically. This is why **Creative plan** can already show deliverables before you have clicked **Apply new production plan**.
+
+The starter plan contains three image stages:
+
+- `9:16` vertical social
+- `1:1` feed creative
+- `16:9` landscape
+
+It does not include every supported format. In particular, `4:3` is not part of the starter plan, so it will not appear in Creative plan until a plan that includes it is applied.
+
+![Creative plan showing the automatically created 9:16, 1:1, and 16:9 starter stages, with an empty queue](../public/docs/creative-plan-starter.png)
+
+### Changing the active plan
+
+The recipe, pack-size, and customization controls above Creative plan are a draft. **Apply new production plan** rebuilds that draft, runs it through the recorded permission and brand-rule check, and makes it the campaign's active plan only if the check passes.
+
+For example, the **Real Estate Launch Pack** campaign scope includes a `4:3` feature-detail stage. After you apply that plan, Creative plan shows it under **Standard creative (4:3)**. The Livepeer Creative API accepts that format. Selecting a stage in Creative plan does not change the approved plan; it only chooses which already-approved stage to submit now.
+
+```text
+Choose recipe, scope, and formats
+        ↓
+Apply new production plan (rights check + save)
+        ↓
+Select active-plan stages in Creative plan
+        ↓
+Generate selected stages
+```
+
+The builder makes the distinction visible: **Active plan** is what may currently run; **New selection** is only a draft until you apply it.
+
+![Production-plan builder showing an active default plan, a proposed campaign pack, and the Apply new production plan control](../public/docs/production-plan-draft.png)
 
 For a **Short clip**, the plan normally includes one 3 to 15 second motion deliverable plus any selected still variations and supporting stages.
 
@@ -67,6 +105,29 @@ Advanced users can save an image model or motion model for matching stages in a 
 A saved override persists when the pack is reopened. Provider availability can change. If a saved model is no longer available, the plan cannot be applied until you choose a current model or return to **Automatic**.
 
 The provider reports the capability that actually served a completed run. Review the result rather than assuming the requested model guarantees a particular output.
+
+:::details Supported models and image formats
+
+Still-image and motion models always resolve from live provider discovery at plan time. **Automatic (recommended)** picks an available capability for the plan's quality profile from the known families below; availability can change, so the plan builder refuses a saved choice that is no longer offered.
+
+Still-image families by quality profile:
+
+- Draft: flux-schnell, gemini-image (fast previews, never a final-quality default)
+- Balanced: flux-dev, seedream-5-lite, qwen-image-3-t2i, gemini-image
+- Premium: flux-pro, gpt-image, ideogram-v4, recraft-v4
+
+Product packshot stages (for example a shoe product photo) prefer pixelcut-product-photo, then flux-pro, then flux-dev. Motion stages (short-clip image-to-video) resolve by profile:
+
+- Draft: ltx-25-i2v-fast, pixverse-i2v, seedance-mini-i2v
+- Balanced: kling-v3-turbo-i2v, pixverse-i2v, seedance-mini-i2v
+- Premium: kling-v3-turbo-pro-i2v, seedance-i2v, veo-i2v, seedance-mini-i2v
+
+Finishing tools such as upscale resolve separately and never change the approved plan.
+
+Template flows accept the formats `9:16`, `4:3`, `1:1`, and `16:9`. Campaign Film accepts `9:16`, `1:1`, and `16:9`.
+
+For example, the **Real Estate Launch Pack** campaign scope includes a `4:3` feature-detail stage. After you apply that plan, Creative plan shows it under **Standard creative (4:3)**. The Livepeer Creative API accepts that format. Selecting a stage in Creative plan does not change the approved plan; it only chooses which already-approved stage to submit now.
+:::
 
 ## 6. Understand spend controls
 
@@ -92,7 +153,7 @@ Livepeer performs the selected supported media work, which can include image gen
 - Store completed assets for delivery.
 - Create derivative receipts.
 
-Only selected active-plan stages are submitted. Failed provider work is shown honestly and can be retried under the available controls.
+Only selected active-plan stages are submitted. A stage absent from the active plan—for example `4:3` on the automatic starter plan—cannot be selected until you apply a plan that includes it. Failed provider work is shown honestly and can be retried under the available controls.
 
 ## 8. Review the complete pack
 
@@ -114,6 +175,12 @@ An automated pass is not a human approval. A flag is a request for review, not a
 
 The owner checks visual quality, campaign fit, claims, format, and delivery readiness. The owner then uses **Approve pack** when the complete pack is acceptable.
 
+### Captions and client share
+
+After production has created eligible outputs, the workspace can generate captions and a claims manifest, then create a client share link for review. A client share is unavailable before there are outputs to review; it never substitutes for owner approval or public proof.
+
+![Captions and client-link panel showing captions generation available and client sharing disabled until outputs exist](../public/docs/captions-client-share.png)
+
 ## 9. DKG evidence after production
 
 After the owner approves the pack, PermitFrame can preserve minimized campaign provenance. The lifecycle is:
@@ -130,8 +197,9 @@ The contract address and token ID are derived from the actual UAL. The documenta
 
 | Material | Default treatment |
 | --- | --- |
-| Source media file (URL reference) | Remains with the creator or its host. PermitFrame records a reference and fingerprint. |
-| Source media file (upload) | Authenticated Cloudinary copy (original and variants require signed access). PermitFrame records a byte hash; only a time-limited download link (expires one hour after creation) leaves storage, toward the production service at generation time. |
+| Source media file (URL reference) | Remains with the creator or its host. PermitFrame records the URL and a reference fingerprint. The URL is an external, publicly reachable input. |
+| Source media file (upload) | Authenticated Cloudinary private workspace copy. PermitFrame records a byte hash and a controlled storage reference. The signed-in workspace can use a same-origin image preview; public consent previews are token-scoped. Storage details and originals are excluded from client shares, public verification, and public proof. |
+| Production handoff for an upload | At generation time only, PermitFrame mints a server-side Cloudinary download link that expires one hour after creation and sends it to the production service. It is not persisted in campaign provenance or displayed in the browser. |
 | Full prompt text | Not included in public proof. A prompt hash can support integrity evidence. |
 | Workspace records | Visible to the signed-in workspace. |
 | Client review | Limited to eligible, durably stored outputs and a minimized claim summary. |

@@ -5,7 +5,7 @@ import { checkAssetsPerRun, checkProfileAccess, resolveEntitlements } from "../e
 import { revalidateCampaignAuthorization } from "../policy/authorization";
 import { normalizeQualityProfile, normalizeStagePlan } from "./plan-dag";
 import { createJobRecords } from "./pipeline";
-import { fetchLivePriceMap, quoteStage } from "./pricing";
+import { peekLivePriceMap, quoteStage } from "./pricing";
 import { resolveMotionDuration } from "./duration-policy";
 import { findActiveRun } from "./run-scope";
 import { resolveMaxConcurrency } from "./run-retry";
@@ -43,11 +43,16 @@ export interface SubmitResult {
   error?: string;
 }
 
-async function estimateStages(
+function estimateStages(
   stages: ProductionStagePlan[],
   durationFallback = 5
 ): Promise<{ total: number | null; exact: boolean }> {
-  const live = await fetchLivePriceMap();
+  // Submission must acknowledge the durable queued run immediately. A cold
+  // Creative pricing call has to initialize the remote MCP session and can
+  // take minutes when that service is slow. Use only an already-warm price
+  // map here; `quoteStage` still supplies its local historical estimate.
+  // The runner may refresh prices later, off the request path.
+  const live = peekLivePriceMap();
   let total = 0;
   let exact = true;
   let quotable = false;
@@ -65,7 +70,7 @@ async function estimateStages(
     total += quote.usd;
     if (!quote.exact) exact = false;
   }
-  return { total: quotable ? Math.round(total * 10000) / 10000 : null, exact };
+  return Promise.resolve({ total: quotable ? Math.round(total * 10000) / 10000 : null, exact });
 }
 
 /**
@@ -188,9 +193,26 @@ export async function submitRun(input: SubmitInput): Promise<SubmitResult> {
     for (const j of c.jobs) {
       if ((j.status === "failed" || j.status === "storage_retry_needed") && (owned ? owned.has(j.id) : wanted.includes(j.stageId))) {
         if (input.capabilityOverride?.trim()) j.capability = input.capabilityOverride.trim();
+        // A user-triggered retry of a provider-terminal failure is a new
+        // logical provider attempt. Keep automatic recovery inside one run
+        // idempotent, but make this next run both fresh and fast-tiered so a
+        // reaped worker cannot be replayed forever.
+        const hadProviderAttempt = Boolean(j.livepeerJobId);
         j.status = "queued";
         j.error = undefined;
         j.livepeerJobId = undefined;
+        j.attempts = 0;
+        j.dispatchedAt = undefined;
+        j.finishedAt = undefined;
+        j.nextAttemptAt = undefined;
+        j.lastTransientError = undefined;
+        if (hadProviderAttempt) {
+          j.requestMeta = {
+            ...j.requestMeta,
+            fastTierRequested: true,
+            fallbackReason: "Previous provider attempt ended without an output; this explicit retry uses the provider fast tier."
+          };
+        }
         j.runId = run.id;
         resetIds.push(j.id);
       }

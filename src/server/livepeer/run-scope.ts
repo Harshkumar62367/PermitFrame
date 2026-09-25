@@ -3,6 +3,7 @@ import type {
   ProductionJob,
   ProductionRun,
   ProductionStagePlan,
+  StageFidelity,
   StageInputSource
 } from "../types";
 import {
@@ -223,6 +224,7 @@ export function preservationContextFor(
     variationExplicit: boolean;
     variationSourceUrl?: string;
     placeSubjectMode: "auto" | "off";
+    fidelity?: StageFidelity;
   };
   sourceAssetId?: string;
 } {
@@ -245,7 +247,8 @@ export function preservationContextFor(
       rightsAllowed: campaign.preflight?.decision === "allow",
       variationExplicit: job.variationExplicit === true,
       ...(variationOwned && job.variationSourceUrl ? { variationSourceUrl: job.variationSourceUrl } : {}),
-      placeSubjectMode: placeSubjectMode()
+      placeSubjectMode: placeSubjectMode(),
+      ...(stage.fidelity && stage.fidelity !== "conceptual" ? { fidelity: stage.fidelity } : {})
     },
     ...(approvedSource ? { sourceAssetId: campaign.sourceMediaId } : {})
   };

@@ -311,7 +311,7 @@ export function NewCampaignForm({ onCreated }: { onCreated?: (id: string) => voi
           )}
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor={`${uid}-claims`} className="text-[12px] text-muted-foreground">Claims to advertise (comma-separated)</Label>
+          <Label htmlFor={`${uid}-claims`} className="text-[12px] text-muted-foreground">Claims to advertise (comma-separated, optional)</Label>
           <Input
             id={`${uid}-claims`}
             placeholder="made with recycled materials"

@@ -1,5 +1,6 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
+import { promises as fs } from "node:fs";
 import { EdgeNodeAdapter, isDkgUnavailable, parseCliTable, redactSecrets } from "./edge-node-adapter";
 import type { CliTransport } from "./transports";
 
@@ -68,9 +69,12 @@ describe("listPassports source-media binding", () => {
 
   it("aggregates multiple pf:sourceMedia rows into distinct media ids", async () => {
     const queries: string[][] = [];
+    let sparql = "";
     const transport: CliTransport = {
       run: async (args: string[]) => {
         queries.push(args);
+        const file = args[args.indexOf("--file") + 1];
+        sparql = await fs.readFile(file, "utf8");
         const header = [
           "passport",
           "creatorId",
@@ -111,7 +115,10 @@ describe("listPassports source-media binding", () => {
     };
     const passports = await new EdgeNodeAdapter(transport).listPassports("c1");
     assert.equal(passports.length, 1);
+    assert.equal(passports[0].creatorId, "c1");
     assert.deepEqual(passports[0].sourceMediaIds, ["m1", "m2"]);
     assert.deepEqual(passports[0].allowedTransformations, ["edit", "animate"]);
+    assert.match(sparql, /pf:creatorId \?creatorId/);
+    assert.match(sparql, /FILTER \(\?creatorId = "c1"\)/);
   });
 });

@@ -152,18 +152,17 @@ describe("invalid plans are rejected before persistence", () => {
     assert.match(r.error, /30, 45, or 60/);
   });
 
-  it("rejects 4:5 film aspects - the provider film surface has none", () => {
-    const aspect = validateFilmPlan(plan({ aspectRatio: "4:5" }));
+  it("rejects unsupported film aspects - only the provider film aspects persist", () => {
+    const aspect = validateFilmPlan(plan({ aspectRatio: "3:2" }));
     assert.equal(aspect.ok, false);
     if (aspect.ok) return;
-    assert.match(aspect.error, /no 4:5 aspect/);
-    assert.match(aspect.error, /short image packs/);
+    assert.match(aspect.error, /must be one of 9:16, 1:1, 16:9/);
     const scenes = (plan().scenes as FilmScene[]).map((s) => ({ ...s }));
-    scenes[0] = { ...scenes[0], format: "4:5" };
+    scenes[0] = { ...scenes[0], format: "3:2" as FilmScene["format"] };
     const sceneAspect = validateFilmPlan(plan({ scenes }));
     assert.equal(sceneAspect.ok, false);
     if (sceneAspect.ok) return;
-    assert.match(sceneAspect.error, /4:5 is not supported for Campaign Film/);
+    assert.match(sceneAspect.error, /must be one of 9:16, 1:1, 16:9/);
   });
 
   it("rejects short_clip mode and unknown modes", () => {
@@ -361,12 +360,14 @@ describe("persistence merge and short-clip compatibility", () => {
     assert.ok(!("filmPlan" in withExtra.spec));
   });
 
-  it("4:5 stays available for short-clip template flows", () => {
+  it("unsupported formats are rejected for template flows", () => {
     const r = validateTemplateSelection(
-      { templateId: "creator-campaign", packSize: "quick", assetTypes: ["image"], formats: ["4:5"], qualityProfile: "balanced" },
+      { templateId: "creator-campaign", packSize: "quick", assetTypes: ["image"], formats: ["3:2"], qualityProfile: "balanced" },
       16
     );
-    assert.equal(r.ok, true);
+    assert.equal(r.ok, false);
+    if (r.ok) return;
+    assert.match(r.error ?? "", /Unknown format "3:2"/);
   });
 
   it("saved film plans validate unchanged (round-trip stability)", () => {

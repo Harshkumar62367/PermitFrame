@@ -1,4 +1,4 @@
-import type { Campaign, Database, DerivativeReceipt, ProductionJob, PublicationStatus, QualityProfile, StageInputSource, StageRole, Visibility } from "../types";
+import type { Campaign, Database, DerivativeReceipt, ProductionJob, PublicationStatus, QualityProfile, StageFidelity, StageInputSource, StageRole, Visibility } from "../types";
 import { loadDb, newId, nowIso, sha256, updateDb } from "../store";
 import { readWorkspace, writeWorkspace } from "./run-store";
 import { getDb } from "../db/client";
@@ -63,6 +63,7 @@ export function requestMetaFor(stage: {
   qualityProfile?: QualityProfile;
   role?: StageRole;
   fallbackFrom?: string;
+  fidelity?: StageFidelity;
 }): NonNullable<ProductionJob["requestMeta"]> {
   return {
     aspectRatio: stage.format,
@@ -78,12 +79,13 @@ export function requestMetaFor(stage: {
     ...(stage.qualityProfile ? { qualityProfile: stage.qualityProfile } : {}),
     ...(stage.role ? { role: stage.role } : {}),
     ...(stage.fallbackFrom ? { fallbackFrom: stage.fallbackFrom } : {}),
-    // Plan-time preservation request (role-derived, refinement-agnostic):
-    // dispatch re-validates and records the resolved outcome. Structured
-    // from the start so plan → job → receipt carries one vocabulary.
+    // Plan-time preservation request (role- and fidelity-derived,
+    // refinement-agnostic): dispatch re-validates and records the resolved
+    // outcome. Structured from the start so plan → job → receipt carries
+    // one vocabulary.
     ...(stage.role
       ? {
-          preservationRequested: requestedPreservationMode({ role: stage.role, variationExplicit: false, variationSourceUrl: undefined })
+          preservationRequested: requestedPreservationMode({ role: stage.role, variationExplicit: false, variationSourceUrl: undefined, fidelity: stage.fidelity })
         }
       : {})
   };
@@ -255,6 +257,13 @@ export function buildReceipt(
   // output can never transiently read as shareable. Unknown (no measured
   // size, unplanned format) preserves legacy behavior - never a mismatch.
   const verdict = aspectVerdict(stageFormat, measuredWidth, measuredHeight);
+  // Fidelity verdict for strict stages: the gate ran at finalization and
+  // wrote requestMeta.fidelityCheck before this receipt was built. The
+  // requirement travels only when strict; a failed check blocks delivery
+  // exactly like a ratio mismatch (approval, share, and verification all
+  // key off deliveryBlockReason).
+  const stageFidelity = campaign.preflight?.plan.find((s) => s.id === job.stageId)?.fidelity;
+  const fidelityCheck = job.requestMeta?.fidelityCheck;
   const receipt: DerivativeReceipt = {
     id: newId("rcpt"),
     campaignId: campaign.id,
@@ -272,6 +281,11 @@ export function buildReceipt(
     // are never Ready for the requested placement (approval gates on this).
     aspectVerdict: verdict,
     ...(verdict === "mismatch" ? { deliveryBlocked: "aspect_ratio_mismatch" as const } : {}),
+    ...(stageFidelity === "product-preserving" || stageFidelity === "property-preserving"
+      ? { sourceFidelity: stageFidelity }
+      : {}),
+    ...(fidelityCheck !== undefined ? { fidelityCheck } : {}),
+    ...(fidelityCheck === "failed" ? { deliveryBlocked: "fidelity_check_failed" as const } : {}),
     // URL fingerprint for correlation only — never content evidence (see types).
     providerUrlFingerprint: job.providerUrlFingerprint ?? sha256(outputUrl),
     capability,

@@ -279,7 +279,7 @@ export class EdgeNodeAdapter implements DkgAdapter {
 SELECT ?passport ?creatorId ?creatorName ?platform ?country ?transformation ?status ?validFrom ?validUntil ?attestedAt ?declaration ?sourceMedia
 WHERE {
   ?passport a pf:PermitFramePermissionPassport ;
-    pf:creatorId "${filter.creatorId}" ;
+    pf:creatorId ?creatorId ;
     pf:status ?status ;
     pf:validFrom ?validFrom ;
     pf:validUntil ?validUntil ;
@@ -290,6 +290,7 @@ WHERE {
     pf:country ?country ;
     pf:allowedTransformation ?transformation .
   OPTIONAL { ?passport pf:sourceMedia ?sourceMedia . }
+  FILTER (?creatorId = "${filter.creatorId}")
   FILTER (LCASE(STR(?platform)) = "${filter.platform}")
   FILTER (EXISTS { ?passport pf:country "${filter.country}" })
   FILTER (?status != "revoked")
@@ -302,7 +303,7 @@ WHERE {
 SELECT ?passport ?creatorId ?creatorName ?platform ?country ?transformation ?status ?validFrom ?validUntil ?attestedAt ?declaration ?sourceMedia
 WHERE {
   ?passport a pf:PermitFramePermissionPassport ;
-    pf:creatorId "${creatorId}" ;
+    pf:creatorId ?creatorId ;
     pf:status ?status ;
     pf:validFrom ?validFrom ;
     pf:validUntil ?validUntil ;
@@ -313,6 +314,7 @@ WHERE {
     pf:country ?country ;
     pf:allowedTransformation ?transformation .
   OPTIONAL { ?passport pf:sourceMedia ?sourceMedia . }
+  FILTER (?creatorId = "${creatorId}")
 }`);
   }
 

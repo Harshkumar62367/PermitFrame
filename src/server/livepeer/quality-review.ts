@@ -1,5 +1,5 @@
 import { deliveryBlockReason } from "../types";
-import type { DerivativeReceipt, ProductionJob } from "../types";
+import type { DeliveryBlockReason, DerivativeReceipt, ProductionJob } from "../types";
 
 /**
  * Reviewer-facing quality state for one generated asset. Pure (no I/O, no
@@ -58,9 +58,17 @@ export function deriveQualityReview(
 }
 
 /** Reviewer copy per state. Fixed strings - no provider/model text leaks. */
-export function qualityReviewCopy(state: QualityReviewState): string {
+export function qualityReviewCopy(
+  state: QualityReviewState,
+  blockReason?: DeliveryBlockReason | null
+): string {
   switch (state) {
     case "delivery_blocked":
+      // A failed identity check is a review verdict, not a ratio problem:
+      // name it exactly so the producer knows to regenerate, not re-crop.
+      if (blockReason === "fidelity_check_failed") {
+        return "Needs review - identity preservation not verified.";
+      }
       return "Not deliverable - ratio mismatch.";
     case "needs_attention":
       return "Needs attention - the automated check flagged this output.";

@@ -190,7 +190,13 @@ export function checkAuthorizationBinding(ev: AuthorizationEvidence): Authorizat
 }
 
 /** Bounded live lookup so a hung ledger cannot stall submission or dispatch. */
-const LIVE_LOOKUP_TIMEOUT_MS = 30_000;
+// Submit needs to create a durable queue entry promptly. If the optional
+// live-ledger check is unavailable, authorization below falls back to the
+// already-approved workspace passport; do not make a producer wait 30s.
+// This is an enrichment check: a valid, exact workspace passport remains
+// authoritative during a transient ledger delay. Two sequential checks used
+// to add up to sixteen seconds before a render was even submitted.
+const LIVE_LOOKUP_TIMEOUT_MS = 2_000;
 
 function withTimeout<T>(work: Promise<T>): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;

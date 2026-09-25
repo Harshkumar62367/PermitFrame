@@ -21,9 +21,11 @@ interface FilmPanelProps {
   onChanged: () => Promise<void>;
 }
 
-const FILM_FORMATS: TemplateFormat[] = ["9:16", "4:5", "1:1", "16:9"];
-/** 4:5 has no provider film aspect - unselectable in Campaign Film mode (short packs keep it). */
-const FILM_DISABLED_FORMATS: TemplateFormat[] = ["4:5"];
+// All visible film choices are provider-supported; anything else is blocked
+// server-side before any provider request. New users are only ever offered
+// supported aspects.
+const FILM_FORMATS: TemplateFormat[] = ["9:16", "1:1", "16:9"];
+const FILM_DISABLED_FORMATS: TemplateFormat[] = [];
 
 /**
  * Campaign film planner (first half: plan + confirm only). Total-duration
@@ -165,7 +167,7 @@ export function FilmPanel({ vm, allowed, campaignId, campaign, onChanged }: Film
                   aria-label={`Film format ${f}${disabled ? " (not supported for Campaign Film)" : ""}`}
                   aria-disabled={disabled}
                   disabled={disabled}
-                  title={disabled ? "4:5 is not supported for Campaign Film - use 9:16, 1:1, or 16:9" : undefined}
+                  title={disabled ? "This format is not supported for Campaign Film" : undefined}
                   onClick={() => vm.setAspectRatio(f)}
                   className={cn(
                     "rounded-full px-3 py-1.5 font-mono text-[12px] ring-1 transition",
@@ -182,9 +184,8 @@ export function FilmPanel({ vm, allowed, campaignId, campaign, onChanged }: Film
             })}
           </div>
           <p className="mt-1.5 text-[11.5px] leading-relaxed text-muted-foreground">
-            One aspect ratio per Campaign Film - every scene uses this aspect; there is no per-scene format. 4:5 is
-            not supported for Campaign Film (provider film aspects: 9:16, 1:1, 16:9). 4:5 stays available for short
-            image packs.
+            One aspect ratio per Campaign Film - every scene uses this aspect; there is no per-scene format. Provider
+            film aspects are 9:16, 1:1, and 16:9. Short image packs also offer 4:3.
           </p>
         </div>
       </div>

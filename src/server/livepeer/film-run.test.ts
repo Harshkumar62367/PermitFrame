@@ -4,6 +4,7 @@ import type { Campaign, Database } from "../types";
 import { emptyDb } from "../store";
 import { setRunStore, memoryStore } from "./run-store";
 import { createStarterFilmPlan, type FilmPlan } from "./film-plan";
+import type { TemplateFormat } from "./template-catalogue";
 import {
   buildCreativeSubmitArgs,
   buildScenePrompt,
@@ -220,11 +221,11 @@ describe("submit sends only confirmed product fields", () => {
     }
   });
 
-  it("omits aspect_ratio for 4:5 (no provider enum value, never mapped)", () => {
-    assert.equal(filmAspectForProvider("4:5"), undefined);
+  it("omits aspect_ratio for aspects with no provider enum value (never mapped to a lookalike)", () => {
+    assert.equal(filmAspectForProvider("2:1" as TemplateFormat), undefined);
     assert.equal(filmAspectForProvider("9:16"), "9:16");
     const plan = filmPlan();
-    const args = buildCreativeSubmitArgs({ ...plan, aspectRatio: "4:5" }, "permitframe_filmrun_x");
+    const args = buildCreativeSubmitArgs({ ...plan, aspectRatio: "2:1" as TemplateFormat }, "permitframe_filmrun_x");
     assert.ok(!("aspect_ratio" in args));
   });
 
@@ -530,29 +531,29 @@ describe("cancellation isolation", () => {
   });
 });
 
-describe("4:5 film aspects never reach the provider", () => {
-  it("plan-level 4:5 cannot submit: no run, no provider request", async () => {
+describe("unsupported film aspects never reach the provider", () => {
+  it("plan-level unsupported aspect cannot submit: no run, no provider request", async () => {
     // submitFilmRun takes no provider client at all - submission performs
-    // zero provider I/O by signature; a 4:5 plan fails before any run
-    // exists, so no pump (and no request) can ever follow.
-    const { store, read } = memoryStore(seedDb({ ...filmPlan(), aspectRatio: "4:5" }, "aspect45").db);
+    // zero provider I/O by signature; an unsupported plan fails before any
+    // run exists, so no pump (and no request) can ever follow.
+    const { store, read } = memoryStore(seedDb({ ...filmPlan(), aspectRatio: "2:1" as TemplateFormat }, "aspectUnsupported").db);
     setRunStore(store);
-    const result = await submitFilmRun({ workspaceId: WS, campaignId: "cmp_aspect45" });
+    const result = await submitFilmRun({ workspaceId: WS, campaignId: "cmp_aspectUnsupported" });
     assert.equal(result.created, false);
     assert.equal(result.run, undefined);
-    assert.match(result.error ?? "", /4:5/);
+    assert.match(result.error ?? "", /must be one of 9:16/);
     assert.match(result.error ?? "", /No provider request was made|no longer valid/);
     assert.equal((read().campaigns[0].filmRuns ?? []).length, 0);
   });
 
-  it("scene-level 4:5 cannot submit either", async () => {
+  it("scene-level unsupported aspect cannot submit either", async () => {
     const base = filmPlan();
-    const scenes = base.scenes.map((s, i) => (i === 0 ? { ...s, format: "4:5" as const } : s));
-    const { store, read } = memoryStore(seedDb({ ...base, scenes }, "scene45").db);
+    const scenes = base.scenes.map((s, i) => (i === 0 ? { ...s, format: "2:1" as TemplateFormat } : s));
+    const { store, read } = memoryStore(seedDb({ ...base, scenes }, "sceneUnsupported").db);
     setRunStore(store);
-    const result = await submitFilmRun({ workspaceId: WS, campaignId: "cmp_scene45" });
+    const result = await submitFilmRun({ workspaceId: WS, campaignId: "cmp_sceneUnsupported" });
     assert.equal(result.created, false);
-    assert.match(result.error ?? "", /4:5/);
+    assert.match(result.error ?? "", /must be one of 9:16/);
     assert.equal((read().campaigns[0].filmRuns ?? []).length, 0);
   });
 });

@@ -388,6 +388,21 @@ export function checkApprovalEligibility(
       error: `Aspect check failed - ${names}. Regenerate the listed stage${mismatched.length === 1 ? "" : "s"} for the planned placement, then approve.`
     };
   }
+  // Fidelity honesty: an output whose identity check failed is never
+  // Ready, even when the rest of the pack is. Any failed preservation
+  // blocks the whole pack until the listed stage is regenerated - a
+  // replacement image was never generated, so there is nothing to approve.
+  const fidelityFailed = campaign.receipts.filter((r) => r.deliveryBlocked === "fidelity_check_failed");
+  if (fidelityFailed.length > 0) {
+    const names = fidelityFailed
+      .map((r) => `“${r.label}”`)
+      .join("; ")
+      .slice(0, 220);
+    return {
+      ok: false,
+      error: `Fidelity check failed - ${names}. Could not preserve the approved product/property. No replacement image was generated. Regenerate the listed stage${fidelityFailed.length === 1 ? "" : "s"}, then approve.`
+    };
+  }
   // Public deliverability: at least one output must be non-private, durably
   // stored, and unblocked. A pack whose only outputs are private
   // derivatives (narration, captions) approves nothing public.

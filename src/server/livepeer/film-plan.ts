@@ -23,9 +23,8 @@ export type FilmTargetDuration = (typeof FILM_TARGET_DURATIONS)[number];
 
 /**
  * Film aspects the provider surface accepts (observed submit_creative_job
- * enum). 4:5 is NOT supported for Campaign Film: plans requesting it are
- * rejected before persistence, never silently submitted without it. 4:5
- * stays fully available for short image/template flows.
+ * enum). Anything else is rejected before persistence - use 4:3 for
+ * portrait stills instead.
  */
 export const FILM_SUPPORTED_ASPECTS: TemplateFormat[] = ["9:16", "1:1", "16:9"];
 
@@ -83,7 +82,7 @@ export interface FilmPlan {
 
 export type FilmPlanValidation = { ok: true; filmPlan: FilmPlan } | { ok: false; error: string };
 
-const FILM_FORMATS: TemplateFormat[] = ["9:16", "4:5", "1:1", "16:9"];
+const FILM_FORMATS: TemplateFormat[] = ["9:16", "1:1", "16:9"];
 
 function isFilmTarget(value: unknown): value is FilmTargetDuration {
   return typeof value === "number" && (FILM_TARGET_DURATIONS as readonly number[]).includes(value);
@@ -117,13 +116,13 @@ export function validateFilmPlan(raw: unknown): FilmPlanValidation {
   if (!title) return { ok: false, error: "Give the film plan a title." };
   if (title.length > 120) return { ok: false, error: "Film title must be 120 characters or fewer." };
   if (typeof v.aspectRatio !== "string" || !FILM_FORMATS.includes(v.aspectRatio as TemplateFormat)) {
-    return { ok: false, error: "Film aspect ratio must be one of 9:16, 4:5, 1:1, 16:9." };
+    return { ok: false, error: "Film aspect ratio must be one of 9:16, 1:1, 16:9." };
   }
   const aspectRatio = v.aspectRatio as TemplateFormat;
   if (!FILM_SUPPORTED_ASPECTS.includes(aspectRatio)) {
     return {
       ok: false,
-      error: "Campaign Film supports 9:16, 1:1, or 16:9 - the provider film surface has no 4:5 aspect, so a 4:5 film is never submitted. 4:5 stays available for short image packs."
+      error: "Campaign Film supports 9:16, 1:1, or 16:9 - this aspect is never submitted to the provider film surface. Use 4:3 for portrait stills instead."
     };
   }
   const budgetRaw = typeof v.budgetCapUsd === "string" ? Number(v.budgetCapUsd) : v.budgetCapUsd;
@@ -176,10 +175,10 @@ export function validateFilmPlan(raw: unknown): FilmPlanValidation {
     const rawFormat = typeof s.format === "string" ? s.format : "";
     const sceneFormat: TemplateFormat = (rawFormat === "" ? aspectRatio : rawFormat) as TemplateFormat;
     if (rawFormat !== "" && !FILM_FORMATS.includes(sceneFormat)) {
-      return { ok: false, error: `Scene ${label}: format must be one of 9:16, 4:5, 1:1, 16:9.` };
+      return { ok: false, error: `Scene ${label}: format must be one of 9:16, 1:1, 16:9.` };
     }
     if (!FILM_SUPPORTED_ASPECTS.includes(sceneFormat)) {
-      return { ok: false, error: `Scene ${label}: 4:5 is not supported for Campaign Film - use 9:16, 1:1, or 16:9.` };
+      return { ok: false, error: `Scene ${label}: this format is not supported for Campaign Film - use 9:16, 1:1, or 16:9.` };
     }
     if (sceneFormat !== aspectRatio) {
       return {

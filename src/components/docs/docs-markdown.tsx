@@ -112,10 +112,59 @@ const components: Components = {
   hr: () => <hr className="my-10 border-border" />
 };
 
+type DocsSection =
+  | { kind: "markdown"; source: string }
+  | { kind: "details"; summary: string; source: string };
+
+/**
+ * Split a deliberately small docs-only disclosure syntax without enabling
+ * raw HTML in Markdown. Native <details> is accessible without client JS.
+ *
+ * :::details A concise summary
+ * Markdown body
+ * :::
+ */
+function splitDocsSections(source: string): DocsSection[] {
+  const sections: DocsSection[] = [];
+  const plain: string[] = [];
+  const lines = source.split("\n");
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = /^:::details\s+(.+?)\s*$/.exec(lines[index]);
+    if (!match) {
+      plain.push(lines[index]);
+      continue;
+    }
+    const end = lines.findIndex((line, offset) => offset > index && /^:::\s*$/.test(line));
+    if (end < 0) {
+      plain.push(lines[index]);
+      continue;
+    }
+    if (plain.join("\n").trim()) sections.push({ kind: "markdown", source: plain.join("\n") });
+    plain.length = 0;
+    sections.push({ kind: "details", summary: match[1], source: lines.slice(index + 1, end).join("\n") });
+    index = end;
+  }
+  if (plain.join("\n").trim()) sections.push({ kind: "markdown", source: plain.join("\n") });
+  return sections;
+}
+
+function MarkdownBody({ source }: { source: string }) {
+  return <ReactMarkdown remarkPlugins={[remarkGfm]} components={components} skipHtml>{source}</ReactMarkdown>;
+}
+
 export function DocsMarkdown({ source }: { source: string }) {
-  return (
-    <ReactMarkdown remarkPlugins={[remarkGfm]} components={components} skipHtml>
-      {source}
-    </ReactMarkdown>
-  );
+  return splitDocsSections(source).map((section, index) => {
+    if (section.kind === "markdown") return <MarkdownBody key={index} source={section.source} />;
+    return (
+      <details key={index} className="group mt-6 rounded-2xl border border-border bg-card">
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 text-[15px] font-semibold text-foreground marker:content-none">
+          {section.summary}
+          <span aria-hidden className="text-emerald-600 transition-transform group-open:rotate-45 dark:text-emerald-400">+</span>
+        </summary>
+        <div className="border-t border-border px-5 pb-5 [&>p]:mt-4 [&>ul]:mt-4">
+          <MarkdownBody source={section.source} />
+        </div>
+      </details>
+    );
+  });
 }

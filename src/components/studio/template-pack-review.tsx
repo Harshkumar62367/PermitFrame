@@ -7,6 +7,7 @@ import { SCOPE_TITLES, type TemplatePreview as Preview } from "./template-panel.
 interface TemplatePackReviewProps {
   allowed: boolean;
   applying: boolean;
+  applySlow: boolean;
   previewing: boolean;
   hasChanges: boolean;
   canApply: boolean;
@@ -27,6 +28,7 @@ interface TemplatePackReviewProps {
 export function TemplatePackReview({
   allowed,
   applying,
+  applySlow,
   previewing,
   hasChanges,
   canApply,
@@ -90,7 +92,7 @@ export function TemplatePackReview({
             </div>
             {preview.deferred.length > 0 && (
               <p className="text-[11.5px] text-muted-foreground">
-                Planned, not dispatched: {preview.deferred.map((d) => d.label).join(", ")}.
+                Planned, not dispatched: {preview.deferred.map((d) => (d.reason ? `${d.label} (${d.reason})` : d.label)).join(", ")}.
               </p>
             )}
             {preview.stages.some((s) => s.durationAdjusted) && (
@@ -138,10 +140,12 @@ export function TemplatePackReview({
             title={!allowed ? "Locked until the permission check passes" : undefined}
             className="w-full rounded-full bg-emerald-700 font-medium text-emerald-50 hover:bg-emerald-600 disabled:opacity-50 dark:bg-emerald-500 dark:text-emerald-950 dark:hover:bg-emerald-400"
           >
-            {applying ? "Applying…" : !preview || previewError ? "Review production plan" : hasChanges ? "Apply new production plan" : "This plan is already active"}
+            {applying ? (applySlow ? "Still applying…" : "Applying…") : !preview || previewError ? "Review production plan" : hasChanges ? "Apply new production plan" : "This plan is already active"}
           </Button>
           <p className="mt-1.5 text-center text-[10.5px] leading-snug text-muted-foreground">
-            Applying rebuilds this plan through the approved rights check.
+            {applying && applySlow
+              ? "Still working through the approved rights check and live costs. This can take a while - the plan lands on its own."
+              : "Applying rebuilds this plan through the approved rights check."}
           </p>
         </div>
         {!allowed && (

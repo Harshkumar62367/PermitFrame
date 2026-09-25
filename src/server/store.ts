@@ -38,9 +38,12 @@ export async function loadDb(): Promise<Database> {
   throw new AuthenticationRequiredError();
 }
 
-export async function updateDb(mutator: (db: Database) => void): Promise<Database> {
+export async function updateDb(
+  mutator: (db: Database) => void,
+  options: { mirror?: boolean } = {}
+): Promise<Database> {
   const session = await requireCurrentSession();
-  return updateWorkspaceDb(session.workspaceId, mutator);
+  return updateWorkspaceDb(session.workspaceId, mutator, options);
 }
 
 /** Read one workspace's state without a viewer session (detached workers). */

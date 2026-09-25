@@ -9,7 +9,7 @@ describe("aspectVerdict", () => {
     assert.equal(aspectVerdict("1:1", 1024, 1024), "match");
     assert.equal(aspectVerdict("9:16", 768, 1365), "match");
     assert.equal(aspectVerdict("16:9", 1365, 768), "match");
-    assert.equal(aspectVerdict("4:5", 1024, 1280), "match");
+    assert.equal(aspectVerdict("4:3", 1024, 768), "match");
   });
 
   it("flags real mismatches — e.g. requested 1:1, received 4:3", () => {

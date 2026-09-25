@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { ArrowRight, Link2, Lock, Upload, Wand2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,6 +15,8 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
 import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
 import { apiPost, describeRecord } from "@/lib/api";
+import { classifyUploadError, shouldReconcileAfterUploadFailure, type UploadProgress } from "@/lib/upload-progress";
+import { postUpload } from "@/lib/upload-request";
 import { useLongAction } from "@/lib/use-long-action";
 import { useInvalidateDkgGraph } from "@/lib/use-dkg-graph";
 import { useInvalidateWorkspaceSnapshot, useWorkspaceSnapshot, type SnapshotCampaign } from "@/lib/use-workspace-snapshot";
@@ -42,9 +44,14 @@ export default function MediaLibraryPage() {
   const [tab, setTab] = useState<"upload" | "url">("upload");
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadTitle, setUploadTitle] = useState("");
-  const [uploadPct, setUploadPct] = useState<number | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
   const [uploadBusy, setUploadBusy] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadNote, setUploadNote] = useState<string | null>(null);
+  // Synchronous phase mirror: React state lags, but cancel honesty needs
+  // to know whether bytes already left the browser at abort time.
+  const xhrRef = useRef<XMLHttpRequest | null>(null);
+  const phaseRef = useRef<"idle" | "uploading" | "processing">("idle");
   const [fieldError, setFieldError] = useState<string | null>(null);
   // Minimal creator onboarding: name + optional handle, created in this
   // workspace. A creator record is a label for who appears - it performs
@@ -72,32 +79,6 @@ export default function MediaLibraryPage() {
     setResult(null);
   }
 
-  /** Direct POST with real upload progress (fetch has no upload events). Same-origin, so the session cookie travels. */
-  function postUpload(formData: FormData, onProgress: (pct: number) => void): Promise<{ media: SourceMedia }> {
-    return new Promise((resolve, reject) => {
-      const xhr = new XMLHttpRequest();
-      xhr.open("POST", "/api/media/upload");
-      xhr.timeout = 120000;
-      xhr.upload.onprogress = (e) => {
-        if (e.lengthComputable && e.total > 0) onProgress(Math.min(99, Math.round((e.loaded / e.total) * 100)));
-      };
-      xhr.onload = () => {
-        let body: { media?: SourceMedia; error?: string } = {};
-        try {
-          body = JSON.parse(xhr.responseText) as { media?: SourceMedia; error?: string };
-        } catch {
-          reject(new Error("Upload failed - the server response was unreadable. Your file was not registered."));
-          return;
-        }
-        if (xhr.status >= 200 && xhr.status < 300 && body.media) resolve({ media: body.media });
-        else reject(new Error(body.error || `Upload failed (status ${xhr.status}). Your file was not registered.`));
-      };
-      xhr.onerror = () => reject(new Error("Network request failed - check your connection and retry."));
-      xhr.ontimeout = () => reject(new Error("Upload timed out - try a smaller file or retry."));
-      xhr.send(formData);
-    });
-  }
-
   async function upload() {
     if (uploadBusy) return;
     if (!creatorId) {
@@ -118,15 +99,26 @@ export default function MediaLibraryPage() {
     }
     setUploadBusy(true);
     setUploadError(null);
+    setUploadNote(null);
     setResult(null);
-    setUploadPct(0);
+    phaseRef.current = "uploading";
+    setUploadProgress({ phase: "uploading", pct: 0 });
     try {
       const formData = new FormData();
       formData.set("file", uploadFile, uploadFile.name);
       formData.set("creatorId", creatorId);
       formData.set("title", uploadTitle.trim());
-      const { media } = await postUpload(formData, setUploadPct);
-      setUploadPct(100);
+      const { media } = await postUpload(formData, {
+        onProgress: setUploadProgress,
+        onSent: () => {
+          phaseRef.current = "processing";
+          setUploadProgress({ phase: "processing", pct: null });
+        },
+        track: (xhr) => {
+          xhrRef.current = xhr;
+        },
+        phase: () => (phaseRef.current === "processing" ? "processing" : "uploading")
+      });
       const record = describeRecord(media.ual);
       setResult({
         ok: true,
@@ -138,10 +130,51 @@ export default function MediaLibraryPage() {
       await invalidateSnapshot();
       invalidateDkgGraph();
     } catch (e) {
-      setUploadError(e instanceof Error ? e.message : "Upload failed. Your file was not registered.");
+      const outcome = classifyUploadError(e);
+      if (outcome.kind === "cancelled") {
+        // Cancellation is a note, never a failure: the abort already
+        // settled the request exactly once, and busy/progress cleanup runs
+        // in finally below. Processing-phase cancels reconcile because
+        // server-side registration may still finish.
+        if (outcome.phase === "processing") {
+          await invalidateSnapshot().catch(() => undefined);
+          setUploadNote("Upload stopped in the browser - securing may already have started, so the asset may still appear below. Check the library before retrying.");
+        } else {
+          setUploadNote("Upload cancelled before the file reached the server - nothing was registered.");
+        }
+      } else if (shouldReconcileAfterUploadFailure(outcome.status)) {
+        // Unknown outcome (timeout, network loss, server hiccup): the
+        // server may still finish registering, so re-read the library to
+        // show the final state instead of guessing.
+        await invalidateSnapshot().catch(() => undefined);
+        setUploadError(
+          e instanceof Error
+            ? `${e.message} Check the library below to see whether the asset registered before retrying.`
+            : "Upload outcome unknown. Check the library below to see whether the asset registered before retrying."
+        );
+      } else {
+        setUploadError(e instanceof Error ? e.message : "Upload failed. Your file was not registered.");
+      }
     } finally {
+      xhrRef.current = null;
+      phaseRef.current = "idle";
       setUploadBusy(false);
-      setUploadPct(null);
+      setUploadProgress(null);
+    }
+  }
+
+  function cancelUpload() {
+    const xhr = xhrRef.current;
+    if (!xhr || !uploadBusy) return;
+    // Abort only: the onabort handler settles the request exactly once and
+    // the catch/finally above owns all messaging and cleanup, so nothing
+    // here may touch busy/progress state (that would double-update it).
+    // If abort itself throws, the pending handlers still settle the
+    // request through their normal paths.
+    try {
+      xhr.abort();
+    } catch {
+      // Fall through to the request's own error/timeout settlement.
     }
   }
 
@@ -319,6 +352,7 @@ export default function MediaLibraryPage() {
                   className="rounded-xl placeholder:italic placeholder:text-muted-foreground/50"
                 />
               </div>
+              <div className="flex gap-2">
               <Button
                 onClick={upload}
                 disabled={uploadBusy || !uploadFile || !creatorId}
@@ -326,8 +360,19 @@ export default function MediaLibraryPage() {
                 title={!creatorId ? "Choose a creator first" : !uploadFile ? "Choose a file first" : undefined}
                 className="rounded-full bg-emerald-700 font-medium text-emerald-50 hover:bg-emerald-600 dark:bg-emerald-500 dark:text-emerald-950 dark:hover:bg-emerald-400"
               >
-                <Upload className="h-4 w-4" aria-hidden /> {uploadBusy ? (uploadPct !== null ? `Uploading ${uploadPct}%…` : "Uploading…") : "2. Upload file"}
+                <Upload className="h-4 w-4" aria-hidden />{" "}
+                {uploadBusy
+                  ? uploadProgress?.phase === "processing"
+                    ? "Securing…"
+                    : `Uploading ${uploadProgress?.pct ?? 0}%…`
+                  : "Upload file"}
               </Button>
+              {uploadBusy && (
+                <Button variant="outline" onClick={cancelUpload} className="rounded-full">
+                  Cancel
+                </Button>
+              )}
+              </div>
             </div>
             {uploadFile && !uploadBusy && (
               <p role="status" className="mt-2 text-[12px] text-muted-foreground">
@@ -335,11 +380,17 @@ export default function MediaLibraryPage() {
                 {" "}({(uploadFile.size / 1048576).toFixed(1)} MB)
               </p>
             )}
-            {uploadBusy && uploadPct !== null && (
-              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted" role="progressbar" aria-valuenow={uploadPct} aria-valuemin={0} aria-valuemax={100} aria-label="Upload progress">
-                <div className="h-full rounded-full bg-emerald-600 transition-[width]" style={{ width: `${uploadPct}%` }} />
+            {uploadBusy && uploadProgress?.phase === "uploading" && uploadProgress.pct !== null && (
+              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted" role="progressbar" aria-valuenow={uploadProgress.pct} aria-valuemin={0} aria-valuemax={100} aria-label="Upload progress">
+                <div className="h-full rounded-full bg-emerald-600 transition-[width]" style={{ width: `${uploadProgress.pct}%` }} />
               </div>
             )}
+            {uploadBusy && uploadProgress?.phase === "processing" && (
+              <p role="status" className="mt-2 text-[12px] text-muted-foreground">
+                Upload complete — securing and registering your asset… This can take a minute for large files.
+              </p>
+            )}
+            {uploadNote && <p role="status" className="mt-2 text-[12px] text-muted-foreground">{uploadNote}</p>}
             {uploadError && <p role="alert" className="mt-2 text-[12px] text-rose-600 dark:text-rose-300">{uploadError}</p>}
           </div>
           )}

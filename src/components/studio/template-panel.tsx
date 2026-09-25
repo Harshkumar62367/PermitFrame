@@ -142,6 +142,7 @@ export function TemplatePanel({ campaign, allowed, film, onChanged }: TemplatePa
               <TemplatePackReview
                 allowed={allowed}
                 applying={vm.applying}
+                applySlow={vm.applySlow}
                 previewing={vm.previewing}
                 hasChanges={vm.hasChanges}
                 canApply={vm.canApply}

@@ -142,6 +142,11 @@ describe("cancel split", () => {
       job({ id: "f", stageId: "s", status: "failed" })
     ];
     const split = splitCancelTargets(jobs);
+    // A rejected submit can leave a `generating` row without a provider id;
+    // it is just as safe to cancel locally as a never-started queued row.
+    const rejectedBeforeDispatch = job({ id: "local-generating", stageId: "s", status: "generating" });
+    const withRejected = splitCancelTargets([...jobs, rejectedBeforeDispatch]);
+    assert.deepEqual(withRejected.local.map((j) => j.id).sort(), ["local-generating", "q"]);
     assert.deepEqual(split.local.map((j) => j.id), ["q"]);
     assert.deepEqual(split.provider.map((j) => j.id), ["g"]);
     assert.deepEqual(split.skipped.map((s) => s.job.id).sort(), ["f", "r"]);
@@ -259,6 +264,10 @@ describe("retry backoff", () => {
     assert.equal(classifySubmitError("Capability X is not currently available"), "terminal");
     assert.equal(classifySubmitError("quote $1.20 exceeds max_cost_usd $0.25"), "terminal");
     assert.equal(classifySubmitError("unauthorized: bad credentials"), "terminal");
+    assert.equal(
+      classifySubmitError("create_media was refused before it ran: argument aspect_ratio must be one of '1:1', '9:16', '16:9'"),
+      "terminal"
+    );
     assert.equal(classifySubmitResult({ jobId: "mjob_1" }).action, "track");
     assert.equal(classifySubmitError("network timeout"), "transient");
     assert.equal(classifySubmitError("Livepeer MCP request failed (503)"), "transient");
@@ -364,6 +373,7 @@ const INIT = envelope({ protocolVersion: "2025-03-26", serverInfo: { name: "mock
 let seenArgs: Record<string, unknown>[];
 let realFetch: typeof fetch | undefined;
 let failNext: string | null = null;
+let mediaStatus = "completed";
 
 function stubFetch(): void {
   realFetch = globalThis.fetch;
@@ -391,7 +401,7 @@ function stubFetch(): void {
         if (args.async === true) return new Response(JSON.stringify(okTool({ job_id: "mjob_42", status: "queued" })), { status: 200, headers: { "content-type": "application/json" } });
         return new Response(JSON.stringify(okTool({ url: "https://cdn.example/sync.png", status: "completed", capability: "flux-dev", cost_paid_usd: 0.026 })), { status: 200, headers: { "content-type": "application/json" } });
       case "get_create_media":
-        return new Response(JSON.stringify(okTool({ job_id: "mjob_42", status: "completed", url: "https://cdn.example/async.png", cost_paid_usd: 0.31 })), { status: 200, headers: { "content-type": "application/json" } });
+        return new Response(JSON.stringify(okTool({ job_id: "mjob_42", status: mediaStatus, url: "https://cdn.example/async.png", cost_paid_usd: 0.31 })), { status: 200, headers: { "content-type": "application/json" } });
       case "subscribe_progress":
         return new Response(JSON.stringify(okTool({ job_id: "mjob_42", status: "running" })), { status: 200, headers: { "content-type": "application/json" } });
       case "place_subject":
@@ -413,6 +423,7 @@ describe("async provider operations (mocked)", () => {
     if (realFetch) globalThis.fetch = realFetch;
     realFetch = undefined;
     failNext = null;
+    mediaStatus = "completed";
   });
 
   it("async submit returns the provider id without holding for output", async () => {
@@ -432,6 +443,14 @@ describe("async provider operations (mocked)", () => {
     assert.equal(s.terminal, true);
     assert.equal(s.outputUrl, "https://cdn.example/async.png");
     assert.equal(s.costUsd, 0.31);
+  });
+
+  it("treats Livepeer's done status as terminal", async () => {
+    mediaStatus = "done";
+    stubFetch();
+    const s = await new LivepeerMcpClient(livepeerConfig()).getMediaStatus("mjob_42");
+    assert.equal(s.terminal, true);
+    assert.equal(s.outputUrl, "https://cdn.example/async.png");
   });
 
   it("progress wait returns non-terminal snapshots for re-polling", async () => {

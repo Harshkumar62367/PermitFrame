@@ -29,9 +29,10 @@ export type {
 export {
   TEMPLATE_IDS,
   PACK_SIZES,
+  PACK_SIZE_GUIDANCE,
   TEMPLATE_ASSET_TYPES,
   TEMPLATE_FORMATS,
-  PACK_SIZE_GUIDANCE,
+  DEFERRED_MOTION_REASON,
   listTemplates,
   getTemplate,
   findRecipe,

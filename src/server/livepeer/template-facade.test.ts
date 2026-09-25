@@ -56,7 +56,7 @@ describe("façade identity", () => {
     assert.deepEqual(facade.TEMPLATE_IDS, TEMPLATE_IDS);
     assert.deepEqual(facade.TEMPLATE_IDS, ["creator-campaign", "product-launch", "real-estate", "hospitality", "automotive"]);
     assert.equal(facade.listTemplates().length, 5);
-    assert.equal(facade.PACK_SIZE_GUIDANCE.campaign.min, 6);
+    assert.equal(facade.PACK_SIZE_GUIDANCE.campaign.min, 5);
   });
 });
 
@@ -156,8 +156,8 @@ describe("4. plan stage ids and dependencies unchanged", () => {
     if (!built.ok) return;
     const stages = toPlanStages(built.plan, "balanced");
     const byId = new Map(stages.map((s) => [s.id, s]));
-    assert.deepEqual(stages.map((s) => s.id), ["cc-hero-916", "cc-feed-45", "cc-feed-11"]);
-    assert.deepEqual(byId.get("cc-feed-45")?.dependsOnStageIds, []);
+    assert.deepEqual(stages.map((s) => s.id), ["cc-hero-916", "cc-feed-43", "cc-feed-11"]);
+    assert.deepEqual(byId.get("cc-feed-43")?.dependsOnStageIds, []);
     assert.equal(byId.get("cc-hero-916")?.role, "conceptImage");
     assert.equal(byId.get("cc-feed-11")?.capability, "flux-dev");
     assert.equal(byId.get("cc-feed-11")?.inputSource, "approved-source");

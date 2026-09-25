@@ -191,7 +191,10 @@ export function QueuePanel({ campaign, allowed, onChanged }: QueuePanelProps) {
             const shown = queueStatusForJob(displayStatus(job, plan, readyStages), blocked);
             const meta = STATUS_META[shown] ?? STATUS_META.queued;
             const refining = refineFor === job.id;
-            const cancellable = job.status === "queued" && !job.livepeerJobId;
+            // A rejected submit has no provider id even though its local
+            // status was advanced to generating. It has never been billed
+            // and can be cancelled locally before its retry window opens.
+            const cancellable = (job.status === "queued" || job.status === "generating") && !job.livepeerJobId;
             return (
               <li
                 key={job.id}
@@ -267,14 +270,6 @@ export function QueuePanel({ campaign, allowed, onChanged }: QueuePanelProps) {
                 {blocked && job.status === "ready_to_share" && (
                   <p className="mt-1.5 text-[11px] text-amber-700 dark:text-amber-300" role="status">
                     Stored and reviewable below - not deliverable to clients until the ratio matches the planned placement. Generation succeeded; nothing was deleted.
-                  </p>
-                )}
-                {job.requestMeta?.fallbackReason && (
-                  <p
-                    className="mt-1.5 break-words text-[11px] text-amber-700 dark:text-amber-300"
-                    title={job.requestMeta.fallbackReason}
-                  >
-                    Preservation fallback used - guided by the approved reference. Details in Review once ready.
                   </p>
                 )}
                 {job.error && (

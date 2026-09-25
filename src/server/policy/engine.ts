@@ -276,7 +276,7 @@ async function buildPlan(campaign: Campaign): Promise<PreflightDecision["plan"]>
     id: string,
     kind: "text-to-image" | "image-to-image",
     label: string,
-    format: "9:16" | "4:5" | "1:1" | "16:9"
+    format: "9:16" | "4:3" | "1:1" | "16:9"
   ): PreflightDecision["plan"][number] => ({
     id,
     kind,
@@ -364,6 +364,6 @@ const STRICT_ASPECT_LINE: Record<string, string> = {
     "Strict output shape: exact 1:1 square. Compose natively square with the subject centered and fully inside a full-bleed square frame — no bars, no portrait or landscape crop, no borders or padding.",
   "16:9":
     "Strict output shape: wide 16:9 landscape, wider than tall. Compose natively in 16:9 and fill the entire frame edge to edge, breathing room left and right — no letterboxing, no pillarboxing, no square crop, no borders or padding.",
-  "4:5":
-    "Strict output shape: 4:5 portrait, slightly taller than wide. Compose natively in 4:5 and fill the entire frame edge to edge — no letterboxing, no pillarboxing, no square crop, no borders or padding."
+  "4:3":
+    "Strict output shape: 4:3 standard landscape, slightly wider than tall. Compose natively in 4:3 and fill the entire frame edge to edge — no letterboxing, no pillarboxing, no square crop, no borders or padding."
 };

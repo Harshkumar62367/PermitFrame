@@ -70,7 +70,13 @@ export function useReviewActions(campaign: Campaign, onChanged: () => Promise<vo
     setError(null);
     setNotice(null);
     try {
-      const j = await apiPost<{ verificationRef: string; created: boolean }>(`/api/campaigns/${campaign.id}/refresh-verification`);
+      // Verification refresh publishes to the proof ledger like approval
+      // and republish, so it gets the same extended budget instead of the
+      // default 30s - a timeout retry safely mints another versioned
+      // snapshot (append-only, never destructive), and the generic timeout
+      // copy already says the server may still be working. Duplicate clicks
+      // are disabled while refreshing.
+      const j = await apiPost<{ verificationRef: string; created: boolean }>(`/api/campaigns/${campaign.id}/refresh-verification`, {}, undefined, 120000);
       setNotice(
         j.created
           ? "Verification link created from this approval's real data - share it from any output below."

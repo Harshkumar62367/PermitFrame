@@ -3,7 +3,8 @@ import { ArrowRight, Download, Maximize2, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { describeActualSize } from "@/server/livepeer/aspect";
 import { deriveQualityReview, qualityReviewCopy } from "@/server/livepeer/quality-review";
-import { preservationIndicator } from "@/lib/preservation";
+import { deliveryBlockReason } from "@/server/types";
+import { fidelityPillFor, REFERENCE_GUIDED_COPY } from "@/lib/preservation";
 import { downloadHrefFor } from "@/lib/proof-links";
 import type { DerivativeReceipt, ProductionJob } from "@/server/types";
 
@@ -48,6 +49,10 @@ export function ReviewAssetCard({
   // Reviewer state: hard delivery block dominates; advisory critique only
   // informs (never approves/rejects); missing data means not assessed.
   const review = deriveQualityReview(job, r);
+  // Fidelity pill: earned labels only (see fidelityPillFor) - a preserved
+  // claim requires a passed identity check, reference-guided never claims
+  // preservation, and unknown rows render no pill at all.
+  const pill = fidelityPillFor(r);
   return (
     <div className="group overflow-hidden rounded-xl bg-muted/60 ring-1 ring-border transition hover:ring-emerald-600/40">
       {r.mediaType === "image" ? (
@@ -94,19 +99,20 @@ export function ReviewAssetCard({
           {r.actualWidth !== undefined && r.actualHeight !== undefined && ` · ${r.actualWidth}×${r.actualHeight}`}
           {" · "}{r.actualCapability ?? r.capability}
         </p>
-        {(() => {
-          // What actually ran, not what was planned: compact pill,
-          // full sentence on hover. Legacy rows without preservation
-          // fields normalize to no claim and render nothing here.
-          const ind = preservationIndicator(r);
-          if (!ind.label) return null;
-          return (
-            <p className="text-[10.5px] font-medium text-muted-foreground" title={ind.detail}>
-              {ind.label}
-              {ind.fallbackUsed && <span className="text-amber-700 dark:text-amber-300"> · fallback used</span>}
-            </p>
-          );
-        })()}
+        {pill && (
+          <p
+            className={
+              pill.tone === "emerald"
+                ? "text-[10.5px] font-medium text-emerald-700 dark:text-emerald-300"
+                : pill.tone === "rose"
+                  ? "text-[10.5px] font-medium text-rose-700 dark:text-rose-300"
+                  : "text-[10.5px] text-muted-foreground"
+            }
+            title={pill.label === "Reference-guided" ? REFERENCE_GUIDED_COPY : undefined}
+          >
+            {pill.label}
+          </p>
+        )}
         {r.visibility === "private" && r.derivedFromFilmRunId && (
           <p className="break-words text-[10.5px] font-medium leading-snug text-muted-foreground">
             Private derivative - not included in client delivery.
@@ -137,7 +143,7 @@ export function ReviewAssetCard({
                 : "mt-0.5 break-words text-[11px] leading-snug text-muted-foreground"
             }
           >
-            {qualityReviewCopy(review.state)}
+            {qualityReviewCopy(review.state, deliveryBlockReason(r))}
           </p>
           {review.note && (
             <p className="mt-0.5 break-words text-[10.5px] leading-snug text-muted-foreground" title="Note from the automated visual check - advisory only">

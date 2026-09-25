@@ -38,7 +38,7 @@ export interface CreativeSubmitArgs {
   title: string;
   scenes: CreativeSceneArg[];
   target_duration_sec: number;
-  /** Omitted when the confirmed aspect has no provider enum value (4:5). */
+  /** Omitted when the confirmed aspect has no provider enum value (never mapped to a lookalike). */
   aspect_ratio?: string;
   deliver: "reel";
   budget_usd: number;

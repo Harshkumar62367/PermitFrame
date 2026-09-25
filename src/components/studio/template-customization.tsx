@@ -193,7 +193,7 @@ export function TemplateCustomization({
             <div>
               <p className="text-[12px] font-medium text-muted-foreground">Formats</p>
               <div className="mt-1.5 flex flex-wrap gap-2">
-                {["9:16", "4:5", "1:1", "16:9"].map((f) => {
+                {["9:16", "4:3", "1:1", "16:9"].map((f) => {
                   const on = formats.includes(f);
                   return (
                     <button

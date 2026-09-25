@@ -7,6 +7,7 @@ import { apiGet, apiPost } from "@/lib/api";
 import { newRunKey } from "@/lib/idempotency-key";
 import { useInvalidateWorkspaceSnapshot } from "@/lib/use-workspace-snapshot";
 import { cn } from "@/lib/utils";
+import { unsupportedCreativeFormatReason } from "@/lib/creative-format";
 import type { Campaign, ProductionStagePlan } from "@/server/types";
 import { deliveryBlockedJobIds } from "@/server/types";
 import { deriveQualityReview } from "@/server/livepeer/quality-review";
@@ -40,6 +41,11 @@ const STATE_META: Record<DeliverableState, { label: string; className: string }>
   done: { label: "Complete", className: "bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-950/40 dark:text-emerald-300 dark:ring-emerald-800" },
   review: { label: "Needs ratio review", className: "bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-800" },
   failed: { label: "Needs retry", className: "bg-rose-50 text-rose-700 ring-rose-600/20 dark:bg-rose-950/40 dark:text-rose-300 dark:ring-rose-800" }
+};
+
+const UNAVAILABLE_META = {
+  label: "Unavailable",
+  className: "bg-muted text-muted-foreground ring-border"
 };
 
 /**
@@ -85,7 +91,13 @@ export function CreativePlan({ campaign, allowed, filmMode, onChanged }: Creativ
   const [error, setError] = useState<string | null>(null);
   const invalidateSnapshot = useInvalidateWorkspaceSnapshot();
 
-  const selectable = deliverables.flatMap((d) => d.stages).filter((s) => !succeededStageIds.has(s.id));
+  const unsupportedReasonByStageId = useMemo(
+    () => new Map(deliverables.flatMap((d) => d.stages).map((stage) => [stage.id, unsupportedCreativeFormatReason(stage.capability, stage.format)])),
+    [deliverables]
+  );
+  const selectable = deliverables
+    .flatMap((d) => d.stages)
+    .filter((s) => !succeededStageIds.has(s.id) && !unsupportedReasonByStageId.get(s.id));
   // Recommended start, not the whole pack: the platform-matched
   // deliverable's image stages (video is never preselected). Explicit user
   // choices override and persist; the recommendation only fills in while
@@ -154,11 +166,28 @@ export function CreativePlan({ campaign, allowed, filmMode, onChanged }: Creativ
     try {
       // Client-generated run key: double-clicks and retries replay the same
       // run instead of dispatching duplicate paid jobs.
-      await apiPost(`/api/campaigns/${campaign.id}/produce`, {
+      const submit = apiPost(`/api/campaigns/${campaign.id}/produce`, {
         stageIds: selectedStages.map((s) => s.id),
         idempotencyKey: newRunKey("studio")
-      });
+      }, undefined, 90_000);
+      // A cold server/database/ledger path can take longer than the provider
+      // itself. Do not leave the confirmation dialog covering the page while
+      // that durable, idempotent submit finishes. The request remains in
+      // flight and `busy` stays true, so the user cannot accidentally create
+      // a second paid run.
+      const handoff = await Promise.race([
+        submit.then(() => true),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 10_000))
+      ]);
+      if (!handoff) {
+        setConfirming(false);
+        setError("Your request is being processed. Please stay on this page while it starts.");
+        invalidateSnapshot();
+        void onChanged();
+      }
+      await submit;
       setConfirming(false);
+      setError(null);
       invalidateSnapshot();
       await onChanged();
     } catch (e) {
@@ -215,8 +244,9 @@ export function CreativePlan({ campaign, allowed, filmMode, onChanged }: Creativ
         {deliverables.map((d) => {
           const stageIds = d.stages.map((s) => s.id);
           const state = deliverableState(campaign.jobs, stageIds, blockedStageIds);
-          const meta = STATE_META[state];
-          const selectableIds = stageIds.filter((id) => !succeededStageIds.has(id));
+          const unavailable = stageIds.length > 0 && stageIds.every((id) => !!unsupportedReasonByStageId.get(id));
+          const meta = unavailable ? UNAVAILABLE_META : STATE_META[state];
+          const selectableIds = stageIds.filter((id) => !succeededStageIds.has(id) && !unsupportedReasonByStageId.get(id));
           const checkedCount = selectableIds.filter((id) => selectedIds.includes(id)).length;
           const checked = selectableIds.length > 0 && checkedCount === selectableIds.length;
           const outputs = receiptsForStages(campaign.receipts, campaign.jobs, stageIds);
@@ -245,6 +275,10 @@ export function CreativePlan({ campaign, allowed, filmMode, onChanged }: Creativ
                   >
                     <Check className="h-3.5 w-3.5" aria-hidden />
                   </button>
+                ) : unavailable ? (
+                  <span className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground ring-1 ring-border" aria-label={`${d.title} is unavailable`}>
+                    <X className="h-3.5 w-3.5" aria-hidden />
+                  </span>
                 ) : state === "review" ? (
                   <span className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-md bg-amber-600/10 text-amber-700 ring-1 ring-amber-600/20 dark:text-amber-300" aria-label={`${d.title} needs ratio review`}>
                     <TriangleAlert className="h-3.5 w-3.5" aria-hidden />
@@ -262,6 +296,16 @@ export function CreativePlan({ campaign, allowed, filmMode, onChanged }: Creativ
                   <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
                     <span className="rounded-full bg-secondary px-2 py-0.5 font-mono text-[10px] text-secondary-foreground">{d.spec}</span>
                     <KindBadge stages={d.stages} />
+                    {d.stages.some((s) => s.fidelity === "product-preserving") && (
+                      <span className="rounded-full bg-emerald-600/10 px-2 py-0.5 text-[10px] font-medium text-emerald-700 ring-1 ring-emerald-600/20 dark:text-emerald-300" title="Identity preservation is required: place_subject with no generic fallback, plus a post-render identity check.">
+                        Product-preserving
+                      </span>
+                    )}
+                    {d.stages.some((s) => s.fidelity === "property-preserving") && (
+                      <span className="rounded-full bg-emerald-600/10 px-2 py-0.5 text-[10px] font-medium text-emerald-700 ring-1 ring-emerald-600/20 dark:text-emerald-300" title="Identity preservation is required: place_subject with no generic fallback, plus a post-render identity check.">
+                        Property-preserving
+                      </span>
+                    )}
                     <span className="font-mono text-[10px] text-muted-foreground">{formatUsd(estimateStages(d.stages.filter((s) => !succeededStageIds.has(s.id))))} remaining</span>
                   </div>
                   <p className="mt-1 text-[12px] text-muted-foreground">{d.platforms}</p>
@@ -273,7 +317,8 @@ export function CreativePlan({ campaign, allowed, filmMode, onChanged }: Creativ
                       const job = campaign.jobs.find((j) => j.stageId === stage.id);
                       const blocked = blockedStageIds.has(stage.id);
                       const done = job?.status === "ready_to_share" && !blocked;
-                      const selectableStage = !done && !blocked;
+                      const unsupportedReason = unsupportedReasonByStageId.get(stage.id);
+                      const selectableStage = !done && !blocked && !unsupportedReason;
                       // Advisory attention only: never changes selectability.
                       const attention =
                         !!job &&
@@ -295,6 +340,13 @@ export function CreativePlan({ campaign, allowed, filmMode, onChanged }: Creativ
                             >
                               <Check className="h-3 w-3" aria-hidden />
                             </button>
+                          ) : unsupportedReason ? (
+                            <span
+                              className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground ring-1 ring-border"
+                              title={unsupportedReason}
+                            >
+                              Unavailable
+                            </span>
                           ) : blocked ? (
                             <span className="shrink-0 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700 ring-1 ring-amber-600/20 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-800" title="Stored and reviewable, but not deliverable until the ratio matches - regenerate from Review & deliver">
                               Needs ratio review
@@ -305,6 +357,7 @@ export function CreativePlan({ campaign, allowed, filmMode, onChanged }: Creativ
                           <span className={cn("min-w-0 flex-1 truncate", !isChecked && selectableStage && "text-muted-foreground")}>
                             {stage.label}
                           </span>
+                          {unsupportedReason && <span className="sr-only">{unsupportedReason}</span>}
                           {job && job.status === "generating" && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-amber-600" aria-hidden />}
                           {job && job.status === "queued" && <CircleDashed className="h-3.5 w-3.5 shrink-0 text-amber-600" aria-hidden />}
                           {job && job.status === "failed" && <X className="h-3.5 w-3.5 shrink-0 text-rose-600" aria-hidden />}

@@ -144,7 +144,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       summary: `Creator ${passport.creatorName} attested a Permission Passport.`,
       refs: [passport.id]
     });
-  });
+  // No normalized mirror: the new passport is not referenced by any
+  // campaign yet (campaign writes mirror the rows they reference), and
+  // invites/events are only ever read from the workspace blob.
+  }, { mirror: false });
 
   return NextResponse.json({ attested: true, passportId: passport.id, ual, explorerUrl });
     });

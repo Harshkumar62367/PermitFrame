@@ -6,7 +6,6 @@ import { withCampaignLock } from "./mutex";
 import { fetchLivePriceMap, quoteStage } from "./pricing";
 import { isExactRun, runOwnsJob } from "./run-scope";
 import type { PumpOptions, PumpResult } from "./run-poll";
-import { STATUS_PUMP } from "./run-poll";
 
 /**
  * Run lifecycle: failure/completion settlement, cancellation, spend
@@ -31,7 +30,10 @@ export function splitCancelTargets(jobs: ProductionJob[], ids?: string[]): Cance
   const split: CancelSplit = { local: [], provider: [], skipped: [] };
   for (const job of jobs) {
     if (wanted && !wanted.has(job.id)) continue;
-    if (job.status === "queued" && !job.livepeerJobId) {
+    // A submit can be rejected before Livepeer allocates a job id.  The
+    // dispatcher has already set the row to `generating` at that point, but
+    // it is still purely local work and must remain safely cancellable.
+    if ((job.status === "queued" || job.status === "generating") && !job.livepeerJobId) {
       split.local.push(job);
     } else if (job.status === "generating" && job.livepeerJobId) {
       split.provider.push(job);
@@ -144,7 +146,7 @@ export async function cancelRunJobs(
       writeWorkspace(workspaceId, (d) => {
         const ids = new Set(split.local.map((j) => j.id));
         for (const j of d.campaigns.find((x) => x.id === campaignId)?.jobs ?? []) {
-          if (ids.has(j.id) && j.status === "queued" && !j.livepeerJobId) {
+          if (ids.has(j.id) && (j.status === "queued" || j.status === "generating") && !j.livepeerJobId) {
             j.status = "cancelled";
             j.finishedAt = nowIso();
           }
@@ -263,8 +265,10 @@ export interface RunStatusSnapshot {
 export type SnapshotPump = (workspaceId: string, campaignId: string, opts: PumpOptions) => Promise<PumpResult>;
 
 /**
- * Status-route logic: read/poll-only short pump first (returns fast), full
- * detached pump alongside (not awaited), ledger on cached prices only.
+ * Status-route logic: database snapshot immediately, with one detached
+ * progress pump. Browser polling must never itself hold a Livepeer request
+ * open: it made each UI refresh take 4-5 seconds and multiplied provider
+ * probes while a job was already being advanced in the background.
  */
 export async function fetchRunStatusSnapshot(
   workspaceId: string,
@@ -272,11 +276,9 @@ export async function fetchRunStatusSnapshot(
   runId: string,
   pump: SnapshotPump
 ): Promise<RunStatusSnapshot | null> {
-  // Read/poll-only first (returns fast), then full progress detached (not
-  // awaited) - this order matters: the per-campaign pump lock would
-  // otherwise collapse the short poll into the long pump and the GET would
-  // carry no fresh progress.
-  await pump(workspaceId, campaignId, { runId, ...STATUS_PUMP }).catch(() => undefined);
+  // The detached pump owns provider progress. The status response is a
+  // database read, so a slow provider can never turn every UI poll into a
+  // 4-5 second request. The campaign lock coalesces duplicate browser polls.
   void pump(workspaceId, campaignId, { runId, budgetMs: 8 * 60 * 1000 }).catch(() => undefined);
   const db = await readWorkspace(workspaceId);
   const campaign = db.campaigns.find((c) => c.id === campaignId);

@@ -9,7 +9,7 @@ export type AspectVerdict = "match" | "mismatch" | "unknown";
 
 export const FORMAT_RATIOS: Record<string, number> = {
   "9:16": 9 / 16,
-  "4:5": 4 / 5,
+  "4:3": 4 / 3,
   "1:1": 1,
   "16:9": 16 / 9
 };

@@ -44,7 +44,7 @@ export type SubmitErrorKind = "transient" | "terminal";
  */
 export function classifySubmitError(message: string): SubmitErrorKind {
   if (
-    /not currently available|unsupported|not supported|invalid|rejected|forbidden|unauthorized|exceeds|exceeded|payment|budget|blocked|denied/i.test(
+    /not currently available|unsupported|not supported|invalid|rejected|refused|forbidden|unauthorized|exceeds|exceeded|payment|budget|blocked|denied|argument\s+.*must be|must be one of|aspect_ratio/i.test(
       message
     )
   ) {

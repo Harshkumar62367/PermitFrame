@@ -87,7 +87,8 @@ OriginTrail explorer indexing can be incomplete for testnet records. BaseScan pr
 | --- | --- | --- | --- |
 | Contracts and contact details | Remains private | Not published by PermitFrame | Not shown. |
 | Full prompt text | Not part of public proof | Not published as public proof | Not shown. |
-| Source media file and reference | Retained according to workspace workflow | May be represented by minimized evidence | Not shown by default. |
+| Source media file (public URL) | PermitFrame retains the URL reference and its fingerprint; the file remains at its external host. | May be represented by minimized evidence. | The original file and its URL are not shown by default. |
+| Source media file (private upload) | Stored as an authenticated Cloudinary workspace copy with a byte fingerprint and controlled storage reference. | Only minimized classification or integrity evidence may be represented. | The original, storage reference, Cloudinary identifier, signed delivery URL, and byte hash are not shown. |
 | Permission and claim summary | Available to the workspace | May be queried as DKG evidence | Allowlisted summary only. |
 | Campaign outputs | Workspace delivery state | Receipt evidence may be shared | Only approved, eligible, finalized outputs. |
 | Narration and burned-caption derivatives | Private | Not promoted as public proof by default | Excluded. |

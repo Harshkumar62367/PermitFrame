@@ -8,6 +8,24 @@ import { persistPreviewInBackground } from "./pipeline";
 import { withCampaignLock } from "./mutex";
 import { qualityCheckEnabled } from "./run-retry";
 import { resolveSourceMediaUrl } from "../cloudinary";
+import { isStrictFidelity } from "./preservation-policy";
+
+/**
+ * Blocking identity threshold for the fidelity gate. Stricter than the
+ * 0.7 advisory review threshold: a strict-fidelity output must CLEAR this
+ * bar, and an unusable check result (null score, transport failure) never
+ * passes - unverified is not verified.
+ */
+export const FIDELITY_CRITIQUE_THRESHOLD = 0.8;
+
+/**
+ * Fidelity verdict from a critique_shot result. Pure: "passed" requires an
+ * explicit passing score; null (unparseable) and failures fail closed.
+ */
+export function evaluateFidelityCheck(critique: { score: number | null; passed: boolean } | null): "passed" | "failed" {
+  if (!critique || critique.score === null || !Number.isFinite(critique.score)) return "failed";
+  return critique.score >= FIDELITY_CRITIQUE_THRESHOLD && critique.passed ? "passed" : "failed";
+}
 
 /**
  * Output finalization: preview recording, durable-storage kickoff, receipt
@@ -35,6 +53,43 @@ export interface PreservationOutcome {
   evidenceLevel: PreservationEvidenceLevel;
   providerOperationSucceeded: boolean;
   fallbackReason?: string;
+}
+
+/**
+ * Identity check for one strict-fidelity place_subject output. Compares the
+ * generated output against the approved source across product shape,
+ * silhouette, material, colour, and visible marks/logos (plus
+ * facade/window/balcony geometry for properties, via the campaign's brand
+ * context). Returns "failed" on any unusable result - including a critique
+ * transport failure - so only a verified pass earns a preserved claim.
+ * Provider verdict text is never persisted (fixed product-owned verdict).
+ */
+async function runFidelityCheck(input: {
+  workspaceId: string;
+  campaign: Campaign;
+  generatedUrl: string;
+}): Promise<"passed" | "failed"> {
+  const db = await readWorkspace(input.workspaceId).catch(() => null);
+  const sourceRow = db?.sourceMedia.find((m) => m.id === input.campaign.sourceMediaId);
+  let sourceUrl: string | undefined;
+  try {
+    sourceUrl = sourceRow ? resolveSourceMediaUrl(sourceRow) : undefined;
+  } catch {
+    sourceUrl = undefined;
+  }
+  if (!sourceUrl) return "failed";
+  try {
+    const client = new LivepeerMcpClient(livepeerConfig());
+    const critique = await client.critiqueShot({
+      generatedUrl: input.generatedUrl,
+      referenceUrl: sourceUrl,
+      entityName: `${input.campaign.brand} ${input.campaign.productName}`.slice(0, 80),
+      threshold: FIDELITY_CRITIQUE_THRESHOLD
+    });
+    return evaluateFidelityCheck(critique);
+  } catch {
+    return "failed";
+  }
 }
 
 /** Record a provider output as preview, persist detached, critique advisory. */
@@ -68,6 +123,31 @@ export async function finalizeDispatchedJob(
       }
     })
   );
+  // Fidelity gate for strict stages rendered by place_subject. Runs BEFORE
+  // the persist worker below builds the receipt, so a failed check lands
+  // as a delivery block in the same write. Unlike the advisory check, this
+  // gate can fail the output - and the critique dimensions named in the
+  // record are product shape, silhouette, material, colour, visible
+  // marks/logos (plus facade/window/balcony geometry for properties).
+  const stageFidelity = campaign.preflight?.plan.find((s) => s.id === job.stageId)?.fidelity;
+  if (
+    isStrictFidelity(stageFidelity) &&
+    result.preservation?.actualCapability === "place_subject" &&
+    result.preservation.providerOperationSucceeded !== false &&
+    result.providerUrl
+  ) {
+    const fidelityCheck = await runFidelityCheck({
+      workspaceId,
+      campaign,
+      generatedUrl: result.providerUrl
+    });
+    await withCampaignLock(campaign.id, () =>
+      writeWorkspace(workspaceId, (d) => {
+        const j = d.campaigns.find((x) => x.id === campaign.id)?.jobs.find((x) => x.id === job.id);
+        if (j) j.requestMeta = { ...j.requestMeta, fidelityCheck };
+      })
+    ).catch(() => undefined);
+  }
   void persistPreviewInBackground({
     workspaceId,
     campaignId: campaign.id,

@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { unsupportedCreativeFormatReason } from "@/lib/creative-format";
 import type { QualityProfile } from "../types";
 import { redactSecrets } from "../dkg/edge-node-adapter";
 import {
@@ -39,6 +40,17 @@ export function livepeerConfig(): LivepeerConfig {
   };
 }
 
+/**
+ * Hackathon fast-tier policy: every generation uses the provider's fast
+ * tier unless explicitly disabled with LIVEPEER_PREFER_FAST=false. The
+ * default (absent or any other value) is enabled - this only adds the
+ * prefer_fast request flag and never changes model selection, validation,
+ * spend caps, idempotency, polling, or rights checks.
+ */
+export function preferFastByDefault(): boolean {
+  return process.env.LIVEPEER_PREFER_FAST !== "false";
+}
+
 export interface CapabilityRunResult {
   outputUrl?: string;
   raw: Record<string, unknown>;
@@ -69,6 +81,8 @@ export interface MediaStatusResult {
   jobId?: string;
   costUsd?: number;
   capability?: string;
+  /** Provider's terminal explanation, redacted before it reaches the UI. */
+  error?: string;
   raw: Record<string, unknown>;
 }
 
@@ -210,15 +224,18 @@ export class LivepeerMcpClient {
     idempotencyKey?: string;
     maxCostUsd?: number;
     /**
-     * Requested quality profile. Fast-path rendering (prefer_fast) is a
-     * Draft-preview tradeoff: sent ONLY for draft. Balanced and premium
-     * omit it entirely so the surface renders at full quality.
+     * Requested quality profile. Draft previews trade quality for speed.
+     * Separately, the hackathon fast-tier policy (LIVEPEER_PREFER_FAST,
+     * default on) requests prefer_fast on every generation; setting it to
+     * "false" restores draft-only fast-pathing with no other change.
      */
     qualityProfile?: QualityProfile;
   }): Promise<CapabilityRunResult> {
     const action = actionFor(input.kind, input.sourceUrl);
     const timeout = Math.min(Math.max(input.timeoutSeconds ?? 60, 10), 900);
     const aspectRatio = typeof input.inputs?.aspect_ratio === "string" ? (input.inputs.aspect_ratio as string) : undefined;
+    const unsupportedFormat = unsupportedCreativeFormatReason(input.capability, aspectRatio);
+    if (unsupportedFormat) throw new Error(unsupportedFormat);
     const duration =
       typeof input.inputs?.duration === "number"
         ? (input.inputs.duration as number)
@@ -237,9 +254,11 @@ export class LivepeerMcpClient {
         async: false,
         persist: false,
         ...(input.maxCostUsd !== undefined ? { max_cost_usd: input.maxCostUsd } : {}),
-        // Draft previews trade quality for speed; final-quality profiles
-        // must never fast-path. The flag is omitted (not false) otherwise.
-        ...(action === "generate" && input.qualityProfile === "draft" ? { prefer_fast: true } : {}),
+        // Hackathon fast tier: prefer_fast whenever the policy is on (all
+        // actions, all profiles, overrides included). With the policy off,
+        // only draft generate requests fast-path; the flag is omitted
+        // (not false) otherwise.
+        ...(preferFastByDefault() || (action === "generate" && input.qualityProfile === "draft") ? { prefer_fast: true } : {}),
         session_id: input.sessionId ? `permitframe_${sanitize(input.sessionId)}` : "permitframe",
         ...(input.idempotencyKey ? { idempotency_key: input.idempotencyKey } : {})
       },
@@ -286,11 +305,15 @@ export class LivepeerMcpClient {
     inputs?: Record<string, unknown>;
     maxCostUsd?: number;
     qualityProfile?: QualityProfile;
+    /** Ask the provider for its fast execution tier without changing model_override. */
+    preferFast?: boolean;
     sessionId?: string;
     idempotencyKey?: string;
   }): Promise<AsyncSubmitResult> {
     const action = actionFor(input.kind, input.sourceUrl);
     const aspectRatio = typeof input.inputs?.aspect_ratio === "string" ? (input.inputs.aspect_ratio as string) : undefined;
+    const unsupportedFormat = unsupportedCreativeFormatReason(input.capability, aspectRatio);
+    if (unsupportedFormat) throw new Error(unsupportedFormat);
     const duration = typeof input.inputs?.duration === "number" ? (input.inputs.duration as number) : action === "animate" ? 5 : undefined;
     const payload = await this.callTool(
       "create_media",
@@ -304,11 +327,21 @@ export class LivepeerMcpClient {
         async: true,
         persist: false,
         ...(input.maxCostUsd !== undefined ? { max_cost_usd: input.maxCostUsd } : {}),
-        ...(action === "generate" && input.qualityProfile === "draft" ? { prefer_fast: true } : {}),
+        // Same hackathon fast-tier policy as runCapability, plus the
+        // caller's explicit preferFast (e.g. provider-terminal retries),
+        // which keeps working even with the policy disabled.
+        ...(preferFastByDefault() ||
+        (action === "generate" && (input.qualityProfile === "draft" || input.preferFast === true))
+          ? { prefer_fast: true }
+          : {}),
         session_id: input.sessionId ? `permitframe_${sanitize(input.sessionId)}` : "permitframe",
         ...(input.idempotencyKey ? { idempotency_key: input.idempotencyKey } : {})
       },
-      120_000
+      // Async create_media must acknowledge a job promptly. The render can
+      // take minutes after that, but a 120-second submit wait made the UI
+      // look frozen before it even had a provider id to follow. A timeout is
+      // safe: the same run key is retried and the provider deduplicates it.
+      20_000
     );
     assertToolOk(payload, `create_media(${action}, ${input.capability})`);
     if (isFailed(extractStatus(payload))) {
@@ -345,6 +378,7 @@ export class LivepeerMcpClient {
       jobId: extractJobId(payload) ?? jobId,
       costUsd: num(s.cost_paid_usd ?? s.cost_usd_estimated ?? s.cost_usd ?? s.total_cost_usd),
       capability: str(s.capability ?? s.capability_used ?? s.model ?? s.model_used),
+      error: providerError(s),
       raw: s
     };
   }
@@ -371,6 +405,7 @@ export class LivepeerMcpClient {
       jobId: extractJobId(payload) ?? jobId,
       costUsd: num(s.cost_paid_usd ?? s.cost_usd_estimated ?? s.cost_usd ?? s.total_cost_usd),
       capability: str(s.capability ?? s.capability_used ?? s.model ?? s.model_used),
+      error: providerError(s),
       raw: s
     };
   }
@@ -807,7 +842,7 @@ function isFailed(status: string): boolean {
 
 /** Terminal provider states: nothing further will arrive for the job. */
 function isTerminal(status: string): boolean {
-  return ["completed", "complete", "succeeded", "success", "failed", "cancelled", "canceled", "error", "timeout", "timed_out"].includes(status);
+  return ["done", "completed", "complete", "succeeded", "success", "failed", "cancelled", "canceled", "error", "timeout", "timed_out"].includes(status);
 }
 
 function extractReference(payload: Record<string, unknown>): string | undefined {
@@ -839,6 +874,16 @@ function extractReferences(payload: Record<string, unknown>): string[] {
 
 function str(value: unknown): string | undefined {
   return typeof value === "string" && value ? value : undefined;
+}
+
+/** Extract only the provider's concise terminal explanation. */
+function providerError(value: Record<string, unknown>): string | undefined {
+  const phase = value.phase;
+  return str(
+    value.error ??
+      value.error_message ??
+      (typeof phase === "object" && phase !== null ? (phase as Record<string, unknown>).label : undefined)
+  );
 }
 
 function num(value: unknown): number | undefined {

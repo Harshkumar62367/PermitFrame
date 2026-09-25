@@ -2,16 +2,18 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import type { Campaign, ProductionJob, ProductionStagePlan, StageRole } from "../types";
 import {
+  FIDELITY_REFUSAL,
   firstUsableOutput,
   classifyPreservationResult,
   isPreservationSourceUsable,
   isProductPhotoSupported,
+  isStrictFidelity,
   preservationOperationKey,
   requestedPreservationMode,
   resolvePreservation,
   type PreservationContext
 } from "./preservation-policy";
-import { normalizePreservation, preservationIndicator } from "@/lib/preservation";
+import { fidelityPillFor, normalizePreservation, preservationIndicator, REFERENCE_GUIDED_COPY } from "@/lib/preservation";
 import { provenanceMeta, preservationContextFor } from "./runner";
 import { requestMetaFor } from "./pipeline";
 
@@ -376,5 +378,109 @@ describe("legacy compatibility + UI copy", () => {
     assert.equal(ind.label, "Guided by approved reference");
     assert.equal(ind.fallbackUsed, true);
     assert.match(ind.detail, /fallback/i);
+  });
+});
+
+describe("source-fidelity modes (product/property-preserving)", () => {
+  it("strict stages request subject-placement on image kinds, never product-photo", () => {
+    assert.equal(
+      requestedPreservationMode({ role: "productPackshot", variationExplicit: false, variationSourceUrl: undefined, kind: "text-to-image", fidelity: "product-preserving" }),
+      "subject-placement"
+    );
+    assert.equal(
+      requestedPreservationMode({ role: "sourceGuidedImage", variationExplicit: false, variationSourceUrl: undefined, kind: "image-to-image", fidelity: "property-preserving" }),
+      "subject-placement"
+    );
+    assert.equal(isStrictFidelity("product-preserving"), true);
+    assert.equal(isStrictFidelity("property-preserving"), true);
+    assert.equal(isStrictFidelity("conceptual"), false);
+    assert.equal(isStrictFidelity(undefined), false);
+  });
+
+  it("strict stages resolve place_subject with no generic fallback", () => {
+    const d = resolvePreservation(ctx({ role: "productPackshot", fidelity: "product-preserving" }));
+    assert.equal(d.resolved, "subject-placement");
+    assert.equal(d.actualCapability, "place_subject");
+    assert.equal(d.allowFallbackToSourceGuided, false);
+    assert.equal(d.evidenceLevel, "product-preserving");
+    assert.equal(d.refusal, undefined);
+    const property = resolvePreservation(ctx({ role: "sourceGuidedImage", fidelity: "property-preserving" }));
+    assert.equal(property.resolved, "subject-placement");
+    assert.equal(property.evidenceLevel, "property-preserving");
+    assert.equal(property.allowFallbackToSourceGuided, false);
+  });
+
+  it("strict stages refuse (exact message) when place_subject is switched off", () => {
+    const d = resolvePreservation(ctx({ role: "productPackshot", fidelity: "product-preserving", placeSubjectMode: "off" }));
+    assert.equal(d.allowFallbackToSourceGuided, false);
+    assert.equal(d.refusal, FIDELITY_REFUSAL);
+    assert.equal(
+      FIDELITY_REFUSAL,
+      "Could not preserve the approved product/property. No replacement image was generated."
+    );
+  });
+
+  it("strict stages refuse motion kinds and variations instead of downgrading", () => {
+    const motion = resolvePreservation(ctx({ kind: "image-to-video", fidelity: "product-preserving" }));
+    assert.equal(motion.refusal, FIDELITY_REFUSAL);
+    assert.equal(motion.allowFallbackToSourceGuided, false);
+    const propertyMotion = resolvePreservation(ctx({ kind: "image-to-video", fidelity: "property-preserving" }));
+    assert.equal(propertyMotion.refusal, FIDELITY_REFUSAL);
+    assert.equal(propertyMotion.allowFallbackToSourceGuided, false);
+    const variation = resolvePreservation({
+      ...ctx({ fidelity: "product-preserving" }),
+      variationExplicit: true,
+      variationSourceUrl: OUTPUT
+    });
+    assert.equal(variation.refusal, FIDELITY_REFUSAL);
+  });
+
+  it("conceptual stages keep legacy guided behavior byte-for-byte", () => {
+    const d = resolvePreservation(ctx({ role: "sourceGuidedImage" }));
+    assert.equal(d.resolved, "source-guided-generation");
+    assert.equal(d.allowFallbackToSourceGuided, true);
+    assert.equal(d.evidenceLevel, "source-guided");
+    const off = resolvePreservation(ctx({ role: "subjectPreservingImage", placeSubjectMode: "off" }));
+    assert.equal(off.allowFallbackToSourceGuided, true);
+    assert.match(off.fallbackReason ?? "", /operator switch/);
+  });
+});
+
+describe("fidelity pills (earned labels only)", () => {
+  it("labels passed strict outputs as preserved", () => {
+    assert.deepEqual(
+      fidelityPillFor({ sourceFidelity: "product-preserving", fidelityCheck: "passed", role: "productPackshot", mediaType: "image" }),
+      { label: "Product preserved", tone: "emerald" }
+    );
+    assert.deepEqual(
+      fidelityPillFor({ sourceFidelity: "property-preserving", fidelityCheck: "passed", role: "subjectPreservingImage", mediaType: "image" }),
+      { label: "Property preserved", tone: "emerald" }
+    );
+  });
+
+  it("labels failed checks as failed and guided renders as reference-guided", () => {
+    assert.deepEqual(
+      fidelityPillFor({ sourceFidelity: "product-preserving", fidelityCheck: "failed", role: "productPackshot", mediaType: "image" }),
+      { label: "Preservation failed", tone: "rose" }
+    );
+    assert.deepEqual(
+      fidelityPillFor({ fidelityCheck: undefined, role: "sourceGuidedImage", mediaType: "image" }),
+      { label: "Reference-guided", tone: "muted" }
+    );
+    assert.equal(
+      REFERENCE_GUIDED_COPY,
+      "Reference-guided - exact identity is not guaranteed."
+    );
+  });
+
+  it("renders no pill for unknown, legacy, concept, motion, or unchecked strict rows", () => {
+    assert.equal(fidelityPillFor(null), null);
+    assert.equal(fidelityPillFor({ sourceFidelity: "conceptual", role: "conceptImage", mediaType: "image" }), null);
+    assert.equal(fidelityPillFor({ sourceFidelity: "conceptual", role: "sourceGuidedImage", mediaType: "video" }), null);
+    assert.equal(
+      fidelityPillFor({ sourceFidelity: "product-preserving", role: "productPackshot", mediaType: "image" }),
+      null,
+      "strict success without a recorded check claims nothing"
+    );
   });
 });

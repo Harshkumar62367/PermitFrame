@@ -1,7 +1,7 @@
 "use client";
 
 import { useParams, useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { FadeIn } from "@/components/motion-primitives";
 import { CampaignExtras } from "@/components/campaign-extras";
@@ -20,12 +20,6 @@ import { useLongAction } from "@/lib/use-long-action";
 import { campaignDetailKey, useCampaignDetail } from "@/lib/use-campaign";
 import { useInvalidateDkgGraph } from "@/lib/use-dkg-graph";
 import { useInvalidateWorkspaceSnapshot } from "@/lib/use-workspace-snapshot";
-import { isActiveJobStatus } from "@/server/types";
-
-// Live progress polling while jobs run: starts at 3s, backs off to 30s on
-// consecutive background failures. See reloadCampaign below.
-const POLL_BASE_MS = 3000;
-const POLL_MAX_MS = 30000;
 
 export default function CampaignWorkspacePage() {
   const params = useParams<{ id: string }>();
@@ -43,8 +37,6 @@ export default function CampaignWorkspacePage() {
   const [forceName, setForceName] = useState("");
 
   const [lastAction, setLastAction] = useState<{ label: string; path: string; body?: unknown } | null>(null);
-  const reloadInflight = useRef(false);
-  const pollBackoffMs = useRef(POLL_BASE_MS);
   const invalidateSnapshot = useInvalidateWorkspaceSnapshot();
   const invalidateDkgGraph = useInvalidateDkgGraph();
   // Permission evaluation consults the live ledger and can legitimately
@@ -70,48 +62,15 @@ export default function CampaignWorkspacePage() {
   // background-tick failures keep old rows and back off silently.
   const error = actionError ?? ((!data && queryError) ? (queryError instanceof Error ? queryError.message : "Campaign failed to load.") : null);
 
-  async function reloadCampaign(quiet = false) {
-    // Single-flight: a slow tick must never stack overlapping requests, and
-    // background ticks back off on consecutive failures instead of flashing
-    // error banners while jobs run. Only the initial load and user actions
-    // surface errors; the interval below resets the backoff on success.
-    if (reloadInflight.current) return;
-    reloadInflight.current = true;
+  async function reloadCampaign() {
     try {
       await queryClient.invalidateQueries({ queryKey: campaignDetailKey(id) });
       await requestCampaign();
       setActionError(null);
-      pollBackoffMs.current = POLL_BASE_MS;
     } catch (e) {
-      if (!quiet) setActionError(e instanceof Error ? e.message : "Campaign failed to load.");
-      else pollBackoffMs.current = Math.min(pollBackoffMs.current * 2, POLL_MAX_MS);
-    } finally {
-      reloadInflight.current = false;
+      setActionError(e instanceof Error ? e.message : "Campaign failed to load.");
     }
   }
-
-  const active = useMemo(
-    () => data?.campaign.jobs.some((j) => isActiveJobStatus(j.status)) ?? false,
-    [data]
-  );
-
-  useEffect(() => {
-    if (!active) return;
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout>;
-    const tick = () => {
-      if (cancelled) return;
-      void reloadCampaign(true).finally(() => {
-        if (!cancelled) timer = setTimeout(tick, pollBackoffMs.current);
-      });
-    };
-    timer = setTimeout(tick, pollBackoffMs.current);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active]);
 
   async function action(label: string, path: string, body?: unknown) {
     if (busy) return;

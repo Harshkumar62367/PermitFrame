@@ -365,11 +365,12 @@ describe("recovery: pumpRun integration", () => {
     assert.ok(createCalls().length > before, "detached-capable pump dispatches");
   });
 
-  it("route snapshot: zero dispatches, short holds, cold pricing never blocks", async () => {
+  it("route snapshot: no provider probe or dispatch; cold pricing never blocks", async () => {
     subscribeMode = "running";
     const { getRunStatusSnapshot } = await import("./runner");
-    // In-flight keyframe (polled, never dispatched) + terminal square: even
-    // the detached full pump the snapshot fires cannot create new work here.
+    // In-flight keyframe + terminal square: the snapshot is a database read;
+    // its detached worker may advance the tracked provider job, but the HTTP
+    // response itself never waits on or probes Livepeer.
     // Unpriced capabilities prove the cold-pricing path (no static fallback).
     const { read, ws, cmp, run } = useStore([
       mkJob("keyframe", "generating", { livepeerJobId: "mjob_it_50", capability: "test-unpriced-cap", requestedCapability: "test-unpriced-cap" }),
@@ -386,12 +387,11 @@ describe("recovery: pumpRun integration", () => {
     assert.ok(snapshot, "snapshot returned");
     assert.equal(createCalls().length, 0, "status mode performs zero create_media calls");
     const holds = subscribeHolds();
-    assert.ok(holds.length > 0, "in-flight job was polled");
-    // The awaited status pump polls with the short hold; the detached full
-    // pump the snapshot fires alongside may poll with its long hold by
-    // design (it is not the status path) - so assert presence, not max.
-    assert.ok(Math.min(...holds) <= 4, "status pump polls with the short configured hold");
-    assert.ok(elapsed < 15000, `bounded well inside the UI abort budget (took ${elapsed}ms)`);
+    // The detached worker may already have begun its normal long provider
+    // wait, but the response itself never performs the old short status
+    // probe. That is what keeps browser polling cheap.
+    assert.ok(holds.every((hold) => hold > 4), "no short provider probe belongs to the status response");
+    assert.ok(elapsed < 1000, `snapshot stays a fast database read (took ${elapsed}ms)`);
     assert.equal(snapshot!.estimateTotal, null, "cold pricing yields null estimates, not a failure");
     assert.deepEqual(snapshot!.progress, { ready: 0, total: 2 });
     subscribeMode = "completed";

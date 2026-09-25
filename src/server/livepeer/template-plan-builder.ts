@@ -163,6 +163,9 @@ export function toPlanStages(built: BuiltTemplatePlan, profile: QualityProfile):
     inputSource: s.recipe.inputSource,
     qualityProfile: profile,
     role: s.recipe.role,
+    // Fidelity requirement travels only when strict; absent reads as
+    // conceptual everywhere (policy, pills, gates).
+    ...(s.recipe.fidelity && s.recipe.fidelity !== "conceptual" ? { fidelity: s.recipe.fidelity } : {}),
     ...(s.durationSeconds !== undefined ? { durationSeconds: s.durationSeconds } : {}),
     ...(s.requestedDurationSeconds !== undefined ? { requestedDurationSeconds: s.requestedDurationSeconds } : {}),
     ...(s.requestedCapability ? { requestedCapability: s.requestedCapability } : {}),

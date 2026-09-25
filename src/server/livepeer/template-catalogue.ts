@@ -1,4 +1,4 @@
-import type { QualityProfile, StageRole } from "../types";
+import type { QualityProfile, StageFidelity, StageRole } from "../types";
 
 /**
  * Template-driven production plans. A typed in-code catalogue (no database
@@ -23,7 +23,9 @@ export type PackSize = "quick" | "campaign" | "full" | "custom";
 
 export type TemplateAssetType = "image" | "motion" | "narration" | "music" | "subtitle";
 
-export type TemplateFormat = "9:16" | "4:5" | "1:1" | "16:9";
+// Template flows offer exactly the formats the provider accepts. Anything
+// else is rejected at validation before any model routing or spend.
+export type TemplateFormat = "9:16" | "4:3" | "1:1" | "16:9";
 
 export const TEMPLATE_IDS: TemplateId[] = [
   "creator-campaign",
@@ -37,13 +39,17 @@ export const PACK_SIZES: PackSize[] = ["quick", "campaign", "full", "custom"];
 
 export const TEMPLATE_ASSET_TYPES: TemplateAssetType[] = ["image", "motion", "narration", "music", "subtitle"];
 
-export const TEMPLATE_FORMATS: TemplateFormat[] = ["9:16", "4:5", "1:1", "16:9"];
+export const TEMPLATE_FORMATS: TemplateFormat[] = ["9:16", "4:3", "1:1", "16:9"];
 
 /** Suggested pack output bands. Custom is bounded server-side (entitlements). */
 export const PACK_SIZE_GUIDANCE: Record<Exclude<PackSize, "custom">, { min: number; max: number; blurb: string }> = {
   quick: { min: 3, max: 3, blurb: "Quick - 3 outputs" },
-  campaign: { min: 6, max: 8, blurb: "Campaign - 6-8 outputs" },
-  full: { min: 10, max: 16, blurb: "Full launch - 10-16 outputs" }
+  // Campaign floor is 5, not 6, and full floor is 8, not 10: strict-fidelity
+  // packs defer motion (identity-safe motion is unavailable), so their
+  // executable counts sit below the all-executable packs. Deferred items
+  // still list as planned, not dispatched.
+  campaign: { min: 5, max: 8, blurb: "Campaign - 5-8 outputs" },
+  full: { min: 8, max: 16, blurb: "Full launch - 8-16 outputs" }
 };
 
 export interface TemplateSelection {
@@ -115,6 +121,13 @@ export interface TemplateStageRecipe {
   deferredReason?: string;
   defaultDurationSeconds?: number;
   promptKey: string;
+  /**
+   * Source-fidelity requirement. Product Launch packshots/ads default to
+   * product-preserving, Real Estate listing images to property-preserving;
+   * everything else (including Creator Campaign) stays conceptual. Absent
+   * reads as conceptual - only non-conceptual values persist onto stages.
+   */
+  fidelity?: StageFidelity;
 }
 
 export interface PromptContext {
@@ -159,7 +172,7 @@ function still(
   kind: "text-to-image" | "image-to-image",
   role: StageRole,
   format: TemplateFormat,
-  opts: { optional?: boolean; quickPick?: boolean; promptKey: string }
+  opts: { optional?: boolean; quickPick?: boolean; promptKey: string; fidelity?: StageFidelity }
 ): TemplateStageRecipe {
   return {
     id,
@@ -173,7 +186,8 @@ function still(
     optional: opts.optional ?? false,
     quickPick: opts.quickPick ?? false,
     execution: "create_media",
-    promptKey: opts.promptKey
+    promptKey: opts.promptKey,
+    ...(opts.fidelity && opts.fidelity !== "conceptual" ? { fidelity: opts.fidelity } : {})
   };
 }
 
@@ -240,6 +254,39 @@ function deferredAudio(id: string, label: string, assetType: TemplateAssetType, 
 const DEFERRED_AUDIO_REASON =
   "Audio/subtitle production is specified but not dispatched yet - no speculative paid calls. The recipe, role, and tool strategy are recorded and it is listed as planned.";
 
+/**
+ * Deferred motion for strict-fidelity packs (product/property). There is
+ * no validated product-preserving video operation and no video fidelity
+ * gate, so generic image-to-video must never silently render as part of a
+ * faithful pack: the recipe stays visible as planned-but-not-dispatched
+ * with neutral copy, and can never be selected, queued, or charged.
+ */
+export const DEFERRED_MOTION_REASON = "Identity-safe motion is not available yet - planned, not dispatched.";
+
+function deferredMotion(
+  id: string,
+  label: string,
+  format: TemplateFormat,
+  dependsOn: string[],
+  opts: { optional?: boolean; quickPick?: boolean }
+): TemplateStageRecipe {
+  return {
+    id,
+    label,
+    kind: "image-to-video",
+    role: "imageToVideo",
+    format,
+    inputSource: "stage-output",
+    dependsOn,
+    assetType: "motion",
+    optional: opts.optional ?? false,
+    quickPick: opts.quickPick ?? false,
+    execution: "deferred",
+    deferredReason: DEFERRED_MOTION_REASON,
+    promptKey: "motion"
+  };
+}
+
 function guidedStills(ctx: PromptContext, what: string): string {
   return `${what} for ${ctx.brand} ${ctx.productName}, independently composed from the approved source and campaign brief (${ctx.brief}), guided by the approved source - never derived from another output. ${ctx.constraints.join(" ")}`;
 }
@@ -260,10 +307,10 @@ const TEMPLATES: ProductionTemplate[] = [
     platforms: ["Reels / TikTok", "Instagram feed", "YouTube thumbnail"],
     recipes: [
       still("cc-hero-916", "Creator hero (9:16)", "text-to-image", "conceptImage", "9:16", { quickPick: true, promptKey: "hero" }),
-      still("cc-feed-45", "4:5 feed post", "image-to-image", "sourceGuidedImage", "4:5", { quickPick: true, promptKey: "feed45" }),
+      still("cc-feed-43", "4:3 standard post", "image-to-image", "sourceGuidedImage", "4:3", { quickPick: true, promptKey: "feed43" }),
       still("cc-feed-11", "1:1 feed post", "image-to-image", "sourceGuidedImage", "1:1", { quickPick: true, promptKey: "feed11" }),
       still("cc-banner-169", "16:9 banner / thumbnail", "image-to-image", "sourceGuidedImage", "16:9", { promptKey: "banner" }),
-      still("cc-lifestyle-45", "Creator lifestyle (4:5)", "image-to-image", "sourceGuidedImage", "4:5", { promptKey: "lifestyle" }),
+      still("cc-lifestyle-43", "Creator lifestyle (4:3)", "image-to-image", "sourceGuidedImage", "4:3", { promptKey: "lifestyle" }),
       motion("cc-motion-916", "Motion asset (9:16)", "9:16", ["cc-hero-916"], { duration: 6, promptKey: "motion" }),
       still("cc-detail-11", "Product detail (1:1)", "image-to-image", "sourceGuidedImage", "1:1", { optional: true, promptKey: "detail" }),
       still("cc-story-916", "Story variant (9:16)", "image-to-image", "sourceGuidedImage", "9:16", { optional: true, promptKey: "story" }),
@@ -273,10 +320,10 @@ const TEMPLATES: ProductionTemplate[] = [
     ],
     promptScaffolds: {
       hero: (ctx) => `Advertising hero keyframe for ${ctx.brand} ${ctx.productName}: ${ctx.brief}. Vertical 9:16 composition. Preserve creator identity, wardrobe, and the approved product exactly. ${ctx.constraints.join(" ")}`,
-      feed45: (ctx) => guidedStills(ctx, "Square-portrait 4:5 social post"),
+      feed43: (ctx) => guidedStills(ctx, "Standard 4:3 social post"),
       feed11: (ctx) => guidedStills(ctx, "Square 1:1 social post with balanced centered composition"),
       banner: (ctx) => guidedStills(ctx, "Wide 16:9 banner/thumbnail with breathing room for headlines"),
-      lifestyle: (ctx) => guidedStills(ctx, "Creator lifestyle 4:5 moment, natural setting, product clearly visible"),
+      lifestyle: (ctx) => guidedStills(ctx, "Creator lifestyle 4:3 moment, natural setting, product clearly visible"),
       detail: (ctx) => guidedStills(ctx, "Close product detail 1:1, sharp focus, honest materials"),
       story: (ctx) => guidedStills(ctx, "Vertical 9:16 story variant with headroom for stickers and captions"),
       motion: (ctx) => `Smooth cinematic motion on the approved creator keyframe: gentle camera push-in, natural light. Keep the creator and product sharp and central; preserve identity throughout. ${ctx.constraints.join(" ")}`,
@@ -302,28 +349,28 @@ const TEMPLATES: ProductionTemplate[] = [
   {
     id: "product-launch",
     title: "Product Launch Pack",
-    description: "Catalog-grade launch set: clean packshot, lifestyle, detail, social ads, banner, and an optional motion reveal.",
+    description: "Catalog-grade launch set: clean packshot, lifestyle, detail, social ads, and banner. Motion is planned but not dispatched.",
     useCase: "Brands launching a physical product across store, social, and video placements.",
     requiredInputs: ["clean product reference image", "approved claims and brand rules"],
     platforms: ["Instagram feed", "Stories / Reels", "YouTube / retail banner"],
     recipes: [
-      still("pl-packshot-11", "Clean packshot (1:1)", "text-to-image", "productPackshot", "1:1", { quickPick: true, promptKey: "packshot" }),
-      still("pl-lifestyle-45", "Lifestyle image (4:5)", "image-to-image", "sourceGuidedImage", "4:5", { quickPick: true, promptKey: "lifestyle" }),
+      still("pl-packshot-11", "Clean packshot (1:1)", "text-to-image", "productPackshot", "1:1", { quickPick: true, promptKey: "packshot", fidelity: "product-preserving" }),
+      still("pl-lifestyle-43", "Lifestyle image (4:3)", "image-to-image", "sourceGuidedImage", "4:3", { quickPick: true, promptKey: "lifestyle", fidelity: "product-preserving" }),
       still("pl-story-916", "Story / reel keyframe (9:16)", "text-to-image", "conceptImage", "9:16", { quickPick: true, promptKey: "story" }),
-      still("pl-detail-11", "Detail / feature image (1:1)", "image-to-image", "sourceGuidedImage", "1:1", { promptKey: "detail" }),
-      still("pl-social-45", "Social ad (4:5)", "image-to-image", "sourceGuidedImage", "4:5", { promptKey: "social" }),
-      still("pl-banner-169", "Launch banner (16:9)", "image-to-image", "sourceGuidedImage", "16:9", { promptKey: "banner" }),
-      motion("pl-motion-reveal", "Motion reveal (9:16)", "9:16", ["pl-story-916"], { duration: 7, promptKey: "motion" }),
+      still("pl-detail-11", "Detail / feature image (1:1)", "image-to-image", "sourceGuidedImage", "1:1", { promptKey: "detail", fidelity: "product-preserving" }),
+      still("pl-social-43", "Social ad (4:3)", "image-to-image", "sourceGuidedImage", "4:3", { promptKey: "social", fidelity: "product-preserving" }),
+      still("pl-banner-169", "Launch banner (16:9)", "image-to-image", "sourceGuidedImage", "16:9", { promptKey: "banner", fidelity: "product-preserving" }),
+      deferredMotion("pl-motion-reveal", "Motion reveal (9:16)", "9:16", ["pl-story-916"], {}),
       upscaleMaster("pl-packshot-master", "Packshot master, hi-res (upscale)", ["pl-packshot-11"]),
-      still("pl-lifestyle-169", "Lifestyle wide (16:9)", "image-to-image", "sourceGuidedImage", "16:9", { optional: true, promptKey: "lifestyle-wide" }),
-      motion("pl-motion-alt", "Motion alt clip (9:16)", "9:16", ["pl-story-916"], { optional: true, duration: 5, promptKey: "motion" })
+      still("pl-lifestyle-169", "Lifestyle wide (16:9)", "image-to-image", "sourceGuidedImage", "16:9", { optional: true, promptKey: "lifestyle-wide", fidelity: "product-preserving" }),
+      deferredMotion("pl-motion-alt", "Motion alt clip (9:16)", "9:16", ["pl-story-916"], { optional: true })
     ],
     promptScaffolds: {
       packshot: (ctx) => `Clean studio packshot of ${ctx.brand} ${ctx.productName} on a neutral background, 1:1: preserve shape, material, color, and recognizable marks exactly. Never invent logo text - leave marks clean for the deterministic finishing step. ${ctx.constraints.join(" ")}`,
-      lifestyle: (ctx) => guidedStills(ctx, "Lifestyle 4:5 scene with the product in natural use"),
+      lifestyle: (ctx) => guidedStills(ctx, "Lifestyle 4:3 scene with the product in natural use"),
       story: (ctx) => `Story/reel keyframe for ${ctx.brand} ${ctx.productName}: ${ctx.brief}. Vertical 9:16, product heroically framed. ${ctx.constraints.join(" ")}`,
       detail: (ctx) => guidedStills(ctx, "Macro detail/feature 1:1 showing materials and craftsmanship honestly"),
-      social: (ctx) => guidedStills(ctx, "Social ad 4:5 with clear product focus and space for headline copy"),
+      social: (ctx) => guidedStills(ctx, "Social ad 4:3 with clear product focus and space for headline copy"),
       banner: (ctx) => guidedStills(ctx, "Launch banner 16:9 with breathing room for headlines on both sides"),
       "lifestyle-wide": (ctx) => guidedStills(ctx, "Lifestyle wide 16:9 environmental scene"),
       motion: (ctx) => `Product reveal motion on the approved story keyframe: slow orbital drift, studio light sweep, product sharp and central throughout. ${ctx.constraints.join(" ")}`,
@@ -349,21 +396,21 @@ const TEMPLATES: ProductionTemplate[] = [
   {
     id: "real-estate",
     title: "Real Estate Launch Pack",
-    description: "Listing pack from real property photography: cover, listing post, portal hero, detail cards, and a short property tour clip.",
+    description: "Listing pack from real property photography: cover, listing post, portal hero, and detail cards. Motion is planned but not dispatched.",
     useCase: "Agents launching a listing across portals, social, and video tours.",
     requiredInputs: ["real property photographs", "verified property facts"],
     platforms: ["Instagram feed", "Portal listings", "Reels / TikTok"],
     recipes: [
-      still("re-cover-916", "Social tour cover (9:16)", "image-to-image", "subjectPreservingImage", "9:16", { quickPick: true, promptKey: "cover" }),
-      still("re-listing-11", "Listing post (1:1)", "image-to-image", "subjectPreservingImage", "1:1", { quickPick: true, promptKey: "listing" }),
-      still("re-hero-169", "Portal hero (16:9)", "image-to-image", "subjectPreservingImage", "16:9", { quickPick: true, promptKey: "hero" }),
-      still("re-detail-45", "Feature detail I (4:5)", "image-to-image", "subjectPreservingImage", "4:5", { promptKey: "detail" }),
-      still("re-detail-11", "Feature detail II (1:1)", "image-to-image", "subjectPreservingImage", "1:1", { promptKey: "detail2" }),
-      motion("re-tour-motion", "Property tour (9:16)", "9:16", ["re-hero-169"], { duration: 8, promptKey: "motion" }),
-      still("re-detail-169", "Feature detail III (16:9)", "image-to-image", "subjectPreservingImage", "16:9", { optional: true, promptKey: "detail3" }),
+      still("re-cover-916", "Social tour cover (9:16)", "image-to-image", "subjectPreservingImage", "9:16", { quickPick: true, promptKey: "cover", fidelity: "property-preserving" }),
+      still("re-listing-11", "Listing post (1:1)", "image-to-image", "subjectPreservingImage", "1:1", { quickPick: true, promptKey: "listing", fidelity: "property-preserving" }),
+      still("re-hero-169", "Portal hero (16:9)", "image-to-image", "subjectPreservingImage", "16:9", { quickPick: true, promptKey: "hero", fidelity: "property-preserving" }),
+      still("re-detail-43", "Feature detail I (4:3)", "image-to-image", "subjectPreservingImage", "4:3", { promptKey: "detail", fidelity: "property-preserving" }),
+      still("re-detail-11", "Feature detail II (1:1)", "image-to-image", "subjectPreservingImage", "1:1", { promptKey: "detail2", fidelity: "property-preserving" }),
+      deferredMotion("re-tour-motion", "Property tour (9:16)", "9:16", ["re-hero-169"], {}),
+      still("re-detail-169", "Feature detail III (16:9)", "image-to-image", "subjectPreservingImage", "16:9", { optional: true, promptKey: "detail3", fidelity: "property-preserving" }),
       still("re-dusk-916", "Dusk-grade exterior (9:16, conceptual)", "image-to-image", "subjectPreservingImage", "9:16", { optional: true, promptKey: "dusk" }),
       upscaleMaster("re-cover-master", "Cover master, hi-res (upscale)", ["re-cover-916"]),
-      motion("re-tour-alt", "Tour alt clip (9:16)", "9:16", ["re-hero-169"], { optional: true, duration: 5, promptKey: "motion" }),
+      deferredMotion("re-tour-alt", "Tour alt clip (9:16)", "9:16", ["re-hero-169"], { optional: true }),
       deferredAudio("re-narration", "Tour narration", "narration", DEFERRED_AUDIO_REASON),
       deferredAudio("re-music", "Tour music bed", "music", DEFERRED_AUDIO_REASON),
       deferredAudio("re-subtitles", "Tour subtitles", "subtitle", DEFERRED_AUDIO_REASON)
@@ -372,7 +419,7 @@ const TEMPLATES: ProductionTemplate[] = [
       cover: (ctx) => `Listing cover from the approved property photograph for ${ctx.productName}: ${ctx.brief}. Vertical 9:16. Preserve the actual property - geometry, finishes, light - exactly; do not add rooms, views, or amenities. ${ctx.constraints.join(" ")}`,
       listing: (ctx) => `Square listing post from the approved property photograph for ${ctx.productName}, guided by the approved source: show only real, verified spaces and finishes. ${ctx.constraints.join(" ")}`,
       hero: (ctx) => `Portal hero from the approved property photograph for ${ctx.productName}: ${ctx.brief}. Wide 16:9, honest wide angle, no invented surroundings. ${ctx.constraints.join(" ")}`,
-      detail: (ctx) => `Feature detail from the approved property photograph for ${ctx.productName}, 4:5: one verified feature, true materials. ${ctx.constraints.join(" ")}`,
+      detail: (ctx) => `Feature detail from the approved property photograph for ${ctx.productName}, 4:3: one verified feature, true materials. ${ctx.constraints.join(" ")}`,
       detail2: (ctx) => `Feature detail from the approved property photograph for ${ctx.productName}, 1:1: one verified feature, true materials. ${ctx.constraints.join(" ")}`,
       detail3: (ctx) => `Feature detail from the approved property photograph for ${ctx.productName}, 16:9: one verified feature, true materials. ${ctx.constraints.join(" ")}`,
       dusk: (ctx) => `Conceptual dusk lighting grade of the approved property photograph for ${ctx.productName}, 9:16: identical geometry and finishes, sky and light only. MUST be labeled conceptual/virtual in delivery. ${ctx.constraints.join(" ")}`,
@@ -407,22 +454,22 @@ const TEMPLATES: ProductionTemplate[] = [
       still("ho-hero-916", "Room / venue hero (9:16)", "text-to-image", "conceptImage", "9:16", { quickPick: true, promptKey: "hero" }),
       still("ho-feed-11", "Feed post (1:1)", "image-to-image", "sourceGuidedImage", "1:1", { quickPick: true, promptKey: "feed" }),
       motion("ho-reel-916", "Reel (9:16)", "9:16", ["ho-hero-916"], { quickPick: true, duration: 6, promptKey: "motion" }),
-      still("ho-experience-45", "Experience / lifestyle (4:5)", "image-to-image", "sourceGuidedImage", "4:5", { promptKey: "experience" }),
+      still("ho-experience-43", "Experience / lifestyle (4:3)", "image-to-image", "sourceGuidedImage", "4:3", { promptKey: "experience" }),
       still("ho-dining-11", "Food / amenity (1:1)", "image-to-image", "sourceGuidedImage", "1:1", { promptKey: "dining" }),
       still("ho-banner-169", "Booking banner (16:9)", "image-to-image", "sourceGuidedImage", "16:9", { promptKey: "banner" }),
       still("ho-venue-169", "Venue wide (16:9)", "image-to-image", "sourceGuidedImage", "16:9", { optional: true, promptKey: "venue" }),
-      still("ho-detail-45", "Detail (4:5)", "image-to-image", "sourceGuidedImage", "4:5", { optional: true, promptKey: "detail" }),
+      still("ho-detail-43", "Detail (4:3)", "image-to-image", "sourceGuidedImage", "4:3", { optional: true, promptKey: "detail" }),
       motion("ho-reel-alt", "Reel alt clip (9:16)", "9:16", ["ho-hero-916"], { optional: true, duration: 6, promptKey: "motion" }),
       upscaleMaster("ho-hero-master", "Hero master, hi-res (upscale)", ["ho-hero-916"])
     ],
     promptScaffolds: {
       hero: (ctx) => `Room/venue hero for ${ctx.brand} ${ctx.productName}: ${ctx.brief}. Vertical 9:16. Show only real, verified spaces and facilities; maintain property identity. ${ctx.constraints.join(" ")}`,
       feed: (ctx) => guidedStills(ctx, "Square 1:1 feed post of a verified property moment"),
-      experience: (ctx) => guidedStills(ctx, "Experience/lifestyle 4:5 scene with verified amenities only"),
+      experience: (ctx) => guidedStills(ctx, "Experience/lifestyle 4:3 scene with verified amenities only"),
       dining: (ctx) => guidedStills(ctx, "Food/amenity 1:1, true presentation, no invented dishes"),
       banner: (ctx) => guidedStills(ctx, "Booking banner 16:9 with space for dates and rates copy"),
       venue: (ctx) => guidedStills(ctx, "Venue wide 16:9 establishing shot of verified spaces"),
-      detail: (ctx) => guidedStills(ctx, "Detail 4:5 of a verified facility or finish"),
+      detail: (ctx) => guidedStills(ctx, "Detail 4:3 of a verified facility or finish"),
       motion: (ctx) => `Destination reel motion on the approved hero: slow push through the verified space, hold on real amenities. Never invent facilities, landmarks, or availability. ${ctx.constraints.join(" ")}`,
       upscale: UPSCALE_PROMPT,
       "deferred-audio": DEFERRED_AUDIO_PROMPT
@@ -452,24 +499,24 @@ const TEMPLATES: ProductionTemplate[] = [
     platforms: ["Instagram feed", "Reels", "Launch / retail"],
     recipes: [
       still("au-studio-916", "Studio hero (9:16)", "text-to-image", "conceptImage", "9:16", { quickPick: true, promptKey: "hero" }),
-      still("au-social-45", "Social asset (4:5)", "image-to-image", "sourceGuidedImage", "4:5", { quickPick: true, promptKey: "social" }),
+      still("au-social-43", "Social asset (4:3)", "image-to-image", "sourceGuidedImage", "4:3", { quickPick: true, promptKey: "social" }),
       still("au-road-169", "Road / lifestyle scene (16:9)", "image-to-image", "sourceGuidedImage", "16:9", { quickPick: true, promptKey: "road" }),
       still("au-detail-11", "Feature detail (1:1)", "image-to-image", "sourceGuidedImage", "1:1", { promptKey: "detail" }),
       still("au-launch-169", "Launch asset (16:9)", "image-to-image", "sourceGuidedImage", "16:9", { promptKey: "launch" }),
       motion("au-motion-reveal", "Motion reveal (9:16)", "9:16", ["au-studio-916"], { duration: 7, promptKey: "motion" }),
       still("au-night-916", "Night grade (9:16)", "image-to-image", "sourceGuidedImage", "9:16", { optional: true, promptKey: "night" }),
-      still("au-interior-45", "Interior (4:5)", "image-to-image", "sourceGuidedImage", "4:5", { optional: true, promptKey: "interior" }),
+      still("au-interior-43", "Interior (4:3)", "image-to-image", "sourceGuidedImage", "4:3", { optional: true, promptKey: "interior" }),
       upscaleMaster("au-studio-master", "Studio master, hi-res (upscale)", ["au-studio-916"]),
       motion("au-motion-alt", "Motion alt clip (9:16)", "9:16", ["au-studio-916"], { optional: true, duration: 5, promptKey: "motion" })
     ],
     promptScaffolds: {
       hero: (ctx) => `Studio hero of ${ctx.brand} ${ctx.productName}: ${ctx.brief}. Vertical 9:16. Preserve body, trim, paint, and badges exactly against the approved reference. ${ctx.constraints.join(" ")}`,
-      social: (ctx) => guidedStills(ctx, "Vertical social 4:5 with the vehicle faithfully reproduced"),
+      social: (ctx) => guidedStills(ctx, "Standard social 4:3 with the vehicle faithfully reproduced"),
       road: (ctx) => guidedStills(ctx, "Road/lifestyle 16:9 scene, vehicle true to reference, plausible legal driving context"),
       detail: (ctx) => guidedStills(ctx, "Feature detail 1:1 - one verified trim or equipment feature, true materials"),
       launch: (ctx) => guidedStills(ctx, "Launch asset 16:9 with space for model and offer copy"),
       night: (ctx) => guidedStills(ctx, "Night lighting grade 9:16, identical body and trim, light only"),
-      interior: (ctx) => guidedStills(ctx, "Interior 4:5 matching the verified trim specification"),
+      interior: (ctx) => guidedStills(ctx, "Interior 4:3 matching the verified trim specification"),
       motion: (ctx) => `Launch reveal motion on the approved studio hero: slow orbital drift with a light sweep, body lines and badges preserved throughout. Never imply performance or safety beyond verified facts. ${ctx.constraints.join(" ")}`,
       upscale: UPSCALE_PROMPT,
       "deferred-audio": DEFERRED_AUDIO_PROMPT

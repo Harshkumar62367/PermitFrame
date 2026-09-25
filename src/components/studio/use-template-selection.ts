@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { apiGet, apiPost } from "@/lib/api";
+import { ApiError, apiGet, apiPost } from "@/lib/api";
 import { useInvalidateWorkspaceSnapshot } from "@/lib/use-workspace-snapshot";
+import type { CampaignDetail } from "@/lib/use-campaign";
 import type { Campaign } from "@/server/types";
 import { formatUsd, describeMotionOutputs } from "./studio-model";
 import { describeLegacyShortClipSeconds } from "@/server/livepeer/film-plan";
@@ -81,6 +82,7 @@ export function useTemplateSelection({ campaign, allowed, onChanged }: UseTempla
   const [previewing, setPreviewing] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [applying, setApplying] = useState(false);
+  const [applySlow, setApplySlow] = useState(false);
   const [applyError, setApplyError] = useState<string | null>(null);
   const invalidateSnapshot = useInvalidateWorkspaceSnapshot();
 
@@ -220,7 +222,7 @@ export function useTemplateSelection({ campaign, allowed, onChanged }: UseTempla
   }, [allowed, campaign.id, selection]);
 
   function toggleFormat(value: string) {
-    setFormats((prev) => toggleList(prev, value, ["9:16", "4:5", "1:1", "16:9"]));
+    setFormats((prev) => toggleList(prev, value, ["9:16", "4:3", "1:1", "16:9"]));
   }
 
   function toggleStage(value: string) {
@@ -232,16 +234,66 @@ export function useTemplateSelection({ campaign, allowed, onChanged }: UseTempla
   async function apply() {
     if (applying || !allowed) return;
     setApplying(true);
+    setApplySlow(false);
     setApplyError(null);
+    // Past ~20s the rights check + live cost lookup is still legitimately
+    // working (live discovery, pricing, ledger reads, plan rebuild) - say
+    // so instead of holding a dead-looking "Applying…" label.
+    const slowTimer = setTimeout(() => setApplySlow(true), 20000);
     try {
       await apiPost(`/api/campaigns/${campaign.id}/template`, { selection }, undefined, 120000);
       invalidateSnapshot();
       await onChanged();
+      setNotice(null);
     } catch (e) {
+      // Timeout-while-applied: the POST budget can expire after the server
+      // already persisted the plan (same class of skew as production
+      // submit). Verify once against the fresh campaign instead of leaving
+      // the user on a stale "Applying…" or forcing a blind retry.
+      if (e instanceof ApiError && e.status === 0) {
+        const recovered = await verifyApplyLanded();
+        if (recovered) return;
+      }
       setApplyError(e instanceof Error ? e.message : "Template apply failed. Nothing was changed.");
     } finally {
+      clearTimeout(slowTimer);
+      setApplySlow(false);
       setApplying(false);
     }
+  }
+
+  /**
+   * Reconcile after an apply timeout: reload the campaign and compare the
+   * persisted spec with the submitted draft. True when the plan landed
+   * (caller treats it as success); false when the outcome is still
+   * unknown and the timeout error should stand.
+   */
+  async function verifyApplyLanded(): Promise<boolean> {
+    setNotice("The request timed out - checking whether the plan was applied…");
+    try {
+      const fresh = await apiGet<CampaignDetail>(`/api/campaigns/${campaign.id}`, undefined, 60000);
+      const draft = {
+        templateId,
+        packSize,
+        assetTypes: motionOn ? ["image", "motion"] : ["image"],
+        formats,
+        stageIds,
+        motionSeconds,
+        qualityProfile: profile,
+        maxSpendCapUsd: cap.trim() === "" ? undefined : cap,
+        modelOverrides: { conceptImage: imageModel, imageToVideo: motionModel }
+      };
+      if (!computeHasChanges(fresh.campaign.request.productionSpec, draft)) {
+        invalidateSnapshot();
+        await onChanged();
+        setNotice("Plan applied - showing the active plan.");
+        return true;
+      }
+    } catch {
+      // Verification itself failed: fall through to the timeout error.
+    }
+    setNotice(null);
+    return false;
   }
 
   function switchTemplate(next: TemplateMeta) {
@@ -338,6 +390,7 @@ export function useTemplateSelection({ campaign, allowed, onChanged }: UseTempla
     previewing,
     notice,
     applying,
+    applySlow,
     applyError,
     // derived
     durationError,

@@ -55,7 +55,7 @@ export function validateTemplateSelection(raw: unknown, maxCustomStages: number)
     formats = [];
     for (const f of v.formats) {
       if (typeof f !== "string" || !(TEMPLATE_FORMATS as string[]).includes(f)) {
-        return { ok: false, error: `Unknown format "${String(f)}" - use 9:16, 4:5, 1:1, 16:9.` };
+        return { ok: false, error: `Unknown format "${String(f)}" - use 9:16, 4:3, 1:1, 16:9.` };
       }
       formats.push(f as TemplateFormat);
     }

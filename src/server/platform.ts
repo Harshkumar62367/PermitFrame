@@ -71,6 +71,11 @@ export async function upsertProductFacts(input: {
   } catch {
     // local mode writes succeed; real-mode failures surface in health panel
   }
+  // Mirror every edit to an existing record. A campaign can begin
+  // referencing it between reads, and normalized campaign-detail reads
+  // prefer the mirrored facts. A freshly generated id cannot yet be
+  // referenced, so only brand-new records may skip the full mirror.
+  const mirror = shouldMirrorFactsWrite(db, facts.id);
   await updateDb((d) => {
     const at = d.productFacts.findIndex((f) => f.id === facts.id);
     if (at >= 0) d.productFacts[at] = { ...facts, ual };
@@ -82,8 +87,18 @@ export async function upsertProductFacts(input: {
       summary: `Product facts published for ${facts.brand} ${facts.productName}.`,
       refs: [facts.id]
     });
-  });
+  }, mirror ? {} : { mirror: false });
   return { ...facts, ual };
+}
+
+/**
+ * Whether a product-facts write must run the normalized mirror. Every edit
+ * to an existing facts record mirrors immediately; only a brand-new id may
+ * skip the full mirror because no valid campaign can reference it yet. Pure
+ * and unit-tested.
+ */
+export function shouldMirrorFactsWrite(db: Database, factsId: string): boolean {
+  return db.productFacts.some((facts) => facts.id === factsId);
 }
 
 /* --------------------------------- creators -------------------------------- */
@@ -120,12 +135,13 @@ export function validateCreatorInput(
 }
 
 /**
- * Create a creator in the caller's workspace. Session-scoped via loadDb /
- * updateDb (the workspace comes from the session cookie, never from client
- * input). Database-only - no proof publication, no identity verification.
+ * Create a creator in the caller's workspace. Session-scoped via updateDb
+ * (the workspace comes from the session cookie, never from client input).
+ * Database-only - no proof publication, no identity verification. Skips
+ * the normalized mirror: creators have no normalized table, and the
+ * accompanying event is only ever read from the workspace blob.
  */
 export async function createCreator(input: CreatorInput): Promise<Creator> {
-  await loadDb();
   const validated = validateCreatorInput(input);
   if (!validated.ok) throw new Error(validated.error);
   const creator: Creator = { id: newId("crt"), name: validated.value.name, handle: validated.value.handle };
@@ -138,7 +154,7 @@ export async function createCreator(input: CreatorInput): Promise<Creator> {
       summary: `Creator "${creator.name}" added.`,
       refs: [creator.id]
     });
-  });
+  }, { mirror: false });
   return creator;
 }
 
@@ -194,7 +210,9 @@ export async function registerSourceMedia(input: {
       summary: `Source media "${media.title}" registered.`,
       refs: [media.id]
     });
-  });
+  // No normalized mirror: source rows only join via campaigns, and every
+  // campaign write mirrors the rows it references.
+  }, { mirror: false });
   return { ...media, ual };
 }
 
@@ -213,8 +231,10 @@ export async function registerUploadedSourceMedia(input: {
   mimeType?: unknown;
   filename?: unknown;
 }): Promise<SourceMedia> {
+  // Single authenticated resolution: read and write with the already
+  // authenticated workspace id instead of resolving the session again.
   const session = await requireCurrentSession();
-  const db = await loadDb();
+  const db = await loadWorkspaceDb(session.workspaceId);
   const resolved = resolveMediaCreator(db, input.creatorId);
   if (!resolved.ok) throw new Error(resolved.error);
   const creator = resolved.value;
@@ -255,7 +275,7 @@ export async function registerUploadedSourceMedia(input: {
   } catch {
     // keep the record locally if publication fails
   }
-  await updateDb((d) => {
+  await updateWorkspaceDb(session.workspaceId, (d) => {
     d.sourceMedia.push({ ...media, ual });
     d.events.push({
       id: newId("evt"),
@@ -264,7 +284,9 @@ export async function registerUploadedSourceMedia(input: {
       summary: `Source media "${media.title}" uploaded as a private workspace copy.`,
       refs: [media.id]
     });
-  });
+  // No normalized mirror: source rows only join via campaigns, and every
+  // campaign write mirrors the rows it references.
+  }, { mirror: false });
   return { ...media, ual };
 }
 
@@ -461,8 +483,12 @@ export interface ConsentWorkspaceStore {
 
 const liveConsentStore: ConsentWorkspaceStore = {
   loadWorkspace: (workspaceId: string) => loadWorkspaceDb(workspaceId),
+  // Viewed-marking and declines touch only invites (no normalized table)
+  // and workspace events (read from the blob; per-campaign timelines only
+  // surface events carrying a campaign ref, which these never do). Skipping
+  // the full mirror keeps every public link open fast.
   writeWorkspace: (workspaceId: string, mutator: (db: Database) => void) =>
-    updateWorkspaceDb(workspaceId, mutator).then(() => undefined)
+    updateWorkspaceDb(workspaceId, mutator, { mirror: false }).then(() => undefined)
 };
 
 const consentTransitionLocks = new Map<string, Promise<void>>();

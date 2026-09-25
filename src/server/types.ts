@@ -40,6 +40,16 @@ export type StageRole =
 export type StageInputSource = "approved-source" | "canonical-anchor" | "stage-output";
 
 /**
+ * Source-fidelity requirement for a stage. "conceptual" (default) allows
+ * generic source-guided generation; "product-preserving" (product packs,
+ * shoes, vehicles, packaging) and "property-preserving" (real-estate
+ * listings) require identity preservation via place_subject with no
+ * generic fallback, plus a post-render fidelity check. Missing on legacy
+ * rows, which read as "conceptual".
+ */
+export type StageFidelity = "conceptual" | "product-preserving" | "property-preserving";
+
+/**
  * Explicit persisted publication state. Set ONLY from real adapter results:
  * "local" (workspace store), "shared" (DKG Shared Working Memory),
  * "anchored" (on-chain Verifiable Memory finalize succeeded),
@@ -244,7 +254,7 @@ export function hasSharableReceipt(receipt: Pick<DerivativeReceipt, "storageStat
  * that only carry `aspectVerdict: "mismatch"` derive the same reason on
  * read (no migration). Absent verdict/dimensions never invent a block.
  */
-export type DeliveryBlockReason = "aspect_ratio_mismatch";
+export type DeliveryBlockReason = "aspect_ratio_mismatch" | "fidelity_check_failed";
 
 export function deliveryBlockReason(
   receipt: Pick<DerivativeReceipt, "deliveryBlocked" | "aspectVerdict">
@@ -299,7 +309,7 @@ export interface ProductionStagePlan {
   kind: "text-to-image" | "image-to-image" | "image-to-video" | "upscale" | "audio-to-text";
   capability: string;
   label: string;
-  format: "9:16" | "4:5" | "1:1" | "16:9";
+  format: "9:16" | "4:3" | "1:1" | "16:9";
   /**
    * Explicit DAG edges: stage ids whose outputs must be ready before this
    * stage runs. Independent stills carry [] - they never inherit a sibling's
@@ -317,6 +327,12 @@ export interface ProductionStagePlan {
   qualityProfile: QualityProfile;
   /** Production role, resolved per profile from live discovery. */
   role: StageRole;
+  /**
+   * Source-fidelity requirement (see StageFidelity). Set by template
+   * recipes; absent (legacy rows and conceptual stages) reads as
+   * "conceptual" - only non-conceptual values are persisted.
+   */
+  fidelity?: StageFidelity;
   /** Motion length in seconds for time-based stages (image-to-video). Resolved value. */
   durationSeconds?: number;
   /** Requested clip length before bucket/model adjustment (motion only). */
@@ -393,7 +409,7 @@ export interface ProductionJob {
      */
     preservationRequested?: "source-guided-generation" | "subject-placement" | "product-photo" | "variation";
     preservationResolved?: "source-guided-generation" | "subject-placement" | "product-photo" | "variation";
-    preservationEvidenceLevel?: "source-guided" | "subject-preserving" | "product-preserving" | "none";
+    preservationEvidenceLevel?: "source-guided" | "subject-preserving" | "product-preserving" | "property-preserving" | "none";
     /** Tool the resolved mode intended ("deferred" = known-but-unwired). */
     preservationRequestedCapability?: string;
     /** Tool that actually rendered the output. */
@@ -402,6 +418,13 @@ export interface ProductionJob {
     approvedSourceAssetId?: string;
     /** Why resolved differs from requested, or why an op fell back. */
     fallbackReason?: string;
+    /**
+     * An explicit recovery attempt asks the provider for its fast execution
+     * tier. This is recorded because it trades some render latency for a
+     * much lower chance of a worker-heartbeat reaper failure; it does not
+     * silently change the selected model.
+     */
+    fastTierRequested?: boolean;
     /**
      * Async preservation handle in flight: the provider job id belongs to
      * this preservation tool (not a create_media job). While set with a
@@ -420,6 +443,14 @@ export interface ProductionJob {
      * "Operation succeeded" - never "identity verified" (no visual
      * similarity is measured). */
     providerOperationSucceeded?: boolean;
+    /**
+     * Fidelity-gate verdict for place_subject outputs on strict-fidelity
+     * stages (product/property-preserving): "passed" only when the
+     * post-render identity check passed, "failed" otherwise (including an
+     * unusable check result - unverified never passes). Absent on all other
+     * rows. Copied onto receipts at finalization.
+     */
+    fidelityCheck?: "passed" | "failed";
   };
   /**
    * Explicit user refinement: this job varies a selected completed output
@@ -535,6 +566,18 @@ export interface DerivativeReceipt {
   qualityProfile?: QualityProfile;
   /** Production role the output fulfills. Missing on legacy rows. */
   role?: StageRole;
+  /**
+   * Source-fidelity requirement in force when this output rendered
+   * (product/property-preserving or conceptual). Set only for
+   * non-conceptual stages; missing reads as conceptual.
+   */
+  sourceFidelity?: StageFidelity;
+  /**
+   * Fidelity-gate verdict for place_subject outputs on strict-fidelity
+   * stages. "failed" persists deliveryBlocked below and blocks approval;
+   * "passed" earns the preserved pill. Absent unless the gate ran.
+   */
+  fidelityCheck?: "passed" | "failed";
   /** Capability the plan asked for, before any fallback/substitution. */
   requestedCapability?: string;
   /** Clean machine-readable capability actually rendered (never arrow text). */
@@ -569,7 +612,7 @@ export interface DerivativeReceipt {
    */
   preservationRequested?: "source-guided-generation" | "subject-placement" | "product-photo" | "variation";
   preservationResolved?: "source-guided-generation" | "subject-placement" | "product-photo" | "variation";
-  preservationEvidenceLevel?: "source-guided" | "subject-preserving" | "product-preserving" | "none";
+  preservationEvidenceLevel?: "source-guided" | "subject-preserving" | "product-preserving" | "property-preserving" | "none";
   preservationRequestedCapability?: string;
   preservationActualCapability?: string;
   approvedSourceAssetId?: string;

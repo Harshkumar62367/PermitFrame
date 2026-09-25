@@ -43,14 +43,14 @@ export function planDeliverables(campaign: Campaign): Deliverable[] {
       stages: feed
     });
   }
-  const portrait = byFormat.get("4:5") ?? [];
-  if (portrait.length > 0) {
+  const standard = byFormat.get("4:3") ?? [];
+  if (standard.length > 0) {
     out.push({
       id: "portrait",
-      title: "Portrait creative",
-      spec: "4:5",
-      platforms: "Instagram / Stories",
-      stages: portrait
+      title: "Standard creative",
+      spec: "4:3",
+      platforms: "Web / Facebook",
+      stages: standard
     });
   }
   const landscape = byFormat.get("16:9") ?? [];

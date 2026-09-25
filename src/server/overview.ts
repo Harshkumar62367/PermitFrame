@@ -3,7 +3,7 @@ import { effectiveCampaignStatus, productionStage, type ProductionStage } from "
 import { loadDb } from "./store";
 import { campaignCostRollup, estimateCost, expiryWarnings, type ExpiryWarning } from "./platform";
 import type { Campaign, CampaignStatus, Database, PublicationStatus } from "./types";
-import { isActiveJobStatus } from "./types";
+import { isActiveJobStatus, isPrivateUpload } from "./types";
 
 export interface OverviewBlocker {
   code: string;
@@ -154,7 +154,7 @@ export async function getWorkspaceOverview(): Promise<WorkspaceOverview> {
 /** Pure builder over an already-loaded Database. Shared with the workspace snapshot. */
 export function buildWorkspaceOverview(db: Database, workspaceName: string | null, warnings: ExpiryWarning[]): WorkspaceOverview {
   const creatorNames = new Map(db.passports.map((p) => [p.creatorId, p.creatorName] as const));
-  const mediaById = new Map(db.sourceMedia.map((m) => [m.id, m.url] as const));
+  const mediaById = new Map(db.sourceMedia.map((m) => [m.id, m] as const));
   const titleByCampaignId = new Map(db.campaigns.map((c) => [c.id, c.title] as const));
   // Archived campaigns are audit history: they stay resolvable for activity
   // titles/detail reads but leave every list, metric and pipeline bucket.
@@ -163,11 +163,17 @@ export function buildWorkspaceOverview(db: Database, workspaceName: string | nul
   const toOverviewCampaign = (c: Campaign): OverviewCampaign => {
     const rollup = campaignCostRollup(c);
     const latestReceipt = c.receipts.at(-1) ?? null;
-    // Thumbnails need a directly renderable URL: URL registrations qualify,
-    // uploaded private copies do not (their stored reference is
-    // non-routable), so uploads fall back to the latest generated output.
-    const sourceUrl = mediaById.get(c.sourceMediaId) ?? null;
-    const thumbnailUrl = sourceUrl?.startsWith("http") ? sourceUrl : (latestReceipt?.outputUrl ?? null);
+    // Public URL registrations can render directly. Uploads use the
+    // workspace-authenticated, same-origin preview route: the browser never
+    // sees Cloudinary's storage identifier or a signed delivery URL. Browser
+    // lazy loading keeps this to one fetch only when a visible card needs it.
+    const media = mediaById.get(c.sourceMediaId);
+    const sourceUrl = media?.url ?? null;
+    const thumbnailUrl = sourceUrl?.startsWith("http")
+      ? sourceUrl
+      : media && isPrivateUpload(media) && media.type === "image"
+        ? `/api/media/${encodeURIComponent(media.id)}/preview`
+        : (latestReceipt?.outputUrl ?? null);
     const preflight = c.preflight;
     const queriedRights = preflight?.queriedRights ?? [];
     const queriedFacts = preflight?.queriedFacts ?? [];

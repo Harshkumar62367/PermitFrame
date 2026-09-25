@@ -137,41 +137,99 @@ describe("create_media action mapping", () => {
   });
 
   it("image-to-video maps to animate only with a source_url", async () => {
-    stubFetch(() => syncImagePayload());
-    const client = new LivepeerMcpClient(livepeerConfig());
-    await client.runCapability({
-      capability: "seedance-mini-i2v",
-      kind: "image-to-video",
-      prompt: "pan",
-      sourceUrl: "https://cdn.example/key.png",
-      inputs: { aspect_ratio: "9:16", duration: 5 }
-    });
-    const call = seen.find((s) => s.tool === "create_media");
-    assert.equal(call?.args?.action, "animate");
-    assert.equal(call?.args?.source_url, "https://cdn.example/key.png");
-    assert.equal(call?.args?.duration, 5);
-    assert.ok(!("prefer_fast" in (call?.args ?? {})));
+    const saved = process.env.LIVEPEER_PREFER_FAST;
+    delete process.env.LIVEPEER_PREFER_FAST;
+    try {
+      stubFetch(() => syncImagePayload());
+      const client = new LivepeerMcpClient(livepeerConfig());
+      await client.runCapability({
+        capability: "seedance-mini-i2v",
+        kind: "image-to-video",
+        prompt: "pan",
+        sourceUrl: "https://cdn.example/key.png",
+        inputs: { aspect_ratio: "9:16", duration: 5 }
+      });
+      const call = seen.find((s) => s.tool === "create_media");
+      assert.equal(call?.args?.action, "animate");
+      assert.equal(call?.args?.source_url, "https://cdn.example/key.png");
+      assert.equal(call?.args?.duration, 5);
+      assert.equal(call?.args?.prefer_fast, true, "hackathon policy sends fast tier for motion jobs too");
+    } finally {
+      if (saved === undefined) delete process.env.LIVEPEER_PREFER_FAST;
+      else process.env.LIVEPEER_PREFER_FAST = saved;
+    }
   });
 
-  it("prefer_fast is a draft-only tradeoff: sent for draft, omitted otherwise", async () => {
-    stubFetch(() => syncImagePayload());
-    const client = new LivepeerMcpClient(livepeerConfig());
-    const base = { capability: "flux-dev", kind: "text-to-image", prompt: "stills" } as const;
-    for (const profile of ["draft", "balanced", "premium"] as const) {
-      seen = [];
-      await client.runCapability({ ...base, qualityProfile: profile });
-      const call = seen.find((s) => s.tool === "create_media");
-      if (profile === "draft") {
-        assert.equal(call?.args?.prefer_fast, true);
-      } else {
-        assert.ok(!("prefer_fast" in (call?.args ?? {})), `${profile} must omit prefer_fast entirely`);
+  it("prefer_fast is sent for every generation while the hackathon policy is on", async () => {
+    const saved = process.env.LIVEPEER_PREFER_FAST;
+    delete process.env.LIVEPEER_PREFER_FAST;
+    try {
+      stubFetch(() => syncImagePayload());
+      const client = new LivepeerMcpClient(livepeerConfig());
+      const base = { capability: "flux-dev", kind: "text-to-image", prompt: "stills" } as const;
+      for (const profile of ["draft", "balanced", "premium"] as const) {
+        seen = [];
+        await client.runCapability({ ...base, qualityProfile: profile });
+        const call = seen.find((s) => s.tool === "create_media");
+        assert.equal(call?.args?.prefer_fast, true, `${profile} uses the fast tier while the policy is on`);
       }
+      seen = [];
+      await client.runCapability({ ...base });
+      const unset = seen.find((s) => s.tool === "create_media");
+      assert.equal(unset?.args?.prefer_fast, true, "unset profile uses the fast tier while the policy is on");
+
+      seen = [];
+      await client.submitMedia({ ...base, qualityProfile: "balanced" });
+      const submit = seen.find((s) => s.tool === "create_media");
+      assert.equal(submit?.args?.prefer_fast, true, "async submits use the fast tier while the policy is on");
+    } finally {
+      if (saved === undefined) delete process.env.LIVEPEER_PREFER_FAST;
+      else process.env.LIVEPEER_PREFER_FAST = saved;
     }
-    // Unset profile defaults to final quality: no fast path.
-    seen = [];
-    await client.runCapability({ ...base });
-    const unset = seen.find((s) => s.tool === "create_media");
-    assert.ok(!("prefer_fast" in (unset?.args ?? {})));
+  });
+
+  it("LIVEPEER_PREFER_FAST=false restores draft-only fast-pathing", async () => {
+    const saved = process.env.LIVEPEER_PREFER_FAST;
+    process.env.LIVEPEER_PREFER_FAST = "false";
+    try {
+      stubFetch(() => syncImagePayload());
+      const client = new LivepeerMcpClient(livepeerConfig());
+      const base = { capability: "flux-dev", kind: "text-to-image", prompt: "stills" } as const;
+      for (const profile of ["draft", "balanced", "premium"] as const) {
+        seen = [];
+        await client.runCapability({ ...base, qualityProfile: profile });
+        const call = seen.find((s) => s.tool === "create_media");
+        if (profile === "draft") {
+          assert.equal(call?.args?.prefer_fast, true);
+        } else {
+          assert.ok(!("prefer_fast" in (call?.args ?? {})), `${profile} must omit prefer_fast entirely`);
+        }
+      }
+      seen = [];
+      await client.runCapability({ ...base });
+      const unset = seen.find((s) => s.tool === "create_media");
+      assert.ok(!("prefer_fast" in (unset?.args ?? {})));
+
+      seen = [];
+      await client.runCapability({
+        capability: "seedance-mini-i2v",
+        kind: "image-to-video",
+        prompt: "pan",
+        sourceUrl: "https://cdn.example/key.png",
+        inputs: { aspect_ratio: "9:16", duration: 5 }
+      });
+      const motion = seen.find((s) => s.tool === "create_media");
+      assert.ok(!("prefer_fast" in (motion?.args ?? {})), "motion omits prefer_fast with the policy off");
+
+      // Explicit caller opt-in still works with the policy off.
+      seen = [];
+      await client.submitMedia({ ...base, qualityProfile: "balanced", preferFast: true });
+      const recovery = seen.find((s) => s.tool === "create_media");
+      assert.equal(recovery?.args?.prefer_fast, true, "a provider-terminal retry can request the fast tier");
+    } finally {
+      if (saved === undefined) delete process.env.LIVEPEER_PREFER_FAST;
+      else process.env.LIVEPEER_PREFER_FAST = saved;
+    }
   });
 
   it("image-to-video without a source refuses before any spend", async () => {
@@ -182,6 +240,16 @@ describe("create_media action mapping", () => {
       /source image/
     );
     assert.ok(!seen.some((s) => s.tool === "create_media"), "must not dispatch without a source");
+  });
+
+  it("refuses an unsupported aspect locally for every model before it reaches Creative MCP", async () => {
+    stubFetch(() => syncImagePayload());
+    const client = new LivepeerMcpClient(livepeerConfig());
+    await assert.rejects(
+      () => client.submitMedia({ capability: "gpt-image", kind: "image-to-image", prompt: "portrait", inputs: { aspect_ratio: "2:1" } }),
+      /Aspect ratio "2:1" is not accepted/
+    );
+    assert.ok(!seen.some((s) => s.tool === "create_media"), "unsupported format must not dispatch");
   });
 
   it("text-to-video model dispatches as generate, never blind animate", async () => {

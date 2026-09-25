@@ -10,7 +10,7 @@ You need:
 
 - A signed-in PermitFrame workspace.
 - A creator you have permission to work with.
-- A public HTTPS reference to approved source media.
+- An approved source image or video: either a file you can upload to the private workspace, or a public HTTPS reference.
 - A clear campaign purpose, platform, territory, and expiry.
 - Brand-approved claims when the campaign will make product claims.
 
@@ -32,6 +32,18 @@ Still in **Media library**, add a source image or video. **Upload from computer*
 - For uploads: pick a file (images up to 10 MB, video up to 25 MB), optionally title it, and select **Upload**. The original is stored as an authenticated Cloudinary copy; only a time-limited download link (expires one hour after creation) is shared with the production service at generation time.
 - For URL references: paste a public HTTPS reference, confirm the media type, and select **Register**. PermitFrame records the reference and a fingerprint; the source file remains with the creator or the service that hosts it.
 
+:::details How private uploads work
+
+An uploaded original is a **private workspace copy**, not public proof. PermitFrame stores it in authenticated Cloudinary storage and records a byte fingerprint plus a controlled storage reference in the workspace. The browser never receives a Cloudinary delivery URL, storage identifier, signature, or byte hash through public pages.
+
+- A signed-in workspace can view an uploaded image through a same-origin workspace preview. Uploaded video previews are currently unavailable.
+- An active creator consent link can show the creator a token-scoped image preview so they can identify the asset they are being asked to approve. It does not expose the Cloudinary storage reference.
+- Client shares, public verification, and public DKG evidence exclude the uploaded original and its storage details.
+- When production needs the original, PermitFrame creates a signed, time-limited Cloudinary download link server-side and sends it only to the production service. That link expires one hour after creation and is not saved as campaign provenance or shown in the UI.
+
+An upload is not a claim that PermitFrame independently verified ownership. The creator must still attest the requested scope through the consent flow before derivative production can proceed.
+:::
+
 ![Media library with the first creator form and source asset registration visible](../public/docs/creator-media-onboarding.png)
 
 ### 3. Request and receive consent
@@ -48,19 +60,21 @@ If you selected no transformation, the request is display-only and will not auth
 
 ![Creator permissions with the three-step consent request form open](../public/docs/consent-request-flow.png)
 
-### 4. Add brand rules if needed
+### 4. Add a brand rule
 
 Open **Brand rules** and add the product that the campaign will represent.
 
-Record:
+Every campaign requires a brand rule, even when it makes no advertising claim. Record:
 
 - Brand and product.
 - Approved claims.
 - Prohibited claims.
 - Brand guidance.
-- Evidence notes for the claims.
+- Evidence notes for the claims or no-claim guidance.
 
-A campaign that makes no product claim can continue without this step. If the brief includes a claim, keep the wording aligned with the approved list.
+For a no-claim campaign, create a minimal rule with the brand and product, leave approved and prohibited claims empty, and add guidance such as: “Use the approved image. Do not add factual, pricing, ownership, location, or sustainability claims.”
+
+If the brief includes a claim, add its exact wording to the approved list before creating the campaign.
 
 ### 5. Create a campaign and run the permission check
 
@@ -150,7 +164,7 @@ A successful first run leaves you with:
 
 - A creator record and creator-owned source reference.
 - An active creator permission created by attestation.
-- Optional brand rules tied to the campaign product.
+- A brand rule tied to the campaign product, including no-claim guidance when applicable.
 - A campaign that passed the recorded permission check.
 - A reviewed plan with selected stages and cost controls.
 - Human-reviewed outputs with ratio and quality status.

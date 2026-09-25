@@ -114,4 +114,16 @@ describe("qualityReviewCopy", () => {
       "Not assessed automatically - review this asset before delivery."
     );
   });
+
+  it("names failed identity checks exactly, without ratio wording", () => {
+    assert.equal(
+      qualityReviewCopy("delivery_blocked", "fidelity_check_failed"),
+      "Needs review - identity preservation not verified."
+    );
+    assert.equal(
+      qualityReviewCopy("delivery_blocked", "aspect_ratio_mismatch"),
+      "Not deliverable - ratio mismatch."
+    );
+    assert.equal(qualityReviewCopy("delivery_blocked", null), "Not deliverable - ratio mismatch.");
+  });
 });

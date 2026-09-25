@@ -32,6 +32,8 @@ The requested 3 to 15 second range is a PermitFrame product input. Provider vali
 
 Campaign Film uses several short scenes that are assembled into a longer reel.
 
+![Campaign Film planner showing the short-clip and Campaign Film modes, duration controls, aspect-ratio choices, required budget cap, and six-scene storyboard](../public/docs/campaign-film-planner.png)
+
 1. Select **Campaign film** in the production planner.
 2. Choose a total target of 30, 45, or 60 seconds.
 3. Add scenes with individual durations from 3 to 15 seconds.
@@ -42,6 +44,8 @@ Campaign Film uses several short scenes that are assembled into a longer reel.
 8. Save the film plan without generating.
 9. Submit the film for generation.
 10. Review the final reel when the run reaches a ready state.
+
+`4:3` is deliberately unavailable for Campaign Film because the provider film surface supports only `9:16`, `1:1`, and `16:9`. `4:3` remains available for short image packs.
 
 The scene directions and storyboard are the production brief. The final result depends on the production provider and is not guaranteed to match subjective expectations exactly.
 

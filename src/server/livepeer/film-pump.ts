@@ -4,7 +4,7 @@ import { throwIfArchived } from "../campaign-lifecycle";
 import { readWorkspace, writeWorkspace } from "./run-store";
 import { withCampaignLock } from "./mutex";
 import { LivepeerMcpClient, livepeerConfig } from "./mcp-client";
-import { validateFilmPlan } from "./film-plan";
+import { FILM_SUPPORTED_ASPECTS, validateFilmPlan } from "./film-plan";
 import {
   buildCreativeSubmitArgs,
   filmSceneFingerprint,
@@ -117,12 +117,13 @@ export async function submitFilmRun(input: {
   }
   const plan = validated.filmPlan;
   // Aspect honesty, enforced again at the dispatch boundary: validation
-  // already rejects 4:5, but submission must never depend on a single
-  // layer - a 4:5 film fails here with no provider request made.
-  if (plan.aspectRatio === "4:5" || plan.scenes.some((s) => s.format === "4:5")) {
+  // already rejects unsupported aspects, but submission must never depend
+  // on a single layer - an unsupported aspect fails here with no provider
+  // request made.
+  if (!FILM_SUPPORTED_ASPECTS.includes(plan.aspectRatio) || plan.scenes.some((s) => !FILM_SUPPORTED_ASPECTS.includes(s.format))) {
     return {
       created: false,
-      error: "Campaign Film cannot submit with a 4:5 aspect - the provider film surface supports 9:16, 1:1, or 16:9 only. No provider request was made; 4:5 stays available for short image packs."
+      error: "Campaign Film cannot submit with this aspect - the provider film surface supports 9:16, 1:1, or 16:9 only. No provider request was made; use 4:3 for portrait stills instead."
     };
   }
   const now = nowIso();

@@ -24,7 +24,7 @@ const DRAFT: DraftSelection = {
   templateId: "creator-campaign",
   packSize: "campaign",
   assetTypes: ["image", "motion"],
-  formats: ["9:16", "4:5", "1:1", "16:9"],
+  formats: ["9:16", "4:3", "1:1", "16:9"],
   stageIds: [],
   motionSeconds: 5,
   qualityProfile: "balanced",
@@ -56,7 +56,7 @@ describe("computeHasChanges", () => {
       templateId: "creator-campaign",
       packSize: "campaign",
       assetTypes: ["motion", "image"],
-      formats: ["16:9", "1:1", "4:5", "9:16"],
+      formats: ["16:9", "1:1", "4:3", "9:16"],
       qualityProfile: "balanced"
     };
     assert.equal(computeHasChanges(persisted, DRAFT), false);
@@ -162,7 +162,7 @@ describe("buildSelection", () => {
     templateId: "creator-campaign",
     packSize: "campaign",
     motionOn: true,
-    formats: ["9:16", "4:5", "1:1", "16:9"],
+    formats: ["9:16", "4:3", "1:1", "16:9"],
     stageIds: [] as string[],
     motionSeconds: 5,
     durationError: null,
@@ -242,8 +242,8 @@ describe("buildSelection", () => {
 
 describe("toggleList + recommendedStageIds + summaries", () => {
   it("toggles while preserving canonical order", () => {
-    assert.deepEqual(toggleList(["9:16"], "1:1", ["9:16", "4:5", "1:1", "16:9"]), ["9:16", "1:1"]);
-    assert.deepEqual(toggleList(["9:16", "1:1"], "9:16", ["9:16", "4:5", "1:1", "16:9"]), ["1:1"]);
+    assert.deepEqual(toggleList(["9:16"], "1:1", ["9:16", "4:3", "1:1", "16:9"]), ["9:16", "1:1"]);
+    assert.deepEqual(toggleList(["9:16", "1:1"], "9:16", ["9:16", "4:3", "1:1", "16:9"]), ["1:1"]);
   });
 
   it("picks executable non-optional recipes and summarizes the draft", () => {
@@ -257,7 +257,7 @@ describe("toggleList + recommendedStageIds + summaries", () => {
     assert.deepEqual(recommendedStageIds(template as never), ["a"]);
     assert.deepEqual(recommendedStageIds(null), []);
     assert.equal(
-      buildCustomizeSummary({ motionOn: true, formats: ["9:16", "4:5", "1:1", "16:9"], profile: "balanced", cap: "" }),
+      buildCustomizeSummary({ motionOn: true, formats: ["9:16", "4:3", "1:1", "16:9"], profile: "balanced", cap: "" }),
       "Images + motion · Recommended formats · Balanced quality · No spend cap"
     );
   });

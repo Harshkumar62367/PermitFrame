@@ -3,10 +3,12 @@ import assert from "node:assert/strict";
 import {
   buildTemplateStages,
   closeSelectionDependencies,
+  DEFERRED_MOTION_REASON,
   estimateTemplateMinutes,
   getTemplate,
   listTemplates,
   toPlanStages,
+  TEMPLATE_FORMATS,
   validateTemplateSelection,
   type BuiltTemplatePlan,
   type TemplateSelection
@@ -51,6 +53,7 @@ describe("template catalogue", () => {
     assert.equal(templates.length, 5);
     for (const t of templates) {
       assert.ok(t.id && t.title && t.description && t.useCase);
+      assert.ok(t.recipes.every((recipe) => TEMPLATE_FORMATS.includes(recipe.format)), `${t.id} offers only supported formats`);
       assert.ok(t.requiredInputs.length > 0, `${t.id} needs required inputs`);
       assert.ok(t.platforms.length > 0);
       assert.ok(t.recipes.length >= 10, `${t.id} needs 10+ recipes for full packs`);
@@ -75,9 +78,9 @@ describe("template catalogue", () => {
       const quick = mustBuild(t, spec({ templateId: t.id, packSize: "quick" }));
       assert.equal(quick.executableCount, 3, `${t.id} quick`);
       const campaign = mustBuild(t, spec({ templateId: t.id, packSize: "campaign" }));
-      assert.ok(campaign.executableCount >= 6 && campaign.executableCount <= 8, `${t.id} campaign got ${campaign.executableCount}`);
+      assert.ok(campaign.executableCount >= 5 && campaign.executableCount <= 8, `${t.id} campaign got ${campaign.executableCount}`);
       const full = mustBuild(t, spec({ templateId: t.id, packSize: "full", assetTypes: ["image", "motion", "narration", "music", "subtitle"] }));
-      assert.ok(full.executableCount >= 10 && full.executableCount <= 16, `${t.id} full got ${full.executableCount}`);
+      assert.ok(full.executableCount >= 8 && full.executableCount <= 16, `${t.id} full got ${full.executableCount}`);
       assert.ok(full.outputCount >= full.executableCount);
     }
   });
@@ -118,7 +121,15 @@ describe("template catalogue", () => {
     }
     // Untoggled audio is excluded silently, not deferred.
     const lean = mustBuild(t, spec({ templateId: "real-estate", packSize: "full", assetTypes: ["image", "motion"] }));
-    assert.equal(lean.deferred.length, 0);
+    // Motion is deferred by design (identity-safe motion unavailable);
+    // audio simply never enters the pick.
+    assert.deepEqual(
+      lean.deferred.map((d) => d.recipe.id).sort(),
+      ["re-tour-alt", "re-tour-motion"]
+    );
+    for (const d of lean.deferred) {
+      assert.equal(d.reason, DEFERRED_MOTION_REASON);
+    }
   });
 
   it("motion duration override and format filters apply", () => {
@@ -219,14 +230,14 @@ describe("template catalogue", () => {
     assert.ok(estimateTemplateMinutes(short) > 0);
   });
 
-  it("4:5 stages group into a portrait deliverable", () => {
+  it("4:3 stages group into a standard deliverable", () => {
     const t = getTemplate("creator-campaign")!;
     const built = mustBuild(t, spec({ packSize: "full" }));
     const campaign = { preflight: { plan: toPlanStages(built, "balanced") } } as unknown as Campaign;
     const groups = planDeliverables(campaign);
-    const portrait = groups.find((g) => g.id === "portrait");
-    assert.ok(portrait && portrait.stages.length > 0, "4:5 stages must be selectable");
-    assert.ok(portrait.stages.every((s) => s.format === "4:5"));
+    const standard = groups.find((g) => g.id === "portrait");
+    assert.ok(standard && standard.stages.length > 0, "4:3 stages must be selectable");
+    assert.ok(standard.stages.every((s) => s.format === "4:3"));
   });
 
   it("template still prompts never claim keyframe derivation", () => {
@@ -312,9 +323,9 @@ describe("dependency closure", () => {
 
   it("a dependency on a deferred stage fails with a clear selection error", () => {
     const t = getTemplate("real-estate")!;
-    // Synthetic: motion hanging off the deferred narration recipe.
+    // Synthetic executable motion hanging off the deferred narration recipe.
     const motion = t.recipes.find((r) => r.id === "re-tour-motion")!;
-    const bad = { ...motion, id: "re-tour-bad", dependsOn: ["re-narration"] };
+    const bad = { ...motion, id: "re-tour-bad", dependsOn: ["re-narration"], execution: "create_media" as const };
     const closed = closeSelectionDependencies(t, [bad]);
     assert.equal(closed.ok, false);
     if (!closed.ok) assert.match(closed.error, /Tour narration.*cannot execute|requires "Tour narration"/);

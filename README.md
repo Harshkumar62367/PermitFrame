@@ -168,8 +168,9 @@ Read [Film and finishing](docs/film-and-finishing.md) for the full workflow.
 | Material | Workspace | Client share | Public proof |
 | --- | --- | --- | --- |
 | Contracts and contact details | Private | Not shown | Not shown |
-| Source media file (URL reference) | Remains with its creator or host | Not shown by default | Not shown by default |
-| Source media file (upload) | Private workspace copy, restricted delivery | Excluded | Excluded |
+| Source media file (URL reference) | Remains with its creator or host; PermitFrame records the URL and fingerprint | Not shown by default | Not shown by default |
+| Source media file (upload) | Authenticated Cloudinary private workspace copy; workspace image previews stay same-origin | Excluded | Excluded |
+| Temporary upload handoff | A server-minted Cloudinary download link expires one hour after creation and is sent only to the production service | Never shown | Never shown |
 | Full prompt text | Not public | Not shown | Not shown |
 | Completed eligible outputs | Available | Allowlisted outputs only | Approved and finalized outputs only |
 | Private narration or burned-caption derivatives | Workspace only | Excluded | Excluded |

@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { ProductionStagePlan, StageRole } from "../types";
+import type { ProductionStagePlan, StageFidelity, StageRole } from "../types";
 import type { PreservationEvidenceLevel, PreservationMode } from "@/lib/preservation";
 
 /**
@@ -73,6 +73,12 @@ export interface PreservationContext {
   variationSourceUrl?: string;
   /** Environment kill-switch state for place_subject. */
   placeSubjectMode: "auto" | "off";
+  /**
+   * Source-fidelity requirement for the stage (default "conceptual").
+   * Strict fidelities (product/property-preserving) route image stages to
+   * place_subject with no generic fallback and refuse rather than downgrade.
+   */
+  fidelity?: StageFidelity;
 }
 
 export interface SourceValidation {
@@ -102,6 +108,19 @@ export interface PreservationDecision {
   allowFallbackToSourceGuided: boolean;
   sourceValidation: SourceValidation;
 }
+
+/** True for product/property-preserving stages: identity is required, never best-effort. */
+export function isStrictFidelity(fidelity: StageFidelity | undefined): boolean {
+  return fidelity === "product-preserving" || fidelity === "property-preserving";
+}
+
+/**
+ * Refusal AND stage-failure message when identity cannot be preserved.
+ * Used verbatim wherever a strict-fidelity stage cannot attempt or complete
+ * place_subject: no generic substitute is ever queued or charged after it.
+ */
+export const FIDELITY_REFUSAL =
+  "Could not preserve the approved product/property. No replacement image was generated.";
 
 /** Usable source: absolute HTTPS URL (no data:, no relative, no blanks). */
 export function isPreservationSourceUsable(url: unknown): url is string {
@@ -166,14 +185,24 @@ export function preservationOperationKey(jobKey: string, op: "place" | "vary"): 
   return `${jobKey}_${op === "place" ? "place" : "vary"}`;
 }
 
-/** Requested mode derived from role + explicit refinement record - never
- * from model names. "variation" is requested only when BOTH hold:
- * variationExplicit === true AND variationSourceUrl is usable. A stale or
- * unexplicit source URL is not a variation request: the role decides, so
- * the record resolves as guided generation and never falsely claims the
- * user asked to vary. */
-export function requestedPreservationMode(ctx: Pick<PreservationContext, "role" | "variationExplicit" | "variationSourceUrl">): PreservationMode {
+/** Requested mode derived from role, fidelity, + explicit refinement record -
+ * never from model names. Strict fidelities (product/property-preserving)
+ * request subject-placement (the only validated identity tool) on image
+ * stages instead of the deferred product-photo path. "variation" is
+ * requested only when BOTH hold: variationExplicit === true AND
+ * variationSourceUrl is usable. A stale or unexplicit source URL is not a
+ * variation request: the role decides, so the record resolves as guided
+ * generation and never falsely claims the user asked to vary. */
+export function requestedPreservationMode(
+  ctx: Pick<PreservationContext, "role" | "variationExplicit" | "variationSourceUrl"> & {
+    kind?: ProductionStagePlan["kind"];
+    fidelity?: StageFidelity;
+  }
+): PreservationMode {
   if (ctx.variationExplicit === true && isPreservationSourceUsable(ctx.variationSourceUrl)) return "variation";
+  if (isStrictFidelity(ctx.fidelity) && (ctx.kind === "text-to-image" || ctx.kind === "image-to-image")) {
+    return "subject-placement";
+  }
   switch (ctx.role) {
     case "subjectPreservingImage":
       return "subject-placement";
@@ -225,6 +254,22 @@ export function resolvePreservation(ctx: PreservationContext): PreservationDecis
     };
   }
 
+  // Strict fidelity: any request that cannot route to place_subject
+  // refuses outright - a generic render must never silently substitute for
+  // a product/property requirement (motion kinds, variations, deferred
+  // product-photo paths). No spend, no substitute.
+  if (isStrictFidelity(ctx.fidelity) && requested !== "subject-placement") {
+    return {
+      ...base,
+      resolved: "source-guided-generation",
+      requestedCapability: PRESERVATION_CAPABILITY_FOR_MODE[requested],
+      actualCapability: "create_media",
+      evidenceLevel: "none",
+      allowFallbackToSourceGuided: false,
+      refusal: FIDELITY_REFUSAL
+    };
+  }
+
   switch (requested) {
     case "subject-placement": {
       if (!SUBJECT_PLACEMENT_KINDS.has(ctx.kind)) {
@@ -239,6 +284,19 @@ export function resolvePreservation(ctx: PreservationContext): PreservationDecis
         };
       }
       if (ctx.placeSubjectMode === "off") {
+        // Strict fidelity never degrades to guided when the tool is
+        // switched off: refuse with the exact fidelity message instead.
+        if (isStrictFidelity(ctx.fidelity)) {
+          return {
+            ...base,
+            resolved: "source-guided-generation",
+            requestedCapability: "place_subject",
+            actualCapability: "create_media",
+            evidenceLevel: "none",
+            allowFallbackToSourceGuided: false,
+            refusal: FIDELITY_REFUSAL
+          };
+        }
         return {
           ...base,
           resolved: "source-guided-generation",
@@ -265,8 +323,15 @@ export function resolvePreservation(ctx: PreservationContext): PreservationDecis
         resolved: "subject-placement",
         requestedCapability: "place_subject",
         actualCapability: "place_subject",
-        evidenceLevel: "subject-preserving",
-        allowFallbackToSourceGuided: true
+        // Strict stages earn product/property evidence (verified later by
+        // the fidelity gate); conceptual stages keep subject-preserving.
+        // Strict stages never fall back to a generic render.
+        evidenceLevel: isStrictFidelity(ctx.fidelity)
+          ? ctx.fidelity === "property-preserving"
+            ? "property-preserving"
+            : "product-preserving"
+          : "subject-preserving",
+        allowFallbackToSourceGuided: !isStrictFidelity(ctx.fidelity)
       };
     }
     case "product-photo": {
