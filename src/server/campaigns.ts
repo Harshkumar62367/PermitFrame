@@ -29,4 +29,4 @@ export {
   applyTemplateSpec
 } from "./campaign-template-application";
 export { startProduction, cancelCampaignJobs } from "./campaign-production";
-export { reviseStage, createVariationRun } from "./campaign-variations";
+export { reviseStage, createVariationRun, regenerateRatioMismatch } from "./campaign-variations";

@@ -31,17 +31,30 @@ interface FieldErrors {
   facts?: string;
 }
 
-export function NewCampaignForm({ onCreated }: { onCreated?: (id: string) => void }) {
+/**
+ * Demo-brief prefill: title, platform, and brief text only. Never creator,
+ * media, permission, passport, receipt, approval, proof, job, or history
+ * data - the campaigns page resolves these three fields from the
+ * allow-listed demo payload, and everything gated (permission, media,
+ * brand rule) still starts empty.
+ */
+export interface CampaignBriefInitial {
+  title?: string;
+  platform?: string;
+  creativeBrief?: string;
+}
+
+export function NewCampaignForm({ onCreated, initial }: { onCreated?: (id: string) => void; initial?: CampaignBriefInitial }) {
   const router = useRouter();
   const uid = useId();
   const briefRef = useRef<HTMLTextAreaElement>(null);
   const [form, setForm] = useState({
-    title: "",
-    platform: "instagram",
+    title: initial?.title ?? "",
+    platform: initial?.platform && PLATFORMS.includes(initial.platform) ? initial.platform : "instagram",
     country: "",
     claims: "",
     transformation: "video",
-    creativeBrief: "",
+    creativeBrief: initial?.creativeBrief ?? "",
     passportId: "",
     sourceMediaId: "",
     productFactsId: ""

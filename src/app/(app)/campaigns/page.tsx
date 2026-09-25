@@ -14,6 +14,7 @@ import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
 import { CampaignCard } from "@/components/overview/campaign-card";
 import { useWorkspaceOverview } from "@/lib/use-overview";
 import type { SnapshotCampaign } from "@/lib/use-workspace-snapshot";
+import { DEMO_BOUNDARY_NOTICE, demoPrefillFor, getDemoCampaign } from "@/lib/demo-campaigns";
 import { cn } from "@/lib/utils";
 
 type FilterKey = "all" | "attention" | "ready" | "generating" | "delivered" | "briefed" | "archived";
@@ -42,6 +43,12 @@ function CampaignsContent() {
 
   const rawFilter = searchParams.get("filter");
   const deletedTitle = searchParams.get("deleted");
+  // Demo-brief entry (?demo=<id>): resolves against local definitions only.
+  // Unknown ids fail closed to no banner; the prefill below carries only
+  // the allow-listed brief fields, and permission/media/brand rule still
+  // start empty behind their unchanged gates.
+  const demo = searchParams.get("demo") ? getDemoCampaign(searchParams.get("demo") as string) : undefined;
+  const [demoPrefill, setDemoPrefill] = useState<{ title: string; platform: string; creativeBrief: string } | null>(null);
   const active: FilterKey = FILTERS.some((f) => f.key === rawFilter) ? (rawFilter as FilterKey) : "all";
   const matcher = FILTERS.find((f) => f.key === active)?.match ?? (() => true);
   // Archived rows live outside the normal lists by design; the Archived
@@ -66,6 +73,22 @@ function CampaignsContent() {
     router.replace(query ? `/campaigns?${query}` : "/campaigns", { scroll: false });
   }
 
+  function dismissDemo() {
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("demo");
+    const query = params.toString();
+    setDemoPrefill(null);
+    router.replace(query ? `/campaigns?${query}` : "/campaigns", { scroll: false });
+  }
+
+  function startFromDemoBrief() {
+    if (!demo) return;
+    const prefill = demoPrefillFor(demo.id);
+    if (!prefill) return;
+    setDemoPrefill({ title: prefill.title, platform: prefill.platform, creativeBrief: prefill.brief });
+    setFormOpen(true);
+  }
+
   return (
     <div className="pf-page space-y-6">
       <FadeIn>
@@ -84,6 +107,7 @@ function CampaignsContent() {
       {formOpen && (
         <FadeIn>
           <NewCampaignForm
+            initial={demoPrefill ?? undefined}
             onCreated={(id) => {
               setFormOpen(false);
               // The form already invalidated the snapshot; the cache
@@ -115,6 +139,31 @@ function CampaignsContent() {
           </button>
         </div>
       )}
+      {demo && !formOpen && (() => {
+        const prefill = demoPrefillFor(demo.id);
+        if (!prefill) return null;
+        return (
+          <div
+            role="status"
+            className="rounded-xl bg-amber-50 px-4 py-3 ring-1 ring-amber-200 dark:bg-amber-950/40 dark:ring-amber-900"
+          >
+            <p className="text-[13px] font-semibold text-amber-800 dark:text-amber-200">
+              Demo brief - {demo.title} (read-only demo, nothing created yet)
+            </p>
+            <p className="mt-1 max-w-2xl text-[12.5px] leading-relaxed text-amber-800 dark:text-amber-200">
+              {DEMO_BOUNDARY_NOTICE} Suggested template: {prefill.suggestedTemplate} · Suggested formats: {prefill.suggestedFormats.join(", ")}.
+            </p>
+            <div className="mt-2.5 flex flex-wrap gap-2">
+              <Button onClick={startFromDemoBrief} className="rounded-full bg-emerald-700 font-medium text-emerald-50 hover:bg-emerald-600 dark:bg-emerald-500 dark:text-emerald-950 dark:hover:bg-emerald-400">
+                Open brief in campaign form
+              </Button>
+              <Button variant="outline" onClick={dismissDemo} className="rounded-full">
+                Dismiss
+              </Button>
+            </div>
+          </div>
+        );
+      })()}
       {status === "loading" && <LoadingSkeleton rows={3} />}
       {status === "ready" && (
         <>
@@ -159,6 +208,9 @@ function CampaignsContent() {
                   </Button>
                   <Button onClick={() => setFormOpen(true)} className="rounded-full bg-emerald-700 font-medium text-emerald-50 hover:bg-emerald-600 dark:bg-emerald-500 dark:text-emerald-950 dark:hover:bg-emerald-400">
                     3 · New campaign
+                  </Button>
+                  <Button asChild variant="outline" className="rounded-full">
+                    <Link href="/demo-campaigns">View demo campaigns</Link>
                   </Button>
                 </>
               ) : undefined}

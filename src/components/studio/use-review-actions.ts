@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { apiPost } from "@/lib/api";
-import { newRunKey } from "@/lib/idempotency-key";
 import { useLongAction } from "@/lib/use-long-action";
 import { useInvalidateWorkspaceSnapshot } from "@/lib/use-workspace-snapshot";
 import { classifyReceiptForAnchor, type Campaign, type ReceiptPublishResult } from "@/server/types";
@@ -165,10 +164,7 @@ export function useReviewActions(campaign: Campaign, onChanged: () => Promise<vo
     setRegenFor(receiptId);
     setError(null);
     try {
-      await apiPost(`/api/campaigns/${campaign.id}/produce`, {
-        stageIds: [job.stageId],
-        idempotencyKey: newRunKey("regen")
-      });
+      await apiPost(`/api/campaigns/${campaign.id}/regenerate`, { receiptId });
       invalidateSnapshot();
       await onChanged();
     } catch (e) {

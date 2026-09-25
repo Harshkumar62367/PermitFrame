@@ -197,7 +197,7 @@ export async function submitRun(input: SubmitInput): Promise<SubmitResult> {
       const role = retryJob.role ?? stage.role;
       const profile = normalizeQualityProfile(stage.qualityProfile ?? retryJob.qualityProfile ?? process.env.LIVEPEER_QUALITY_PROFILE);
       const current = retryJob.actualCapability ?? retryJob.capability;
-      const replacement = await selectRecoveryCapability({ role, profile, failedCapability: current, pinned: false });
+      const replacement = await selectRecoveryCapability({ role, profile, failedCapability: current, pinned: false, format: stage.format });
       if (!replacement) return { created: false, error: `No different ${role} model is currently available for ${retryJob.stageId}.` };
       const quote = quoteStage(
         { capability: replacement, kind: stage.kind },

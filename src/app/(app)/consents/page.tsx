@@ -262,18 +262,17 @@ export default function ConsentsPage() {
     const id = revokeTarget.id;
     setBusyId(id);
     setNotice(null);
-    const result = await revokeAction.execute(() =>
-      apiPost<{ revoked: boolean; blockedCampaigns: string[] }>(`/api/passports/${id}/revoke`, {
-        note: "Revoked from the PermitFrame consents page."
-      }, undefined, revokeAction.timeoutMs)
-    );
-    setBusyId(null);
-    if (!result.ok || !result.value) {
-      setNotice({ ok: false, text: result.message ?? "Revocation failed." });
-      setRevokeTarget(null);
-      return;
-    }
-    const j = result.value;
+    try {
+      const result = await revokeAction.execute(() =>
+        apiPost<{ revoked: boolean; blockedCampaigns: string[] }>(`/api/passports/${id}/revoke`, {
+          note: "Revoked from the PermitFrame consents page."
+        }, undefined, revokeAction.timeoutMs)
+      );
+      if (!result.ok || !result.value) {
+        setNotice({ ok: false, text: result.message ?? "Revocation failed." });
+        return;
+      }
+      const j = result.value;
       setNotice({
         ok: true,
         text: j.revoked
@@ -282,11 +281,22 @@ export default function ConsentsPage() {
             : `Rights for ${id} revoked - the permission record was updated (no active campaigns affected).`
           : `Rights for ${id} were already revoked - nothing changed.`
       });
-      setRevokeTarget(null);
-      // Revocation publishes an Amendment Knowledge Asset: refresh the shared
-      // snapshot (awaited) and mark the cached graph stale.
-      await invalidateSnapshot();
+      // This refresh must not keep the confirmation dialog open: the revoke
+      // response is already durable, and React Query will update the card as
+      // soon as the background refetch completes.
+      void invalidateSnapshot().catch(() => undefined);
       invalidateDkgGraph();
+    } catch (error) {
+      setNotice({
+        ok: false,
+        text: error instanceof Error ? error.message : "Revocation failed."
+      });
+    } finally {
+      // Always release the modal, including an unexpected client-side error
+      // or a refresh that is slower than the completed revocation itself.
+      setBusyId(null);
+      setRevokeTarget(null);
+    }
   }
 
   // Renewal never extends a permission directly: this creates a fresh

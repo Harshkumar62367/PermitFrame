@@ -846,7 +846,7 @@ export async function prepareProviderRecovery(input: ProviderRecoveryInput): Pro
 
   const profile = normalizeQualityProfile(stage.qualityProfile ?? job.qualityProfile ?? process.env.LIVEPEER_QUALITY_PROFILE);
   const role = job.role ?? stage.role;
-  const replacement = await selectRecoveryCapability({ role, profile, failedCapability, pinned });
+  const replacement = await selectRecoveryCapability({ role, profile, failedCapability, pinned, format: stage.format });
   if (!replacement) {
     return writeFailure("failed", `Provider issue: ${safeDetail} No different ${role} model is currently available.`);
   }

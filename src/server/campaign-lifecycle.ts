@@ -371,7 +371,7 @@ export function checkApprovalEligibility(
   // Aspect honesty: a stored output whose measured file differs from the
   // requested placement is never Ready for that placement. Name the stages
   // and point at the explicit regenerate action — nothing auto-retries.
-  const mismatched = campaign.receipts.filter((r) => hasSharableReceipt(r) && r.aspectVerdict === "mismatch");
+  const mismatched = campaign.receipts.filter((r) => !r.supersededAt && hasSharableReceipt(r) && r.aspectVerdict === "mismatch");
   if (mismatched.length > 0) {
     const names = mismatched
       .map((r) => {

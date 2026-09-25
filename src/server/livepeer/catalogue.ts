@@ -1,4 +1,5 @@
 import { LivepeerMcpClient, livepeerConfig } from "./mcp-client";
+import { unsupportedCreativeFormatReason } from "@/lib/creative-format";
 import type { QualityProfile, StageRole } from "../types";
 import { DEFAULT_QUALITY_PROFILE } from "./plan-dag";
 import type { ModelOverrideRole } from "./template-catalogue";
@@ -242,6 +243,7 @@ export async function selectRecoveryCapability(input: {
   profile: QualityProfile;
   failedCapability: string;
   pinned?: boolean;
+  format?: string;
 }): Promise<string | null> {
   if (input.pinned) return null;
   let snapshot: CatalogueSnapshot;
@@ -254,6 +256,7 @@ export async function selectRecoveryCapability(input: {
   const available = new Set(
     snapshot.capabilities
       .filter((c) => c.availability === "available" && !isCapabilityQuarantined(c.name))
+      .filter((c) => !unsupportedCreativeFormatReason(c.name, input.format))
       .map((c) => c.name)
   );
   available.delete(input.failedCapability);

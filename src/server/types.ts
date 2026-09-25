@@ -251,8 +251,8 @@ export function migrateJobStatus(status: string): JobStatus {
  * outputs (no Cloudinary identity) stay previewable and readable, but locked
  * out of sharing, final delivery, and proof publication until stored.
  */
-export function hasSharableReceipt(receipt: Pick<DerivativeReceipt, "storageStatus">): boolean {
-  return receipt.storageStatus === "stored";
+export function hasSharableReceipt(receipt: Pick<DerivativeReceipt, "storageStatus" | "supersededAt">): boolean {
+  return receipt.storageStatus === "stored" && !receipt.supersededAt;
 }
 
 /** Per-receipt outcome of a proof-ledger publish attempt. */
@@ -282,10 +282,12 @@ export interface ReceiptPublishResult {
 export function classifyReceiptForAnchor(
   receipt: Pick<
     DerivativeReceipt,
-    "ual" | "visibility" | "storageStatus" | "publicationStatus" | "publicationUpdatedAt"
+    "ual" | "visibility" | "storageStatus" | "publicationStatus" | "publicationUpdatedAt" | "supersededAt"
   >,
   nowMs: number = Date.now()
 ): "already_anchored" | "skipped_private" | "skipped_ineligible" | "publishing" | "eligible" {
+  // A replaced, ratio-blocked output remains local audit history only.
+  if (receipt.supersededAt) return "skipped_ineligible";
   // A non-empty UAL is never republished - it already resolves somewhere.
   if (receipt.ual) return "already_anchored";
   // Private records must never reach the shared graph.
@@ -313,8 +315,9 @@ export function classifyReceiptForAnchor(
 export type DeliveryBlockReason = "aspect_ratio_mismatch" | "fidelity_check_failed";
 
 export function deliveryBlockReason(
-  receipt: Pick<DerivativeReceipt, "deliveryBlocked" | "aspectVerdict">
+  receipt: Pick<DerivativeReceipt, "deliveryBlocked" | "aspectVerdict" | "supersededAt">
 ): DeliveryBlockReason | null {
+  if (receipt.supersededAt) return null;
   if (receipt.deliveryBlocked) return receipt.deliveryBlocked;
   if (receipt.aspectVerdict === "mismatch") return "aspect_ratio_mismatch";
   return null;
@@ -322,7 +325,7 @@ export function deliveryBlockReason(
 
 /** Delivery-ready: durably stored AND not blocked. Pure read-time gate. */
 export function isDeliverableReceipt(
-  receipt: Pick<DerivativeReceipt, "storageStatus" | "deliveryBlocked" | "aspectVerdict">
+  receipt: Pick<DerivativeReceipt, "storageStatus" | "deliveryBlocked" | "aspectVerdict" | "supersededAt">
 ): boolean {
   return hasSharableReceipt(receipt) && deliveryBlockReason(receipt) === null;
 }
@@ -335,14 +338,14 @@ export function isDeliverableReceipt(
  * public surfaces through any of them.
  */
 export function isPublicDeliverableReceipt(
-  receipt: Pick<DerivativeReceipt, "visibility" | "storageStatus" | "deliveryBlocked" | "aspectVerdict">
+  receipt: Pick<DerivativeReceipt, "visibility" | "storageStatus" | "deliveryBlocked" | "aspectVerdict" | "supersededAt">
 ): boolean {
   return receipt.visibility !== "private" && isDeliverableReceipt(receipt);
 }
 
 /** Job ids whose stored receipt blocks delivery (queue/plan derivation). */
 export function deliveryBlockedJobIds(
-  receipts: Pick<DerivativeReceipt, "jobId" | "deliveryBlocked" | "aspectVerdict">[]
+  receipts: Pick<DerivativeReceipt, "jobId" | "deliveryBlocked" | "aspectVerdict" | "supersededAt">[]
 ): Set<string> {
   return new Set(receipts.filter((r) => deliveryBlockReason(r) !== null).map((r) => r.jobId));
 }
@@ -605,6 +608,10 @@ export interface DerivativeReceipt {
   mediaType: "image" | "video";
   format: string;
   outputUrl: string;
+  /** A replacement generation was explicitly started for this blocked output. */
+  supersededAt?: string;
+  /** The fresh job that replaces this receipt for delivery and approval. */
+  supersededByJobId?: string;
   /**
    * Measured pixel dimensions of the delivered file (from durable storage
    * metadata). Missing on legacy rows and provider-hosted outputs, which

@@ -52,7 +52,7 @@ export function CampaignExtras({ campaign, hideVariants = false }: { campaign: C
   const shareAction = useLongAction(
     {
       working: "Creating a private review link. This normally takes a few seconds - please wait before retrying.",
-      slow: "Still creating your private review link. Please keep this page open - it can take up to about a minute on a cold database connection.",
+      slow: "Still creating your private review link. Please keep this page open - it can take up to about a minute on a cold database connection. If it is still not visible after a minute, refresh once before retrying.",
       timedOut:
         "Creating the client link is taking longer than expected. Refresh this page once before retrying - the link may already have been created."
     },
@@ -64,6 +64,10 @@ export function CampaignExtras({ campaign, hideVariants = false }: { campaign: C
   const [comment, setComment] = useState("");
   const [commentError, setCommentError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  // Share-link creation does not depend on caption generation. Keep its
+  // duplicate-click guard separate so a slow caption request never makes an
+  // already-eligible client link look unavailable.
+  const [shareBusy, setShareBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
   const [variants, setVariants] = useState<{ id: string; title: string }[] | null>(null);
@@ -114,27 +118,30 @@ export function CampaignExtras({ campaign, hideVariants = false }: { campaign: C
   }
 
   async function createShare() {
-    if (busy || shareAction.busy) return;
-    setBusy("share");
+    if (shareBusy || shareAction.busy) return;
+    setShareBusy(true);
     setShareError(null);
-    const result = await shareAction.execute(() =>
-      apiPost<{ token: string; url: string }>(
-        `/api/campaigns/${campaign.id}/share`,
-        undefined,
-        undefined,
-        shareAction.timeoutMs
-      )
-    );
-    setBusy(null);
-    if (!result.ok || !result.value) {
-      // Refresh-first: the link may already exist server-side.
-      setShareError(result.message ?? "Share link creation failed.");
-      return;
+    try {
+      const result = await shareAction.execute(() =>
+        apiPost<{ token: string; url: string }>(
+          `/api/campaigns/${campaign.id}/share`,
+          undefined,
+          undefined,
+          shareAction.timeoutMs
+        )
+      );
+      if (!result.ok || !result.value) {
+        // Refresh-first: the link may already exist server-side.
+        setShareError(result.message ?? "Share link creation failed.");
+        return;
+      }
+      const j = result.value;
+      setShareUrl(j.url);
+      setCopied(false);
+      setCopyFailed(false);
+    } finally {
+      setShareBusy(false);
     }
-    const j = result.value;
-    setShareUrl(j.url);
-    setCopied(false);
-    setCopyFailed(false);
   }
 
   async function copyShare() {
@@ -251,14 +258,14 @@ export function CampaignExtras({ campaign, hideVariants = false }: { campaign: C
                   variant="outline"
                   size="sm"
                   onClick={createShare}
-                  disabled={busy !== null || !campaign.receipts.some((r) => hasSharableReceipt(r))}
-                  aria-busy={busy === "share"}
+                  disabled={shareBusy || !campaign.receipts.some((r) => hasSharableReceipt(r))}
+                  aria-busy={shareBusy}
                   title={campaign.receipts.length === 0 ? "Produce the pack first - a share link needs outputs to review" : "Share links unlock once an output is ready-to-share - previews stay private"}
                   className="rounded-full"
                 >
-                  <Link2 className="h-3.5 w-3.5" aria-hidden /> {busy === "share" ? "Creating…" : "Create client share link"}
+                  <Link2 className="h-3.5 w-3.5" aria-hidden /> {shareBusy ? "Creating…" : "Create client share link"}
                 </Button>
-                {busy === "share" && shareAction.status && (
+                {shareBusy && shareAction.status && (
                   <p role="status" className="basis-full text-[12px] text-emerald-700 dark:text-emerald-300">
                     {shareAction.status}
                   </p>

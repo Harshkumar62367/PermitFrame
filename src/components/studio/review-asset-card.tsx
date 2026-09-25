@@ -118,7 +118,11 @@ export function ReviewAssetCard({
             Private derivative - not included in client delivery.
           </p>
         )}
-        {r.aspectVerdict === "mismatch" && r.actualWidth !== undefined && r.actualHeight !== undefined ? (
+        {r.supersededAt ? (
+          <p role="status" className="break-words text-[11px] font-medium leading-snug text-muted-foreground">
+            Replaced by a fresh generation. This rejected output is retained as private audit history and is not deliverable.
+          </p>
+        ) : r.aspectVerdict === "mismatch" && r.actualWidth !== undefined && r.actualHeight !== undefined ? (
           <p role="status" className="break-words text-[11px] font-medium leading-snug text-amber-700 dark:text-amber-300">
             Needs ratio review - requested {r.format}, received {describeActualSize(r.actualWidth, r.actualHeight)}. Stored and editable, but not deliverable to clients until regenerated.
           </p>
@@ -152,7 +156,7 @@ export function ReviewAssetCard({
           )}
         </div>
         <div className="mt-1 flex flex-wrap gap-1.5">
-        {r.aspectVerdict === "mismatch" && (
+        {!r.supersededAt && r.aspectVerdict === "mismatch" && (
           <Button
             variant="outline"
             size="sm"

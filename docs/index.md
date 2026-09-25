@@ -41,6 +41,18 @@ A PermitFrame attestation records a creator declaration and its integrity. It do
 
 An approval records the workspace owner's decision. Client feedback remains advisory. Public verification shows a point-in-time summary of what PermitFrame recorded, not a legal certificate.
 
+## Key features
+
+| Capability | How it works in PermitFrame |
+| --- | --- |
+| **Private workspace and input controls** | Keep creators, product facts, campaign records, and private uploads in a workspace. Source media is sniffed and hashed before it is registered, and permissions are scoped to the creator, media, platforms, territory, transformations, and expiry. |
+| **Private review links** | Create a client review link only after a durable, reviewable output exists. The link is separate from public proof and can be refreshed safely if a slow database connection finishes after the browser waits. |
+| **Durable asset delivery** | Completed outputs are persisted for review and delivery; Cloudinary is used when configured for durable media storage. Provider-hosted previews are labelled until durable storage is confirmed. |
+| **Model-aware image generation** | Choose Automatic or an available compatible model for the plan. The live provider catalogue currently includes more than seven still-image families across fast, balanced, and premium profiles; availability is checked when the plan is applied. |
+| **Four production formats** | Build still-image packs in `9:16`, `1:1`, `4:3`, and `16:9`, with placement-aware creative stages for social, feed, web, and banner use. |
+| **Motion and campaign film planning** | Plan short motion clips from 3 to 15 seconds and multi-scene campaign films of 30, 45, or 60 seconds. A one-minute film is assembled from short scenes, not represented as one long inference call. |
+| **Claims, approvals, and audit** | Generate claim-aware captions, review every output, record owner approval, and retain a readable audit timeline. Public verification is optional and only becomes available after a genuine proof publication succeeds. |
+
 ## A safe first test
 
 You can complete creator, media, consent, brand-rule, and campaign setup without paid generation. Stop after the permission check if you only want to validate the workflow.

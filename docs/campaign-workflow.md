@@ -155,6 +155,13 @@ Livepeer performs the selected supported media work, which can include image gen
 
 Only selected active-plan stages are submitted. A stage absent from the active plan—for example `4:3` on the automatic starter plan—cannot be selected until you apply a plan that includes it. Failed provider work is shown honestly and can be retried under the available controls.
 
+:::details Example: completed multi-format creative pack
+
+This example shows three finished shoe-image placements from one reviewed campaign. It illustrates the queue and review surface after real generation; it is not a guarantee that a provider will preserve an unapproved product or identity.
+
+![A completed shoe campaign with 9:16, 1:1, and 4:3 image outputs ready in the production queue](../public/docs/sample-successful-creative-pack.png)
+:::
+
 ## 8. Review the complete pack
 
 The active plan must be complete before owner approval. A partial run can be inspected, but it is not approval-ready until the remaining required stages are ready or the active plan is changed.
@@ -181,6 +188,13 @@ After production has created eligible outputs, the workspace can generate captio
 
 ![Captions and client-link panel showing captions generation available and client sharing disabled until outputs exist](../public/docs/captions-client-share.png)
 
+:::details Example: captions grounded in approved claims
+
+Once eligible outputs exist, PermitFrame can generate platform-specific captions and show the verified claims used in each one. A client share link remains separate from owner approval and public proof.
+
+![Generated Instagram and LinkedIn captions with the verified claims they use](../public/docs/sample-successful-captions.png)
+:::
+
 ## 9. DKG evidence after production
 
 After the owner approves the pack, PermitFrame can preserve minimized campaign provenance. The lifecycle is:
@@ -190,6 +204,13 @@ private/local → Shared Working Memory → anchored Base Sepolia
 ```
 
 Shared Working Memory evidence may be available to configured DKG peers, but it is not an on-chain public proof record. A finalized Base Sepolia record can provide a canonical UAL, a Knowledge Asset token link, and a finalization transaction link. Those links appear only when the publisher reports a genuinely finalized anchored record.
+
+:::details Example: campaign audit history
+
+The campaign timeline records production submissions, completed stages, derivative receipts, and approval events. It is a workspace audit trail, not a substitute for independently proving identity, ownership, or provider quality.
+
+![Audit timeline recording campaign approval, production submissions, completed stages, and derivative receipts](../public/docs/sample-successful-audit-timeline.png)
+:::
 
 The contract address and token ID are derived from the actual UAL. The documentation does not hardcode a contract address. Base Sepolia is a public testnet, not mainnet finality or a legal ownership certificate. See [DKG and proof](./dkg-and-proof.md) for the full explanation.
 
