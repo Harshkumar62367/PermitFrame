@@ -2,6 +2,7 @@
   <h1>PermitFrame</h1>
   <p><strong>Permission-aware AI campaign production with a reviewable proof trail.</strong></p>
   <p>Turn approved creator rights and brand rules into platform-ready campaign assets, without treating generation as the first step.</p>
+  <p><em>Open-source hackathon submission for rights-aware creative production, provider-backed media generation, and verifiable campaign provenance.</em></p>
   <p><a href="docs/getting-started.md">Read the first-run guide</a> · <a href="docs/dkg-and-proof.md">Explore the Track 2 proof story</a> · <a href="docs/campaign-workflow.md">Explore the campaign workflow</a></p>
 </div>
 
