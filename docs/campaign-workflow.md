@@ -59,12 +59,12 @@ When a campaign passes its initial permission check, PermitFrame creates and app
 The starter plan contains three image stages:
 
 - `9:16` vertical social
+- `4:3` standard post
 - `1:1` feed creative
-- `16:9` landscape
 
-It does not include every supported format. In particular, `4:3` is not part of the starter plan, so it will not appear in Creative plan until a plan that includes it is applied.
+It does not include every supported format. In particular, `16:9` landscape is not part of the automatic starter plan, so it will not appear in Creative plan until a plan that includes it is applied.
 
-![Creative plan showing the automatically created 9:16, 1:1, and 16:9 starter stages, with an empty queue](../public/docs/creative-plan-starter.png)
+![Creative plan showing the automatically created 9:16, 4:3, and 1:1 starter stages, with an empty queue](../public/docs/creative-plan-starter.png)
 
 ### Changing the active plan
 
@@ -105,6 +105,12 @@ Advanced users can save an image model or motion model for matching stages in a 
 A saved override persists when the pack is reopened. Provider availability can change. If a saved model is no longer available, the plan cannot be applied until you choose a current model or return to **Automatic**.
 
 The provider reports the capability that actually served a completed run. Review the result rather than assuming the requested model guarantees a particular output.
+
+### Provider failure recovery
+
+For an eligible provider failure, PermitFrame can create one new provider attempt with a different currently available model for the same stage role and format. This recovery applies only when the model was chosen automatically, the replacement has a known price, and the remaining run budget permits it. The original tracked stage remains the audit record; its prior provider attempt and the backup model are recorded in the queue.
+
+PermitFrame does not silently retry a manually pinned model or retry indefinitely. If it cannot safely select or price a backup, the stage remains failed and offers **Retry same model** or **Retry with backup model**. A manual backup retry starts a new production run and may ask for explicit confirmation when the provider has not returned a usable price estimate.
 
 :::details Supported models and image formats
 
@@ -153,7 +159,7 @@ Livepeer performs the selected supported media work, which can include image gen
 - Store completed assets for delivery.
 - Create derivative receipts.
 
-Only selected active-plan stages are submitted. A stage absent from the active plan - for example `4:3` on the automatic starter plan - cannot be selected until you apply a plan that includes it. Failed provider work is shown honestly and can be retried under the available controls.
+Only selected active-plan stages are submitted. A stage absent from the active plan - for example `16:9` landscape on the automatic starter plan - cannot be selected until you apply a plan that includes it. Failed provider work is shown honestly and can be retried under the available controls.
 
 :::details Example: completed multi-format creative pack
 
