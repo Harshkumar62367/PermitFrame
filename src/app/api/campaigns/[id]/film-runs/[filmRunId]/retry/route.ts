@@ -9,10 +9,9 @@ import type { Database } from "@/server/types";
 export const dynamic = "force-dynamic";
 
 /**
- * Resume a failed film run that never reached the provider: only runs
- * with no tracked provider job id are eligible (nothing was dispatched,
- * so resuming cannot double-spend). Runs whose provider job terminally
- * failed need a fresh submit, never a silent resubmit.
+ * Resume a source-bound Film safely. Completed clips stay attached to the
+ * run; the pump only requeues failed scene clips, or retries final assembly.
+ * Legacy creative-job runs with a tracked provider job remain non-retryable.
  */
 export async function POST(_request: NextRequest, { params }: { params: Promise<{ id: string; filmRunId: string }> }) {
   const { id, filmRunId } = await params;
@@ -34,7 +33,7 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
   }
   if (run.providerJobId) {
     return NextResponse.json(
-      { error: "This run already reached the provider - resuming cannot recover it. Submit a new film run for a fresh provider job." },
+      { error: "This legacy film run already reached the provider - resuming cannot recover it. Submit a new film run for a fresh provider job." },
       { status: 400 }
     );
   }
@@ -45,6 +44,11 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
       r.status = "confirmed";
       r.error = undefined;
       r.finishedAt = undefined;
+      // A terminal assembly id cannot produce a new reel on a later poll.
+      // Preserve every completed scene URL; the source-bound pump will
+      // reassemble them once instead of regenerating them.
+      r.assemblyJobId = undefined;
+      r.assemblyClaimedAt = undefined;
     })
   );
   void pumpFilmRun(workspaceId, id, filmRunId, { budgetMs: 8 * 60 * 1000 }).catch(() => undefined);

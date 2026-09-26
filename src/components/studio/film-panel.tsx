@@ -12,6 +12,7 @@ import { FilmReviewModal } from "./film-review-modal";
 import { FilmRunPanel } from "./film-run-panel";
 import { FilmSceneCard } from "./film-scene-card";
 import type { Campaign } from "@/server/types";
+import { isActiveFilmStatus } from "@/server/livepeer/film-run";
 
 interface FilmPanelProps {
   vm: FilmPlanViewModel;
@@ -42,6 +43,8 @@ export function FilmPanel({ vm, allowed, campaignId, campaign, onChanged }: Film
   // UI-local only: which scene editor is open. Draft state stays in the vm.
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const headingRefs = useRef(new Map<string, HTMLHeadingElement>());
+  const activeFilmRun = campaign.filmRuns?.find((run) => isActiveFilmStatus(run.status)) ?? null;
+  const planLocked = activeFilmRun !== null;
 
   // Never render a dangling editor (e.g. after a confirmed target switch
   // replaces the scenes): fall back to fully collapsed.
@@ -92,6 +95,12 @@ export function FilmPanel({ vm, allowed, campaignId, campaign, onChanged }: Film
   }
   return (
     <div className="space-y-4">
+      {planLocked && (
+        <div role="status" className="rounded-xl bg-sky-500/10 p-3 text-[12.5px] leading-relaxed text-sky-800 ring-1 ring-sky-500/30 dark:text-sky-200">
+          Film generation is in progress. The submitted storyboard is locked; follow or cancel the active run below.
+        </div>
+      )}
+      <fieldset disabled={planLocked} className="m-0 min-w-0 space-y-4 border-0 p-0 disabled:opacity-60">
       <div className="rounded-xl border border-border p-4">
         <p className="text-[12px] font-medium text-muted-foreground">Total duration</p>
         <p className="mt-0.5 text-[11.5px] text-muted-foreground">
@@ -335,9 +344,9 @@ export function FilmPanel({ vm, allowed, campaignId, campaign, onChanged }: Film
         <div className="mt-3">
           <Button
             onClick={() => void vm.openReview()}
-            disabled={!allowed || !vm.canReview || vm.reviewing}
+            disabled={planLocked || !allowed || !vm.canReview || vm.reviewing}
             aria-busy={vm.reviewing}
-            title={!allowed ? "Locked until the permission check passes" : undefined}
+            title={planLocked ? "Film generation is in progress - the submitted plan is locked" : !allowed ? "Locked until the permission check passes" : undefined}
             className="w-full rounded-full bg-emerald-700 font-medium text-emerald-50 hover:bg-emerald-600 disabled:opacity-50 dark:bg-emerald-500 dark:text-emerald-950 dark:hover:bg-emerald-400"
           >
             {vm.reviewing ? "Reviewing…" : "Review film plan"}
@@ -348,6 +357,7 @@ export function FilmPanel({ vm, allowed, campaignId, campaign, onChanged }: Film
           <FilmDetails />
         </div>
       </div>
+      </fieldset>
 
       <FilmReviewModal
         open={vm.reviewOpen}

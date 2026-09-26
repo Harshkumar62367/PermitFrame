@@ -1,14 +1,15 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { AuthenticationRequiredError, requireCurrentSession } from "@/server/auth";
 import { loadCampaign } from "@/server/campaigns";
 import { pumpCaptionJob, submitCaptionJob } from "@/server/livepeer/film-caption-pump";
 import { newRunKey } from "@/lib/idempotency-key";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 630;
 
 /**
  * Submit a burn-captions job for a completed reel. Fast: the durable job
- * is created synchronously and the request returns its id; the detached
+ * is created synchronously and the request returns its id; the after-response
  * pump runs the single transcribe call. Repeats with the same
  * idempotencyKey replay the existing job - never a second paid call.
  */
@@ -35,11 +36,13 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     campaignId: id,
     filmRunId,
     language: body.language,
+    narrationJobId: typeof body.narrationJobId === "string" ? body.narrationJobId : undefined,
     idempotencyKey
   });
   if (!submitted.job) return NextResponse.json({ error: submitted.error ?? "Caption submission failed" }, { status: 400 });
+  const captionJobId = submitted.job.id;
   if (submitted.created) {
-    void pumpCaptionJob(workspaceId, id, filmRunId, submitted.job.id).catch(() => undefined);
+    after(() => pumpCaptionJob(workspaceId, id, filmRunId, captionJobId).catch(() => console.error("Caption pump failed")));
   }
-  return NextResponse.json({ started: true, captionJobId: submitted.job.id, created: submitted.created });
+  return NextResponse.json({ started: true, captionJobId, created: submitted.created });
 }

@@ -100,8 +100,27 @@ export function useTemplateSelection({ campaign, allowed, onChanged }: UseTempla
   }, []);
 
   const template = useMemo(() => templates?.find((t) => t.id === templateId) ?? null, [templates, templateId]);
+  // A preset may not contain a dispatchable motion recipe. Keep the user's
+  // preference for a later scope switch, but never submit it where it cannot
+  // produce an output. Custom is driven by its explicitly selected stages.
+  const recipesInScope = useMemo(() => {
+    if (!template) return [];
+    if (packSize === "quick") return template.recipes.filter((recipe) => recipe.quickPick);
+    if (packSize === "campaign") return template.recipes.filter((recipe) => !recipe.optional);
+    if (packSize === "custom") return template.recipes.filter((recipe) => stageIds.includes(recipe.id));
+    return template.recipes;
+  }, [template, packSize, stageIds]);
+  const motionAvailable = recipesInScope.some(
+    (recipe) => recipe.execution === "create_media" && recipe.assetType === "motion"
+  );
+  const motionUnavailableMessage = packSize === "quick"
+    ? "Quick includes image essentials only. Choose a larger pack or Custom if its selected deliverables include motion."
+    : packSize === "custom"
+      ? "Select a motion deliverable above to configure its short clip."
+      : "This pack has no dispatchable motion deliverable."
+  const effectiveMotionOn = motionOn && motionAvailable;
 
-  const durationError = validateDuration(motionOn, motionSeconds);
+  const durationError = validateDuration(effectiveMotionOn, motionSeconds);
 
   // Legacy persisted lengths (e.g. 40s) render the exact legacy notice
   // until the user picks a valid chip - a freshly typed invalid value
@@ -114,8 +133,8 @@ export function useTemplateSelection({ campaign, allowed, onChanged }: UseTempla
 
   const selection = useMemo(
     () =>
-      buildSelection({ templateId, packSize, motionOn, formats, stageIds, motionSeconds, durationError, profile, cap, modelOverrides: { conceptImage: imageModel, imageToVideo: motionModel } }),
-    [templateId, packSize, motionOn, formats, stageIds, motionSeconds, durationError, profile, cap, imageModel, motionModel]
+      buildSelection({ templateId, packSize, motionOn: effectiveMotionOn, formats, stageIds, motionSeconds, durationError, profile, cap, modelOverrides: { conceptImage: imageModel, imageToVideo: motionModel } }),
+    [templateId, packSize, effectiveMotionOn, formats, stageIds, motionSeconds, durationError, profile, cap, imageModel, motionModel]
   );
 
   // Expert model choices: same-origin safe endpoint, display data only.
@@ -209,7 +228,7 @@ export function useTemplateSelection({ campaign, allowed, onChanged }: UseTempla
   useEffect(() => {
     if (!allowed) return;
     const timer = setTimeout(() => {
-      if (motionOn && durationError !== null) {
+      if (effectiveMotionOn && durationError !== null) {
         setPreview(null);
         setPreviewError(null);
         return;
@@ -275,7 +294,7 @@ export function useTemplateSelection({ campaign, allowed, onChanged }: UseTempla
       const draft = {
         templateId,
         packSize,
-        assetTypes: motionOn ? ["image", "motion"] : ["image"],
+        assetTypes: effectiveMotionOn ? ["image", "motion"] : ["image"],
         formats,
         stageIds,
         motionSeconds,
@@ -320,7 +339,7 @@ export function useTemplateSelection({ campaign, allowed, onChanged }: UseTempla
       computeHasChanges(campaign.request.productionSpec, {
         templateId,
         packSize,
-        assetTypes: motionOn ? ["image", "motion"] : ["image"],
+        assetTypes: effectiveMotionOn ? ["image", "motion"] : ["image"],
         formats,
         stageIds,
         motionSeconds,
@@ -328,7 +347,7 @@ export function useTemplateSelection({ campaign, allowed, onChanged }: UseTempla
         maxSpendCapUsd: cap.trim() === "" ? undefined : cap,
         modelOverrides: { conceptImage: imageModel, imageToVideo: motionModel }
       }),
-    [campaign.request.productionSpec, templateId, packSize, motionOn, formats, stageIds, motionSeconds, profile, cap, imageModel, motionModel]
+    [campaign.request.productionSpec, templateId, packSize, effectiveMotionOn, formats, stageIds, motionSeconds, profile, cap, imageModel, motionModel]
   );
 
   const canApply = deriveCanApply({
@@ -341,10 +360,10 @@ export function useTemplateSelection({ campaign, allowed, onChanged }: UseTempla
     stageIds,
     modelsBlocked
   });
-  const customizeSummary = buildCustomizeSummary({ motionOn, formats, profile, cap });
+  const customizeSummary = buildCustomizeSummary({ motionOn: effectiveMotionOn, formats, profile, cap });
 
   const motionStages = preview?.stages.filter((s) => s.kind === "image-to-video") ?? [];
-  const mediaLine = !motionOn
+  const mediaLine = !effectiveMotionOn
     ? "Images"
     : describeMotionOutputs(motionStages.map((s) => s.durationSeconds));
   const formatLine = preview
@@ -362,7 +381,9 @@ export function useTemplateSelection({ campaign, allowed, onChanged }: UseTempla
     // selection values
     templateId,
     packSize,
-    motionOn,
+    motionOn: effectiveMotionOn,
+    motionAvailable,
+    motionUnavailableMessage,
     formats,
     stageIds,
     motionSeconds,

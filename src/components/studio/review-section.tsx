@@ -56,7 +56,10 @@ export function ReviewSection({ campaign, onChanged }: ReviewSectionProps) {
   const sharable = campaign.receipts.some((r) => hasSharableReceipt(r));
   // A superseded ratio mismatch is retained only as local audit history;
   // it is neither a legacy asset to store nor an actionable delivery item.
-  const legacyHosted = campaign.receipts.filter((r) => !r.supersededAt && !hasSharableReceipt(r));
+  const legacyHosted = campaign.receipts.filter((r) =>
+    !r.supersededAt && r.visibility !== "private" &&
+    campaign.jobs.some((job) => job.id === r.jobId) && !hasSharableReceipt(r)
+  );
   // Proof-ledger grouping, all from persisted state so a refresh shows the
   // durable outcome: only durable, non-private records without a UAL can
   // anchor; failed and orphaned-publishing records stay actionable; fresh

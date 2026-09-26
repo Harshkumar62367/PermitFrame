@@ -625,7 +625,7 @@ describe("provider truth: only the global aspect is sent", () => {
 
   it("scene entries carry title/prompt/duration only, with one global aspect_ratio", () => {
     const planValue = divergentPlan();
-    const args = buildCreativeSubmitArgs(planValue, "permitframe_film_test");
+    const args = buildCreativeSubmitArgs(planValue, "permitframe_film_test", "https://source.example/approved.png");
     assert.equal(args.aspect_ratio, "9:16");
     for (const s of args.scenes) {
       assert.deepEqual(Object.keys(s).sort(), ["duration", "prompt", "title"]);
@@ -638,7 +638,7 @@ describe("provider truth: only the global aspect is sent", () => {
       ...planValue,
       scenes: planValue.scenes.map((s, i) => (i === 0 ? { ...s, format: "1:1" as const } : s))
     };
-    const args = buildCreativeSubmitArgs(tampered, "permitframe_film_test");
+    const args = buildCreativeSubmitArgs(tampered, "permitframe_film_test", "https://source.example/approved.png");
     assert.equal(args.aspect_ratio, "9:16");
     assert.ok(args.scenes.every((s) => !("format" in s) && !("aspect_ratio" in s) && !("aspectRatio" in s)));
   });

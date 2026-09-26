@@ -98,6 +98,7 @@ export function TemplatePanel({ campaign, allowed, film, onChanged }: TemplatePa
                 onUseRecommended={vm.useRecommendedStages}
                 onClearStages={() => vm.setStageIds([])}
                 recipes={vm.template.recipes}
+                formats={vm.formats}
               />
 
               <TemplateCustomization
@@ -107,6 +108,8 @@ export function TemplatePanel({ campaign, allowed, film, onChanged }: TemplatePa
                 onToggleCustomize={() => vm.setCustomizeOpen((v) => !v)}
                 customizeSummary={vm.customizeSummary}
                 motionOn={vm.motionOn}
+                motionAvailable={vm.motionAvailable}
+                motionUnavailableMessage={vm.motionUnavailableMessage}
                 onToggleMotion={() => vm.setMotionOn((v) => !v)}
                 formats={vm.formats}
                 onToggleFormat={vm.toggleFormat}

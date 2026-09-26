@@ -2,12 +2,12 @@
 
 import { useEffect, useRef } from "react";
 import { apiGet } from "@/lib/api";
-import type { FilmNarrationJob } from "@/server/livepeer/narration-policy";
+import { narrationDisplayStatus, type FilmNarrationJob } from "@/server/livepeer/narration-policy";
 
 const BACKOFF_MS = [2000, 4000, 8000, 15000, 30000];
 
 function signatureOf(jobs: FilmNarrationJob[]): string {
-  return JSON.stringify(jobs.map((j) => `${j.id}:${j.status}:${j.narratedUrl ?? ""}`));
+  return JSON.stringify(jobs.map((j) => `${j.id}:${narrationDisplayStatus(j)}:${j.narratedUrl ?? ""}`));
 }
 
 function isTerminal(status: string): boolean {
@@ -46,7 +46,7 @@ export function useFilmNarrationProgress(
     lastSig.current = jobsRef.current ? signatureOf(jobsRef.current) : null;
 
     const activeIds = (): string[] =>
-      (jobsRef.current ?? []).filter((j) => !isTerminal(j.status)).map((j) => j.id);
+      (jobsRef.current ?? []).filter((j) => !isTerminal(narrationDisplayStatus(j))).map((j) => j.id);
 
     const poll = async (): Promise<void> => {
       if (cancelled) return;

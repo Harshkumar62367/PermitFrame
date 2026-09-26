@@ -1,9 +1,10 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { AuthenticationRequiredError, requireCurrentSession } from "@/server/auth";
 import { loadCampaign } from "@/server/campaigns";
-import { getRunStatusSnapshot } from "@/server/livepeer/runner";
+import { getRunStatusSnapshot, pumpRun } from "@/server/livepeer/runner";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 600;
 
 /**
  * Run status + spend ledger, strictly bounded for the 15s UI abort -
@@ -28,5 +29,10 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   }
   const snapshot = await getRunStatusSnapshot(workspaceId, id, runId);
   if (!snapshot) return NextResponse.json({ error: "Run not found" }, { status: 404 });
+  // A request that created the durable run may have ended before its worker
+  // started. A queued exact-job run needs a full dispatch pump to resume.
+  if (snapshot.run.status === "active" && snapshot.jobs.some((job) => job.status === "queued")) {
+    after(() => pumpRun(workspaceId, id, { runId, budgetMs: 8 * 60 * 1000 }).catch(() => console.error("Run pump failed")));
+  }
   return NextResponse.json({ ok: true, ...snapshot });
 }

@@ -1,3 +1,6 @@
+"use client";
+
+import { useState } from "react";
 import Link from "next/link";
 import { ArrowRight, Download, Maximize2, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -53,6 +56,7 @@ export function ReviewAssetCard({
   // claim requires a passed identity check, reference-guided never claims
   // preservation, and unknown rows render no pill at all.
   const pill = fidelityPillFor(r);
+  const [playbackSeconds, setPlaybackSeconds] = useState<number | null>(null);
   return (
     <div className="group overflow-hidden rounded-xl bg-muted/60 ring-1 ring-border transition hover:ring-emerald-600/40">
       {r.mediaType === "image" ? (
@@ -72,6 +76,10 @@ export function ReviewAssetCard({
             src={r.outputUrl}
             controls
             preload="metadata"
+            onLoadedMetadata={(event) => {
+              const seconds = event.currentTarget.duration;
+              if (Number.isFinite(seconds) && seconds > 0) setPlaybackSeconds(seconds);
+            }}
             className="aspect-[3/4] w-full bg-black object-cover"
           />
           <button
@@ -86,7 +94,14 @@ export function ReviewAssetCard({
         </div>
       )}
       <div className="space-y-1 p-3">
-        <p className="text-[12.5px] font-medium leading-tight">{r.label}</p>
+        <p className="text-[12.5px] font-medium leading-tight">
+          {r.derivedFromFilmRunId && r.mediaType === "video" ? r.label.replace(/ · \d+s$/, "") : r.label}
+        </p>
+        {r.derivedFromFilmRunId && r.mediaType === "video" && r.requestedDurationSeconds && (
+          <p className="text-[10.5px] text-muted-foreground">
+            {r.durationSeconds || playbackSeconds ? `${Math.round(r.durationSeconds ?? playbackSeconds ?? 0)}s delivered` : "Checking duration"} · {r.requestedDurationSeconds}s requested
+          </p>
+        )}
         <p
           className="font-mono text-[9.5px] uppercase tracking-[0.1em] text-muted-foreground"
           title={
@@ -127,8 +142,8 @@ export function ReviewAssetCard({
             Needs ratio review - requested {r.format}, received {describeActualSize(r.actualWidth, r.actualHeight)}. Stored and editable, but not deliverable to clients until regenerated.
           </p>
         ) : (
-          <p className="text-[10.5px] text-muted-foreground" title={r.storageStatus === "stored" ? "Persisted to PermitFrame durable storage; the provider original stays on record" : "Provider-hosted legacy output - previewable, but not share-ready until stored securely"}>
-            {r.storageStatus === "stored" ? "Stored in PermitFrame" : r.storageStatus === "failed" ? "Storage failed" : "Provider-hosted legacy asset"}
+          <p className="text-[10.5px] text-muted-foreground" title={r.storageStatus === "stored" ? "Persisted to PermitFrame durable storage; the provider original stays on record" : r.visibility === "private" ? "Private finishing result hosted by the provider" : "Provider-hosted legacy output - previewable, but not share-ready until stored securely"}>
+            {r.storageStatus === "stored" ? "Stored in PermitFrame" : r.visibility === "private" ? "Provider-hosted private derivative" : r.storageStatus === "failed" ? "Storage failed" : "Provider-hosted legacy asset"}
           </p>
         )}
         <div

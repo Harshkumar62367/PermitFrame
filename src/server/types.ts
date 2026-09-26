@@ -529,6 +529,8 @@ export interface ProductionJob {
    * variations can never run automatically.
    */
   variationExplicit?: boolean;
+  /** Client request key for one reviewer refinement; retries reuse its job. */
+  refinementRequestKey?: string;
   /** Requested quality profile, copied from the plan stage. */
   qualityProfile?: QualityProfile;
   /** Production role, copied from the plan stage. */

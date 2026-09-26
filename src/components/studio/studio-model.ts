@@ -244,7 +244,12 @@ const STAGE_PLAIN: Record<string, string> = {
  * Plain-language activity for a job - "Creating vertical motion creative"
  * instead of MCP jargon. Falls back to the plan label for unknown stages.
  */
-export function plainActivity(stageId: string, label: string, status: ProductionJob["status"] | string): string {
+export function plainActivity(
+  stageId: string,
+  label: string,
+  status: ProductionJob["status"] | string,
+  kind?: ProductionJob["kind"]
+): string {
   const what = STAGE_PLAIN[stageId] ?? label.toLowerCase();
   const subject = `${what.charAt(0).toUpperCase() + what.slice(1)}`;
   if (status === "preparing") return `Preparing request for ${what}…`;
@@ -256,7 +261,11 @@ export function plainActivity(stageId: string, label: string, status: Production
   if (status === "generating") return `Creating ${what}…`;
   if (status === "queued") return "Waiting to start…";
   if (status === "storage_pending") return `Generated - saving ${what} securely…`;
-  if (status === "preview_ready") return `Checking ${what} quality…`;
+  if (status === "preview_ready") {
+    return kind === "image-to-video"
+      ? `Checking ${what} output and saving securely…`
+      : `Checking ${what} quality…`;
+  }
   if (status === "ready_to_share") return `${subject} ready`;
   if (status === "cancelled") return `${subject} cancelled`;
   return `${subject} failed`;

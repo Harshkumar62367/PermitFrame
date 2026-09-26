@@ -54,12 +54,14 @@ export const NARRATION_SCRIPT_MAX_CHARS = 1500;
 export const NARRATION_CHARS_PER_SECOND = 14;
 
 /**
- * Stale-claim threshold: TTS p95 runs ~2 minutes and mux is an ffmpeg
- * pass, so a claimed phase with no outcome 30 minutes after dispatch
- * started is treated as outcome-unknown (possible interruption). Never
- * auto-resubmitted - only explicit user-confirmed recovery moves on.
+ * Acknowledged provider jobs retain a 30-minute delivery window.
+ * An unacknowledged submit has no id to poll, so a shorter window below
+ * makes the uncertain outcome visible. Neither is auto-resubmitted.
  */
 export const NARRATION_STALE_MS = 30 * 60 * 1000;
+/** The submit transport itself is capped at two minutes; without a returned
+ * job id or output there is nothing to poll. Surface uncertainty sooner. */
+export const NARRATION_UNACKNOWLEDGED_STALE_MS = 5 * 60 * 1000;
 
 /** Rendered for stale claimed jobs: non-success, no outcome invented. */
 export const NARRATION_OUTCOME_UNKNOWN_COPY =
@@ -217,7 +219,7 @@ export interface MuxRequestArgs {
   action: "mux_audio";
   source_url: string;
   audio_url: string;
-  audio_fill: "none";
+  audio_fill: "pad";
   async: true;
   session_id: string;
   idempotency_key: string;
@@ -249,8 +251,9 @@ export function buildTtsRequest(input: {
 
 /**
  * Mux request: exactly the contract's required fields plus shared
- * cost/idempotency fields. audio_fill is always "none" - narration never
- * loops. Throws unless the contract gates mux_audio verified.
+ * cost/idempotency fields. Pad the short narration with silence to retain
+ * the full video length; the provider's live schema confirms this behavior.
+ * Throws unless the contract gates mux_audio verified.
  */
 export function buildMuxRequest(input: {
   reelUrl: string;
@@ -264,7 +267,7 @@ export function buildMuxRequest(input: {
     action: "mux_audio",
     source_url: input.reelUrl,
     audio_url: input.audioUrl,
-    audio_fill: "none",
+    audio_fill: "pad",
     async: true,
     session_id: input.sessionId,
     idempotency_key: input.idempotencyKey,
@@ -461,33 +464,36 @@ export function isTerminalNarrationStatus(status: FilmNarrationStatus): boolean 
 /**
  * Interrupted-claim detection (pure, read-only), phase-aware: TTS phases
  * time out from the TTS dispatch claim, muxing from the mux dispatch
- * claim, so a long TTS run never makes a fresh mux look stale. The legacy
+ * claim, so a long TTS run never makes a fresh mux look stale. Jobs with
+ * no provider id/output surface uncertainty sooner. The legacy
  * dispatchStartedAt is only a fallback for rows written before phase
  * timestamps existed - never the source of truth. Queued jobs never
  * claimed anything and are never stale. Phase timestamps are never reset.
  */
 export function isNarrationStale(
-  job: Pick<FilmNarrationJob, "status" | "ttsDispatchedAt" | "muxDispatchedAt" | "dispatchStartedAt">,
+  job: Pick<FilmNarrationJob, "status" | "ttsDispatchedAt" | "muxDispatchedAt" | "dispatchStartedAt" | "ttsJobId" | "muxJobId" | "narrationAudioUrl">,
   nowMs: number = Date.now()
 ): boolean {
-  const aged = (iso: string | undefined): boolean => {
+  const aged = (iso: string | undefined, thresholdMs = NARRATION_STALE_MS): boolean => {
     if (!iso) return false;
     const started = Date.parse(iso);
     if (!Number.isFinite(started)) return false;
-    return nowMs - started > NARRATION_STALE_MS;
+    return nowMs - started > thresholdMs;
   };
   if (job.status === "generating_narration" || job.status === "waiting_for_narration") {
-    return aged(job.ttsDispatchedAt ?? job.dispatchStartedAt);
+    return aged(job.ttsDispatchedAt ?? job.dispatchStartedAt,
+      job.ttsJobId || job.narrationAudioUrl ? NARRATION_STALE_MS : NARRATION_UNACKNOWLEDGED_STALE_MS);
   }
   if (job.status === "muxing") {
-    return aged(job.muxDispatchedAt ?? job.dispatchStartedAt);
+    return aged(job.muxDispatchedAt ?? job.dispatchStartedAt,
+      job.muxJobId ? NARRATION_STALE_MS : NARRATION_UNACKNOWLEDGED_STALE_MS);
   }
   return false;
 }
 
 /** Display status (pure, never mutates): stale claimed jobs render outcome_unknown. */
 export function narrationDisplayStatus(
-  job: Pick<FilmNarrationJob, "status" | "ttsDispatchedAt" | "muxDispatchedAt" | "dispatchStartedAt">,
+  job: Pick<FilmNarrationJob, "status" | "ttsDispatchedAt" | "muxDispatchedAt" | "dispatchStartedAt" | "ttsJobId" | "muxJobId" | "narrationAudioUrl">,
   nowMs: number = Date.now()
 ): FilmNarrationStatus {
   if (job.status === "outcome_unknown") return "outcome_unknown";
@@ -498,7 +504,7 @@ export function narrationDisplayStatus(
 /** Explicit-recovery eligibility (pure): only stale claimed jobs. */
 export function narrationRecoveryError(
   job:
-    | Pick<FilmNarrationJob, "status" | "ttsDispatchedAt" | "muxDispatchedAt" | "dispatchStartedAt">
+    | Pick<FilmNarrationJob, "status" | "ttsDispatchedAt" | "muxDispatchedAt" | "dispatchStartedAt" | "ttsJobId" | "muxJobId" | "narrationAudioUrl">
     | undefined,
   nowMs: number = Date.now()
 ): string | null {

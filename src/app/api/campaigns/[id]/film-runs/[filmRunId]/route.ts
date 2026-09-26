@@ -1,10 +1,12 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { AuthenticationRequiredError, requireCurrentSession } from "@/server/auth";
 import { loadCampaign } from "@/server/campaigns";
 import { pumpFilmRun } from "@/server/livepeer/film-pump";
 import { filmDisplayLabel } from "@/server/livepeer/film-run";
+import { redactSecrets } from "@/server/dkg/edge-node-adapter";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 600;
 
 /**
  * Film run status. Strictly bounded for the UI: a short poll-only pump
@@ -32,7 +34,9 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
     allowSubmit: false,
     allowConfirm: false
   }).catch(() => undefined);
-  void pumpFilmRun(workspaceId, id, filmRunId, { budgetMs: 8 * 60 * 1000 }).catch(() => undefined);
+  after(() => pumpFilmRun(workspaceId, id, filmRunId, { budgetMs: 8 * 60 * 1000 }).catch((error) => {
+    console.error("[film-run:progress-pump]", redactSecrets(error instanceof Error ? error.message : String(error)).slice(0, 500));
+  }));
   const fresh = (await loadCampaign(id))?.filmRuns?.find((r) => r.id === filmRunId) ?? run;
   return NextResponse.json({
     ok: true,

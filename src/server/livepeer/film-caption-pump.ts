@@ -82,6 +82,7 @@ export async function submitCaptionJob(input: {
   campaignId: string;
   filmRunId: string;
   language: unknown;
+  narrationJobId?: string;
   idempotencyKey?: string;
 }): Promise<CaptionSubmitResult> {
   const db = await readWorkspace(input.workspaceId);
@@ -100,6 +101,12 @@ export async function submitCaptionJob(input: {
   if (run.status !== "ready" || !isUsableOutputUrl(run.reelUrl)) {
     return { created: false, error: "Burn captions needs a completed film reel - this run has not delivered one yet." };
   }
+  const narration = input.narrationJobId
+    ? run.narrationJobs?.find((job) => job.id === input.narrationJobId)
+    : undefined;
+  if (input.narrationJobId && (!narration || narration.status !== "ready" || !isUsableOutputUrl(narration.narratedUrl))) {
+    return { created: false, error: "The selected narrated video is not ready. Refresh the film run before burning captions." };
+  }
   const checked = validateCaptionLanguage(input.language);
   if (!checked.ok) return { created: false, error: checked.error };
   const key = input.idempotencyKey?.trim() || undefined;
@@ -115,7 +122,7 @@ export async function submitCaptionJob(input: {
     campaignId: input.campaignId,
     filmRunId: input.filmRunId,
     language: checked.language,
-    sourceReelUrl: run.reelUrl as string,
+    sourceReelUrl: narration?.narratedUrl ?? (run.reelUrl as string),
     status: "queued",
     attempt: 1,
     ...(key ? { idempotencyKey: key } : {}),

@@ -171,6 +171,18 @@ describe("eligibility and confirmation gate", () => {
     assert.equal((read().campaigns[0].filmRuns?.[0].captionJobs ?? []).length, 1);
   });
 
+  it("uses only the explicitly selected ready narrated copy as a caption source", async () => {
+    const narratedUrl = "https://cdn.example/narrated.mp4";
+    const run = readyRun({ narrationJobs: [{ id: "narration_ready", status: "ready", narratedUrl }] as NonNullable<FilmRun["narrationJobs"]> });
+    const { store, read } = memoryStore(seedDb(run, "narrated-source").db);
+    setRunStore(store);
+    const refused = await submitCaptionJob({ workspaceId: WS, campaignId: "cmp_narrated-source", filmRunId: "filmrun_1", language: "en", narrationJobId: "missing" });
+    assert.equal(refused.created, false);
+    assert.equal(read().campaigns[0].filmRuns?.[0].captionJobs?.length ?? 0, 0);
+    const selected = await submitCaptionJob({ workspaceId: WS, campaignId: "cmp_narrated-source", filmRunId: "filmrun_1", language: "en", narrationJobId: "narration_ready" });
+    assert.equal(selected.job?.sourceReelUrl, narratedUrl);
+  });
+
   it("refuses runs without a delivered reel", async () => {
     const cases: { tag: string; run: FilmRun }[] = [
       { tag: "notready", run: readyRun({ status: "generating_scenes" }) },
@@ -535,10 +547,13 @@ describe("interrupted-claim staleness is derived, never auto-advanced", () => {
   it("stale claimed jobs display outcome-unknown without mutating the record", () => {
     const queued = staleJob({ status: "queued" });
     const transcribing = staleJob({ status: "transcribing" });
+    const burning = staleJob({ status: "burning", providerJobId: "tjob_1" });
     assert.equal(isCaptionStale(queued), true);
     assert.equal(isCaptionStale(transcribing), true);
+    assert.equal(isCaptionStale(burning), true);
     assert.equal(captionDisplayStatus(queued), "outcome_unknown");
     assert.equal(captionDisplayStatus(transcribing), "outcome_unknown");
+    assert.equal(captionDisplayStatus(burning), "outcome_unknown");
     assert.equal(queued.status, "queued");
     assert.equal(transcribing.status, "transcribing");
   });
@@ -546,7 +561,7 @@ describe("interrupted-claim staleness is derived, never auto-advanced", () => {
   it("fresh, unclaimed, and settled jobs are never stale", () => {
     assert.equal(isCaptionStale(staleJob({ dispatchStartedAt: undefined })), false);
     assert.equal(isCaptionStale(staleJob({ dispatchStartedAt: FRESH_AT })), false);
-    assert.equal(isCaptionStale(staleJob({ status: "burning", providerJobId: "tjob_1" })), false);
+    assert.equal(isCaptionStale(staleJob({ status: "burning", dispatchStartedAt: FRESH_AT, providerJobId: "tjob_1" })), false);
     assert.equal(isCaptionStale(staleJob({ status: "ready" })), false);
     assert.equal(isCaptionStale(staleJob({ status: "failed" })), false);
     assert.equal(isCaptionStale(staleJob({ status: "outcome_unknown" })), false);
@@ -621,6 +636,16 @@ describe("explicit unknown-outcome recovery", () => {
     assert.equal(jobs.find((j) => j.id === "filmcap_stale")?.status, "outcome_unknown");
     assert.equal(jobs.find((j) => j.id === recovered.job?.id)?.status, "ready");
     assert.equal(read().campaigns[0].receipts.length, 1);
+  });
+
+  it("recovers a burn-pending job only after its safety window", async () => {
+    const seed = seedCaptionDb("recoverburn", [staleJob({ status: "burning", providerJobId: "tjob_1" })]);
+    const { store, read } = memoryStore(seed.db);
+    setRunStore(store);
+    const recovered = await recoverCaptionJob(WS, seed.campaignId, "filmrun_1", "filmcap_stale");
+    assert.equal(recovered.ok, true);
+    assert.equal(read().campaigns[0].filmRuns?.[0].captionJobs?.[0].status, "outcome_unknown");
+    assert.equal(read().campaigns[0].filmRuns?.[0].captionJobs?.[0].providerJobId, "tjob_1");
   });
 
   it("refuses recovery for fresh, settled, and already-preserved jobs", async () => {

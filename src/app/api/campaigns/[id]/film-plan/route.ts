@@ -8,6 +8,7 @@ import {
   mergeFilmPlanIntoRequest,
   validateFilmPlan
 } from "@/server/livepeer/film-plan";
+import { isActiveFilmStatus } from "@/server/livepeer/film-run";
 import { logDkgError, sanitizeDkgError } from "@/server/dkg/public-errors";
 
 export const dynamic = "force-dynamic";
@@ -41,6 +42,12 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       return NextResponse.json(
         { error: "Resolve the rights block before planning a campaign film - blocked campaigns never reach generation." },
         { status: 400 }
+      );
+    }
+    if (campaign.filmRuns?.some((run) => isActiveFilmStatus(run.status))) {
+      return NextResponse.json(
+        { error: "Film generation is in progress - the submitted storyboard is locked until the run settles." },
+        { status: 409 }
       );
     }
     // Invalid plans are rejected before persistence - nothing is stored.

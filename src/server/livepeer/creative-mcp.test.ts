@@ -691,14 +691,14 @@ describe("narration call shape", () => {
     assert.equal(parsed.providerJobId, "mjob_tts1");
   });
 
-  it("sends exactly the contract mux fields with audio_fill none", async () => {
+  it("sends exactly the contract mux fields with audio_fill pad", async () => {
     stubFetch((tool, args) => {
       assert.equal(tool, "create_media");
       assert.deepEqual(args, {
         action: "mux_audio",
         source_url: "https://cdn.example/reel.mp4",
         audio_url: "https://cdn.example/voice.mp3",
-        audio_fill: "none",
+        audio_fill: "pad",
         async: true,
         session_id: "s2",
         idempotency_key: "k2",

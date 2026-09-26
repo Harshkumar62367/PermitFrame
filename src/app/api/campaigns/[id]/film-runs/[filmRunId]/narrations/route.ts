@@ -1,14 +1,15 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { AuthenticationRequiredError, requireCurrentSession } from "@/server/auth";
 import { loadCampaign } from "@/server/campaigns";
 import { pumpNarrationJob, submitNarrationJob } from "@/server/livepeer/narration-pump";
 import { newRunKey } from "@/lib/idempotency-key";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 180;
 
 /**
  * Submit a narration job for a completed reel. Fast: the durable job is
- * created synchronously and the request returns its id; the detached pump
+ * created synchronously and the request returns its id; the after-response pump
  * runs TTS-then-mux. Repeats with the same idempotencyKey replay the
  * existing job - never a second paid flow.
  */
@@ -39,8 +40,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     idempotencyKey
   });
   if (!submitted.job) return NextResponse.json({ error: submitted.error ?? "Narration submission failed" }, { status: 400 });
+  const narrationJobId = submitted.job.id;
   if (submitted.created) {
-    void pumpNarrationJob(workspaceId, id, filmRunId, submitted.job.id).catch(() => undefined);
+    after(() => pumpNarrationJob(workspaceId, id, filmRunId, narrationJobId).catch(() => console.error("Narration pump failed")));
   }
-  return NextResponse.json({ started: true, narrationJobId: submitted.job.id, created: submitted.created });
+  return NextResponse.json({ started: true, narrationJobId, created: submitted.created });
 }

@@ -52,6 +52,7 @@ function isTerminalStatus(status: FilmNarrationStatus): boolean {
  */
 export function FilmNarrationPanel({ campaignId, run, allowed, onChanged }: FilmNarrationPanelProps) {
   const jobs = run.narrationJobs ?? [];
+  const latestNarrationJobId = jobs.toSorted((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))[0]?.id;
   const [confirming, setConfirming] = useState(false);
   const [confirmingRecovery, setConfirmingRecovery] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -157,6 +158,7 @@ export function FilmNarrationPanel({ campaignId, run, allowed, onChanged }: Film
               key={job.id}
               job={job}
               reelSeconds={run.targetDurationSeconds}
+              latest={job.id === latestNarrationJobId}
               allowed={allowed}
               busy={busy}
               onRetry={() => void retry(job.id)}
@@ -198,6 +200,7 @@ export function FilmNarrationPanel({ campaignId, run, allowed, onChanged }: Film
 function NarrationJobCard({
   job,
   reelSeconds,
+  latest,
   allowed,
   busy,
   onRetry,
@@ -206,6 +209,7 @@ function NarrationJobCard({
 }: {
   job: FilmNarrationJob;
   reelSeconds: number;
+  latest: boolean;
   allowed: boolean;
   busy: string | null;
   onRetry: () => void;
@@ -221,7 +225,7 @@ function NarrationJobCard({
   return (
     <li className="rounded-lg bg-muted/60 px-2.5 py-2 ring-1 ring-border">
       <p className="flex items-center justify-between gap-2 text-[12px]">
-        <span className="font-medium">Narration · ~{job.estimatedSeconds}s of {reelSeconds}s reel</span>
+        <span className="font-medium">Narration · ~{job.estimatedSeconds}s of {reelSeconds}s reel{latest ? " · Latest" : ""}</span>
         <span className={cn("shrink-0 rounded-full px-2 py-0.5 text-[10.5px] font-medium ring-1", BADGE[display])}>
           {FILM_NARRATION_LABELS[display]}
         </span>
@@ -232,6 +236,9 @@ function NarrationJobCard({
           ? `$${((job.ttsCostUsd ?? 0) + (job.muxCostUsd ?? 0)).toFixed(2)} reported`
           : "unavailable"}
       </p>
+      <p className="mt-0.5 text-[10.5px] text-muted-foreground">
+        Submitted {formatNarrationDate(job.createdAt)}
+      </p>
       {job.error && display !== "outcome_unknown" && (
         <p role="alert" className="mt-1 break-words text-[11.5px] text-rose-600 dark:text-rose-300">{job.error}</p>
       )}
@@ -241,12 +248,17 @@ function NarrationJobCard({
         </p>
       )}
       {job.status === "ready" && job.narratedUrl && (
-        <div className="mt-1.5">
-          <video src={job.narratedUrl} controls preload="metadata" className="aspect-video w-full rounded-lg bg-black" />
-          <p className="mt-1 text-[10.5px] text-muted-foreground">
-            Narrated derivative - saved as a linked receipt in Review. The original reel is unchanged.
-          </p>
-        </div>
+        <details className="mt-1.5 rounded-md bg-background/50 px-2.5 py-2 ring-1 ring-border">
+          <summary className="cursor-pointer text-[11.5px] font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline">
+            Show narrated result
+          </summary>
+          <div className="mt-2">
+            <video src={job.narratedUrl} controls preload="metadata" className="aspect-video w-full rounded-lg bg-black" />
+            <p className="mt-1 text-[10.5px] text-muted-foreground">
+              Narrated derivative - saved as a linked receipt in Review. The original reel is unchanged.
+            </p>
+          </div>
+        </details>
       )}
       <div className="mt-1.5 flex flex-wrap gap-2">
         {retryable && (
@@ -270,6 +282,12 @@ function NarrationJobCard({
       </div>
     </li>
   );
+}
+
+function formatNarrationDate(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "date unavailable";
+  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(date);
 }
 
 function NarrationConfirm({

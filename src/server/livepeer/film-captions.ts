@@ -45,7 +45,7 @@ export const FILM_CAPTION_LABELS: Record<FilmCaptionStatus, string> = {
 
 /**
  * Stale-claim threshold: the transcribe call times out at 10 minutes, so
- * a queued/transcribing job still holding a dispatch claim 12 minutes
+ * a queued/transcribing/burning job still holding a dispatch claim 12 minutes
  * later is treated as outcome-unknown (interrupted, possibly delivered).
  * Never auto-resubmitted - only explicit user-confirmed recovery moves on.
  */
@@ -277,17 +277,18 @@ export function isTerminalCaptionStatus(status: FilmCaptionStatus): boolean {
 }
 
 /**
- * Interrupted-claim detection (pure, read-only): a queued/transcribing job
+ * Interrupted-claim detection (pure, read-only): a queued/transcribing/burning job
  * holding a dispatch claim older than CAPTION_STALE_MS may have been cut
  * off mid-call by a restart - its outcome is unknown. Queued jobs that
- * never claimed (no dispatchStartedAt) are ordinary pending work, and
- * burning jobs hold a tracked provider id (non-resumable, but known).
+ * never claimed (no dispatchStartedAt) are ordinary pending work. A
+ * burn-pending response has no supported status lookup, so it cannot
+ * remain active forever.
  */
 export function isCaptionStale(
   job: Pick<FilmCaptionJob, "status" | "dispatchStartedAt">,
   nowMs: number = Date.now()
 ): boolean {
-  if (job.status !== "queued" && job.status !== "transcribing") return false;
+  if (job.status !== "queued" && job.status !== "transcribing" && job.status !== "burning") return false;
   if (!job.dispatchStartedAt) return false;
   const started = Date.parse(job.dispatchStartedAt);
   if (!Number.isFinite(started)) return false;

@@ -2,12 +2,12 @@
 
 import { useEffect, useRef } from "react";
 import { apiGet } from "@/lib/api";
-import type { FilmCaptionJob } from "@/server/livepeer/film-captions";
+import { captionDisplayStatus, type FilmCaptionJob } from "@/server/livepeer/film-captions";
 
 const BACKOFF_MS = [2000, 4000, 8000, 15000, 30000];
 
 function signatureOf(jobs: FilmCaptionJob[]): string {
-  return JSON.stringify(jobs.map((j) => `${j.id}:${j.status}:${j.captionedUrl ?? ""}`));
+  return JSON.stringify(jobs.map((j) => `${j.id}:${captionDisplayStatus(j)}:${j.captionedUrl ?? ""}`));
 }
 
 function isTerminal(status: string): boolean {
@@ -47,7 +47,7 @@ export function useFilmCaptionProgress(
     lastSig.current = jobsRef.current ? signatureOf(jobsRef.current) : null;
 
     const activeIds = (): string[] =>
-      (jobsRef.current ?? []).filter((j) => !isTerminal(j.status)).map((j) => j.id);
+      (jobsRef.current ?? []).filter((j) => !isTerminal(captionDisplayStatus(j))).map((j) => j.id);
 
     const poll = async (): Promise<void> => {
       if (cancelled) return;

@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { AuthenticationRequiredError, requireCurrentSession } from "@/server/auth";
 import { loadCampaign } from "@/server/campaigns";
 import { pumpNarrationJob } from "@/server/livepeer/narration-pump";
@@ -8,6 +8,7 @@ import { writeWorkspace } from "@/server/livepeer/run-store";
 import type { Database } from "@/server/types";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 180;
 
 /**
  * Resume a failed narration job that never reached the provider: only
@@ -49,6 +50,6 @@ export async function POST(
       target.finishedAt = undefined;
     })
   );
-  void pumpNarrationJob(workspaceId, id, filmRunId, narrationJobId).catch(() => undefined);
+  after(() => pumpNarrationJob(workspaceId, id, filmRunId, narrationJobId).catch(() => console.error("Narration pump failed")));
   return NextResponse.json({ ok: true, narrationJobId });
 }

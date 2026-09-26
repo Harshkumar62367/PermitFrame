@@ -117,7 +117,7 @@ describe("exact request fields", () => {
     assert.ok(!("model_override" in args));
   });
 
-  it("mux sends only action/urls/audio_fill-none/async/session/idempotency/cap", () => {
+  it("mux pads short narration with silence to preserve the reel duration", () => {
     const args = buildMuxRequest({
       reelUrl: "https://cdn.example/reel.mp4",
       audioUrl: "https://cdn.example/voice.mp3",
@@ -129,7 +129,7 @@ describe("exact request fields", () => {
       action: "mux_audio",
       source_url: "https://cdn.example/reel.mp4",
       audio_url: "https://cdn.example/voice.mp3",
-      audio_fill: "none",
+      audio_fill: "pad",
       async: true,
       session_id: "s2",
       idempotency_key: "k2",
@@ -271,6 +271,17 @@ describe("staleness derivation", () => {
     assert.equal(isNarrationStale(job({ status: "generating_narration", ttsDispatchedAt: STALE_AT })), true);
     assert.equal(isNarrationStale(job({ status: "waiting_for_narration", ttsDispatchedAt: STALE_AT })), true);
     assert.equal(isNarrationStale(job({ status: "muxing", muxDispatchedAt: STALE_AT })), true);
+  });
+
+  it("shows an unacknowledged submit as unknown after five minutes without resubmitting", () => {
+    const sixMinutesAgo = new Date(Date.now() - 6 * 60 * 1000).toISOString();
+    const missingTtsId = job({ status: "generating_narration", ttsDispatchedAt: sixMinutesAgo });
+    assert.equal(narrationDisplayStatus(missingTtsId), "outcome_unknown");
+    assert.equal(narrationRecoveryError(missingTtsId), null);
+    assert.equal(missingTtsId.status, "generating_narration");
+    assert.equal(isNarrationStale(job({ ...missingTtsId, ttsJobId: "tts_1" })), false);
+    assert.equal(isNarrationStale(job({ status: "muxing", muxDispatchedAt: sixMinutesAgo })), true);
+    assert.equal(isNarrationStale(job({ status: "muxing", muxDispatchedAt: sixMinutesAgo, muxJobId: "mux_1" })), false);
   });
 
   it("old TTS plus fresh mux does not make mux stale", () => {

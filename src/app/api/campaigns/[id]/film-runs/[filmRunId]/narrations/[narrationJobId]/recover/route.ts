@@ -1,9 +1,10 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { AuthenticationRequiredError, requireCurrentSession } from "@/server/auth";
 import { loadCampaign } from "@/server/campaigns";
 import { pumpNarrationJob, recoverNarrationJob, narrationRecoverHttpOutcome } from "@/server/livepeer/narration-pump";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 180;
 
 /**
  * Explicit unknown-outcome recovery (user-confirmed only - this route is
@@ -34,6 +35,6 @@ export async function POST(
     const outcome = narrationRecoverHttpOutcome(recovered);
     return NextResponse.json(outcome.body, { status: outcome.status });
   }
-  void pumpNarrationJob(workspaceId, id, filmRunId, recovered.job.id).catch(() => undefined);
+  after(() => pumpNarrationJob(workspaceId, id, filmRunId, recovered.job.id).catch(() => console.error("Narration pump failed")));
   return NextResponse.json({ ok: true, narrationJobId: recovered.job.id, recoveredFrom: recovered.recoveredFrom });
 }

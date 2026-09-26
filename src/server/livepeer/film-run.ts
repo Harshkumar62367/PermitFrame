@@ -1,5 +1,5 @@
 import type { FilmPlan, FilmScene } from "./film-plan";
-import { DEFAULT_PROVIDER_WATCHDOG_SECONDS, MAX_PROVIDER_WATCHDOG_SECONDS, providerWatchdogSeconds } from "./provider-watchdog";
+import { MAX_PROVIDER_WATCHDOG_SECONDS, providerWatchdogSeconds } from "./provider-watchdog";
 
 /**
  * Durable FilmRun: one paid provider film job owned by exactly one run,
@@ -36,8 +36,18 @@ export const FILM_RUN_LABELS: Record<FilmRunStatus, string> = {
 export interface FilmSceneOutput {
   index: number;
   title?: string;
-  url: string;
+  /** A scene may report progress before the provider has published its URL. */
+  url?: string;
   status?: string;
+  /** Async image-to-video provider job for this scene only. */
+  providerJobId?: string;
+  lastProviderJobId?: string;
+  /** Incremented only when an explicit Resume retries a failed scene. */
+  attempt?: number;
+  costUsd?: number;
+  error?: string;
+  startedAt?: string;
+  finishedAt?: string;
 }
 
 /**
@@ -65,6 +75,13 @@ export interface FilmRun {
   sceneFingerprint: string;
   /** Planned scene definitions (what was confirmed). */
   plannedScenes: FilmScene[];
+  /** Approved source record bound to this run; its delivery URL is never stored.
+   * Optional only for legacy runs, which fall back to the campaign selection. */
+  sourceMediaId?: string;
+  /** Brief snapshot used to keep each source-bound scene on the approved product. */
+  brand?: string;
+  productName?: string;
+  creativeBrief?: string;
   /** Stable per-run provider tag (session_id); reused on every retry. */
   providerSessionId: string;
   status: FilmRunStatus;
@@ -79,6 +96,15 @@ export interface FilmRun {
   /** Owned provider job id (cjob_*); persisted before any poll/confirm. */
   providerJobId?: string;
   lastProviderJobId?: string;
+  /** Async job for stitching already verified scene clips, if the provider returns one. */
+  assemblyJobId?: string;
+  assemblyClaimedAt?: string;
+  /** Provider-hosted progress page. It is an inspector link, never a deliverable reel. */
+  providerViewerUrl?: string;
+  /** Durable claim made before the provider submit call.  It prevents a
+   * second worker from submitting the same storyboard while the first call
+   * is still awaiting the provider's acknowledgement. */
+  submissionClaimedAt?: string;
   dispatchStartedAt?: string;
   providerBudgetSeconds?: number;
   dispatchBudgetSeconds?: number;
@@ -120,7 +146,7 @@ export type FilmNextAction = "submit" | "confirm_staged" | "poll" | "none";
  * confirmed - never re-submitted (no duplicate paid jobs). A confirmed run
  * without an id submits. Terminal runs do nothing.
  */
-export function nextFilmAction(run: Pick<FilmRun, "status" | "providerJobId" | "providerStatus">): FilmNextAction {
+export function nextFilmAction(run: Pick<FilmRun, "status" | "providerJobId" | "providerStatus"> & { submissionClaimedAt?: string }): FilmNextAction {
   if (run.status === "ready" || run.status === "failed" || run.status === "cancelled") return "none";
   if (run.providerJobId) {
     const gate = (run.providerStatus ?? "").toLowerCase();
@@ -129,6 +155,9 @@ export function nextFilmAction(run: Pick<FilmRun, "status" | "providerJobId" | "
     }
     return "poll";
   }
+  // A provider submit is in flight.  Do not make another paid call just
+  // because a status poll or another process sees the run first.
+  if (run.submissionClaimedAt) return "none";
   return "submit";
 }
 
@@ -150,15 +179,30 @@ export function isActiveFilmStatus(status: FilmRunStatus): boolean {
   return status === "confirmed" || status === "submitting" || status === "generating_scenes" || status === "assembling_reel";
 }
 
+/**
+ * A Campaign Film is one provider-side storyboard + reel assembly job, not
+ * a short clip.  Give that handoff a film-sized window even when the provider
+ * reports the generic short-job budget.  The provider's longer reported
+ * budget is respected, still bounded by the global fifteen-minute ceiling.
+ */
+export const FILM_MIN_PROVIDER_WATCHDOG_SECONDS = 8 * 60;
+
+export function filmProviderWatchdogSeconds(reportedBudgetSeconds?: number): number {
+  return Math.min(
+    MAX_PROVIDER_WATCHDOG_SECONDS,
+    Math.max(FILM_MIN_PROVIDER_WATCHDOG_SECONDS, providerWatchdogSeconds(reportedBudgetSeconds))
+  );
+}
+
 export function filmWatchdogDeadlineMs(run: Pick<FilmRun, "dispatchDeadlineAt" | "dispatchStartedAt" | "providerBudgetSeconds" | "dispatchBudgetSeconds">, now = Date.now()): number {
   const explicit = Date.parse(run.dispatchDeadlineAt ?? "");
   if (Number.isFinite(explicit)) return explicit;
   const anchor = Date.parse(run.dispatchStartedAt ?? "");
   const seconds = run.providerBudgetSeconds !== undefined
-    ? providerWatchdogSeconds(run.providerBudgetSeconds)
+    ? filmProviderWatchdogSeconds(run.providerBudgetSeconds)
     : run.dispatchBudgetSeconds !== undefined && Number.isFinite(run.dispatchBudgetSeconds) && run.dispatchBudgetSeconds > 0
-      ? Math.min(MAX_PROVIDER_WATCHDOG_SECONDS, run.dispatchBudgetSeconds)
-      : DEFAULT_PROVIDER_WATCHDOG_SECONDS;
+      ? Math.min(MAX_PROVIDER_WATCHDOG_SECONDS, Math.max(FILM_MIN_PROVIDER_WATCHDOG_SECONDS, run.dispatchBudgetSeconds))
+      : filmProviderWatchdogSeconds();
   return Number.isFinite(anchor) ? anchor + seconds * 1000 : now + seconds * 1000;
 }
 

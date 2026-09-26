@@ -3,7 +3,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { Clapperboard, Loader2, RotateCcw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { apiPost } from "@/lib/api";
+import { ApiError, apiGet, apiPost } from "@/lib/api";
 import { newRunKey } from "@/lib/idempotency-key";
 import { useInvalidateWorkspaceSnapshot } from "@/lib/use-workspace-snapshot";
 import { useFilmRunProgress } from "@/lib/use-film-run-progress";
@@ -34,10 +34,41 @@ function isTerminalStatus(status: FilmRunStatus): boolean {
   return status === "ready" || status === "failed" || status === "cancelled";
 }
 
-function SceneOutput({ url, title }: { url: string; title: string }) {
+interface PendingFilmSubmit {
+  key: string;
+  plan: string;
+}
+
+function pendingSubmitStorageKey(campaignId: string): string {
+  return `permitframe:film-submit:${campaignId}`;
+}
+
+function readPendingSubmit(campaignId: string): PendingFilmSubmit | null {
+  try {
+    const raw = sessionStorage.getItem(pendingSubmitStorageKey(campaignId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as PendingFilmSubmit;
+    return typeof parsed.key === "string" && typeof parsed.plan === "string" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function savePendingSubmit(campaignId: string, attempt: PendingFilmSubmit | null): void {
+  try {
+    if (attempt) sessionStorage.setItem(pendingSubmitStorageKey(campaignId), JSON.stringify(attempt));
+    else sessionStorage.removeItem(pendingSubmitStorageKey(campaignId));
+  } catch {
+    // The server's active-run guard still prevents a second active run if
+    // browser storage is disabled.
+  }
+}
+
+function SceneOutput({ url }: { url: string }) {
   if (/\.(png|jpe?g|webp|gif)(\?|$)/i.test(url)) {
-    // eslint-disable-next-line @next/next/no-img-element
-    return <img src={url} alt={title} loading="lazy" className="mt-1 aspect-video w-full rounded-lg bg-black object-cover" />;
+    return <p className="mt-1 rounded-md bg-amber-50 px-2 py-1.5 text-[10.5px] text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+      Provider returned a still image, not a deliverable scene video. This clip must be retried.
+    </p>;
   }
   return <video src={url} controls preload="metadata" className="mt-1 aspect-video w-full rounded-lg bg-black" />;
 }
@@ -53,32 +84,116 @@ export function FilmRunPanel({ campaign, allowed, onChanged }: FilmRunPanelProps
   const savedPlan = campaign.request.filmPlan ?? null;
   const runs = [...(campaign.filmRuns ?? [])].reverse();
   const activeRun = runs.find((r) => !isTerminalStatus(r.status)) ?? null;
+  // Keep the working surface focused on the active run, or the most recent
+  // settled attempt. Older attempts remain available as audit history rather
+  // than competing with the current action.
+  const primaryRun = activeRun ?? runs[0] ?? null;
+  const previousRuns = primaryRun ? runs.filter((run) => run.id !== primaryRun.id) : [];
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [confirmingSubmit, setConfirmingSubmit] = useState(false);
+  const [recoveryVersion, setRecoveryVersion] = useState(0);
+  const [acknowledgedRunId, setAcknowledgedRunId] = useState<string | null>(null);
   const invalidateSnapshot = useInvalidateWorkspaceSnapshot();
-  useFilmRunProgress(campaign.id, activeRun?.id ?? null, onChanged);
+  useFilmRunProgress(campaign.id, activeRun?.id ?? acknowledgedRunId, onChanged);
+  const savedPlanSignature = savedPlan ? JSON.stringify(savedPlan) : "";
+  const knownRunIds = runs.map((run) => run.id).join(",");
+  const changedRef = useRef(onChanged);
+  useEffect(() => { changedRef.current = onChanged; }, [onChanged]);
+
+  // A browser timeout is not proof that the server rejected the submit.
+  // Reconcile the same key after a reload before inviting another paid run.
+  useEffect(() => {
+    const pending = readPendingSubmit(campaign.id);
+    if (!pending || pending.plan !== savedPlanSignature) return;
+    if (runs.some((run) => run.idempotencyKey === pending.key)) {
+      savePendingSubmit(campaign.id, null);
+      return;
+    }
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let checks = 0;
+    const check = async () => {
+      try {
+        const result = await apiGet<{ found: boolean; filmRunId: string | null }>(
+          `/api/campaigns/${campaign.id}/film-runs?idempotencyKey=${encodeURIComponent(pending.key)}`,
+          undefined,
+          12000
+        );
+        if (cancelled) return;
+        if (result.found) {
+          savePendingSubmit(campaign.id, null);
+          setAcknowledgedRunId(result.filmRunId);
+          setNote("Film run found after the delayed response. Following its progress.");
+          invalidateSnapshot();
+          void changedRef.current();
+          return;
+        }
+      } catch {
+        // Keep the key: pressing Submit again safely replays this attempt.
+      }
+      if (cancelled) return;
+      checks += 1;
+      if (checks < 4) timer = setTimeout(() => void check(), 4000);
+      else setNote("The film run has not been saved yet. You can press Submit again; the same request key will be reused.");
+    };
+    void check();
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+    // Run ids are a stable content signature; changes end recovery as soon
+    // as the submitted run appears in the campaign snapshot.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [campaign.id, savedPlanSignature, knownRunIds, recoveryVersion]);
 
   async function submit() {
     if (busy || !savedPlan) return;
     setBusy("submit");
     setError(null);
     setNote(null);
+    const stored = readPendingSubmit(campaign.id);
+    const alreadySettled = runs.some((run) => run.idempotencyKey === stored?.key && isTerminalStatus(run.status));
+    const attempt = stored?.plan === savedPlanSignature && !alreadySettled
+      ? stored
+      : { key: newRunKey("film"), plan: savedPlanSignature };
+    savePendingSubmit(campaign.id, attempt);
+    // The server acknowledges only after the run has been saved.
+    const handoffTimer = setTimeout(() => {
+      setConfirmingSubmit(false);
+      setNote("Still waiting for the saved film run. You can refresh; this request will be recovered by its key.");
+      invalidateSnapshot();
+      void onChanged().catch(() => undefined);
+    }, 10_000);
     try {
       const result = await apiPost<{ started: boolean; filmRunId: string; created: boolean }>(
         `/api/campaigns/${campaign.id}/film-runs`,
-        { idempotencyKey: newRunKey("film") },
+        { idempotencyKey: attempt.key },
         undefined,
-        30000
+        90_000
       );
+      clearTimeout(handoffTimer);
       setConfirmingSubmit(false);
+      savePendingSubmit(campaign.id, null);
+      setAcknowledgedRunId(result.filmRunId);
       setNote(result.created ? "Film run submitted - the provider job is being dispatched." : "That film run already exists - following it instead of submitting again.");
       invalidateSnapshot();
-      await onChanged();
+      void onChanged().catch(() => undefined);
     } catch (e) {
+      clearTimeout(handoffTimer);
+      // The durable run may have been created after the browser timed out
+      // waiting for the response. Re-read once before inviting another paid
+      // submission; the server's active-run/idempotency guards remain the
+      // authority if this request is still completing.
+      if (e instanceof ApiError && e.status === 0) {
+        setConfirmingSubmit(false);
+        setNote("The submission response timed out. Checking the saved request; retrying will reuse the same key.");
+        setRecoveryVersion((version) => version + 1);
+        invalidateSnapshot();
+        void onChanged().catch(() => undefined);
+        return;
+      }
       setError(e instanceof Error ? e.message : "Film submit failed. Nothing was submitted.");
     } finally {
+      clearTimeout(handoffTimer);
       setBusy(null);
     }
   }
@@ -90,7 +205,7 @@ export function FilmRunPanel({ campaign, allowed, onChanged }: FilmRunPanelProps
     setNote(null);
     try {
       await apiPost(`/api/campaigns/${campaign.id}/film-runs/${filmRunId}/retry`, {}, undefined, 30000);
-      setNote("Film run resumed - the tracked provider job was not resubmitted.");
+      setNote("Film run resumed. Completed scene clips are kept; only failed scene clips or final assembly will retry.");
       invalidateSnapshot();
       await onChanged();
     } catch (e) {
@@ -110,7 +225,10 @@ export function FilmRunPanel({ campaign, allowed, onChanged }: FilmRunPanelProps
         `/api/campaigns/${campaign.id}/film-runs/${filmRunId}/cancel`,
         {},
         undefined,
-        60000
+        // Cancellation is a local state transition first. A long browser
+        // spinner is misleading, especially when no provider job was ever
+        // accepted; refresh can safely reconcile a late response.
+        15000
       );
       setNote(result.note);
       invalidateSnapshot();
@@ -167,20 +285,46 @@ export function FilmRunPanel({ campaign, allowed, onChanged }: FilmRunPanelProps
       {note && <p role="status" className="mt-2 break-words text-[12.5px] text-emerald-800 dark:text-emerald-200">{note}</p>}
 
       {runs.length > 0 && (
-        <ol className="mt-3 space-y-3">
-          {runs.map((run) => (
-            <FilmRunCard
-              key={run.id}
-              campaignId={campaign.id}
-              run={run}
-              allowed={allowed}
-              busy={busy}
-              onRetry={() => void retry(run.id)}
-              onCancel={() => void cancel(run.id)}
-              onChanged={onChanged}
-            />
-          ))}
-        </ol>
+        <div className="mt-3 space-y-3">
+          {primaryRun && (
+            <ol>
+              <FilmRunCard
+                key={primaryRun.id}
+                campaignId={campaign.id}
+                run={primaryRun}
+                allowed={allowed}
+                busy={busy}
+                onRetry={() => void retry(primaryRun.id)}
+                onCancel={() => void cancel(primaryRun.id)}
+                onChanged={onChanged}
+              />
+            </ol>
+          )}
+          {previousRuns.length > 0 && (
+            <details className="rounded-xl border border-border bg-muted/30 px-3 py-2.5">
+              <summary className="cursor-pointer text-[12px] font-medium text-muted-foreground hover:text-foreground">
+                Previous attempts ({previousRuns.length})
+              </summary>
+              <p className="mt-1 text-[10.5px] text-muted-foreground">
+                Kept for audit and cost history. They do not affect the current run.
+              </p>
+              <ol className="mt-2 space-y-3">
+                {previousRuns.map((run) => (
+                  <FilmRunCard
+                    key={run.id}
+                    campaignId={campaign.id}
+                    run={run}
+                    allowed={allowed}
+                    busy={busy}
+                    onRetry={() => void retry(run.id)}
+                    onCancel={() => void cancel(run.id)}
+                    onChanged={onChanged}
+                  />
+                ))}
+              </ol>
+            </details>
+          )}
+        </div>
       )}
 
       {confirmingSubmit && savedPlan && (
@@ -234,13 +378,46 @@ function FilmRunCard({
         {run.estimateUsd !== undefined && ` · provider estimate $${run.estimateUsd.toFixed(2)}`}
         {run.costUsd !== undefined && ` · $${run.costUsd.toFixed(2)} reported`}
       </p>
+      {run.status === "submitting" && !run.providerJobId && (
+        <p className="mt-1.5 rounded-lg bg-muted/60 px-2.5 py-2 text-[11.5px] leading-relaxed text-muted-foreground">
+          Reserving the first source-bound scene jobs. Only two scenes are submitted at once so each uses the approved source image directly.
+        </p>
+      )}
+      {run.status === "submitting" && run.providerJobId && (
+        <p className="mt-1.5 rounded-lg bg-muted/60 px-2.5 py-2 text-[11.5px] leading-relaxed text-muted-foreground">
+          Provider accepted the film job. It can take several minutes to start scene generation and assemble the final reel.
+        </p>
+      )}
+      {active && (
+        <section className="mt-2 rounded-lg border border-border bg-muted/40 px-2.5 py-2" aria-label="Film generation queue">
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[11.5px]">
+            <span className="font-medium">Film queue</span>
+            <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+              {run.sceneOutputs.filter((scene) => Boolean(scene.url)).length}/{run.plannedScenes.length} scene outputs returned
+            </span>
+          </div>
+          <p className="mt-0.5 text-[10.5px] text-muted-foreground">
+            {`Provider status: ${run.providerStatus ?? "preparing source-bound scene jobs"}`}
+          </p>
+          {run.providerViewerUrl && (
+            <a
+              href={run.providerViewerUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-1 inline-block text-[10.5px] font-medium text-sky-700 underline underline-offset-2 dark:text-sky-300"
+            >
+              Open provider progress inspector
+            </a>
+          )}
+        </section>
+      )}
       {run.error && <p role="alert" className="mt-1.5 break-words text-[12px] text-rose-600 dark:text-rose-300">{run.error}</p>}
 
       <details className="mt-2 text-[12px]" open={active}>
         <summary className="cursor-pointer font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline">
           Planned scenes ({run.plannedScenes.length})
         </summary>
-        <ul className="mt-1.5 space-y-1.5">
+        <ul className="mt-1.5 grid grid-cols-1 gap-2 sm:grid-cols-2">
           {run.plannedScenes.map((s) => {
             const output = run.sceneOutputs.find((o) => o.index === s.order - 1 || o.title === s.title);
             return (
@@ -252,10 +429,17 @@ function FilmRunCard({
                   </span>
                   <span className="shrink-0 font-mono text-[10.5px] text-muted-foreground">{s.durationSeconds}s planned</span>
                 </p>
-                {output ? (
+                {output?.url ? (
                   <div>
-                    <p className="mt-0.5 text-[10.5px] font-medium text-emerald-800 dark:text-emerald-200">Provider output</p>
-                    <SceneOutput url={output.url} title={`${s.title} provider output`} />
+                    <p className="mt-0.5 text-[10.5px] font-medium text-emerald-800 dark:text-emerald-200">
+                      {output.status ? `Provider: ${output.status}` : "Provider video output"}
+                    </p>
+                    <SceneOutput url={output.url} />
+                  </div>
+                ) : output?.status ? (
+                  <div>
+                    <p className="mt-0.5 text-[10.5px] text-amber-700 dark:text-amber-300">Provider: {output.status}</p>
+                    {output.error && <p className="mt-1 break-words text-[10.5px] leading-snug text-rose-600 dark:text-rose-300">{output.error}</p>}
                   </div>
                 ) : (
                   active && (
@@ -274,7 +458,7 @@ function FilmRunCard({
           <div className="space-y-1 p-3">
             <p className="text-[12.5px] font-medium leading-tight">Campaign film reel · {run.targetDurationSeconds}s requested</p>
             <p className="text-[10.5px] text-muted-foreground">
-              Source guidance: scene prompts reference approved media; no identity preservation is claimed.
+              Built by stitching source-bound scene videos. Outputs still require review; no identity preservation is claimed.
             </p>
           </div>
         </div>

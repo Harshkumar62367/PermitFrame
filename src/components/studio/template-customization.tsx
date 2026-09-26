@@ -21,6 +21,9 @@ interface TemplateCustomizationProps {
   onToggleCustomize: () => void;
   customizeSummary: string;
   motionOn: boolean;
+  /** Whether the current fixed pack can actually produce a motion recipe. */
+  motionAvailable: boolean;
+  motionUnavailableMessage: string;
   onToggleMotion: () => void;
   formats: string[];
   onToggleFormat: (format: string) => void;
@@ -106,6 +109,8 @@ export function TemplateCustomization({
   onToggleCustomize,
   customizeSummary,
   motionOn,
+  motionAvailable,
+  motionUnavailableMessage,
   onToggleMotion,
   formats,
   onToggleFormat,
@@ -161,34 +166,42 @@ export function TemplateCustomization({
             <div>
               <p className="text-[12px] font-medium text-muted-foreground">Media</p>
               <p className="mt-1.5 text-[12.5px]">Images <span className="text-muted-foreground">· always included</span></p>
-              <button
-                type="button"
-                role="checkbox"
-                aria-checked={motionOn}
-                onClick={onToggleMotion}
-                className={cn(
-                  "mt-1.5 flex items-center gap-2 rounded-full px-3 py-1.5 text-[12px] font-medium ring-1 transition",
-                  motionOn
-                    ? "bg-emerald-600/10 text-emerald-800 ring-emerald-600/40 dark:text-emerald-200"
-                    : "bg-card text-muted-foreground ring-border hover:ring-emerald-600/40"
-                )}
-              >
-                <span aria-hidden className={cn(
-                  "grid h-4 w-4 place-items-center rounded ring-1",
-                  motionOn ? "bg-emerald-600 text-white ring-emerald-600 dark:bg-emerald-500 dark:text-emerald-950" : "ring-border"
-                )}>
-                  {motionOn && <Check className="h-3 w-3" aria-hidden />}
-                </span>
-                Include a short motion clip
-              </button>
-              <div className="mt-3 rounded-lg bg-muted/60 p-3 ring-1 ring-border">
-                <p className="text-[11.5px] font-medium">Short-clip finishing</p>
-                <p className="mt-0.5 text-[11.5px] leading-relaxed text-muted-foreground">
-                  This pack generates images and an optional 3-15 second motion clip. Narration and burned captions
-                  are available after a Campaign Film reel is delivered. Music and soundtrack mixing are not available
-                  yet.
+              {motionAvailable ? (
+                <>
+                  <button
+                    type="button"
+                    role="checkbox"
+                    aria-checked={motionOn}
+                    onClick={onToggleMotion}
+                    className={cn(
+                      "mt-1.5 flex items-center gap-2 rounded-full px-3 py-1.5 text-[12px] font-medium ring-1 transition",
+                      motionOn
+                        ? "bg-emerald-600/10 text-emerald-800 ring-emerald-600/40 dark:text-emerald-200"
+                        : "bg-card text-muted-foreground ring-border hover:ring-emerald-600/40"
+                    )}
+                  >
+                    <span aria-hidden className={cn(
+                      "grid h-4 w-4 place-items-center rounded ring-1",
+                      motionOn ? "bg-emerald-600 text-white ring-emerald-600 dark:bg-emerald-500 dark:text-emerald-950" : "ring-border"
+                    )}>
+                      {motionOn && <Check className="h-3 w-3" aria-hidden />}
+                    </span>
+                    Include a short motion clip
+                  </button>
+                  <div className="mt-3 rounded-lg bg-muted/60 p-3 ring-1 ring-border">
+                    <p className="text-[11.5px] font-medium">Short-clip finishing</p>
+                    <p className="mt-0.5 text-[11.5px] leading-relaxed text-muted-foreground">
+                      This pack generates images and an optional 3-15 second motion clip. Narration and burned captions
+                      are available after a Campaign Film reel is delivered. Music and soundtrack mixing are not available
+                      yet.
+                    </p>
+                  </div>
+                </>
+              ) : (
+                <p className="mt-2 rounded-lg bg-muted/60 p-3 text-[11.5px] leading-relaxed text-muted-foreground ring-1 ring-border">
+                  {motionUnavailableMessage}
                 </p>
-              </div>
+              )}
             </div>
             <div>
               <p className="text-[12px] font-medium text-muted-foreground">Formats</p>
@@ -220,7 +233,7 @@ export function TemplateCustomization({
             </div>
           </div>
 
-          {motionOn && (
+          {motionAvailable && motionOn && (
             <div>
               <p id={`motion-secs-label-${campaignId}`} className="text-[12px] font-medium text-muted-foreground">
                 Short video

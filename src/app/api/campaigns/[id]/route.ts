@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { AuthenticationRequiredError, requireCurrentSession } from "@/server/auth";
 import { effectiveCampaignStatus } from "@/server/campaign-status";
-import { loadCampaignDetailNormalized } from "@/server/campaign-store";
+import { loadWorkspaceDb } from "@/server/store";
 import { deleteCampaign, updateCampaignBrief, type BriefPatch } from "@/server/campaigns";
 import { logDkgError, sanitizeDkgError, scrubStoredText } from "@/server/dkg/public-errors";
 import {
@@ -47,21 +47,20 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
     if (error instanceof AuthenticationRequiredError) return authError();
     throw error;
   }
-  // Hot path: indexed single-campaign + 3 single-row lookups, one RTT each
-  // (parallel). No blob transfer, no DKG calls. Status drift is corrected
-  // in memory only - reads never write, so GETs stay fast and contention-free.
-  // The normalized mirror is authoritative (backfilled + mirrored on every
-  // write, deletes included): a miss is an immediate 404, never a slow
-  // whole-blob fallback scan.
-  const normalized = await loadCampaignDetailNormalized(workspaceId, id).catch(() => null);
-  if (!normalized) return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
+  // The workspace record is canonical. Film status changes are saved there
+  // before returning to the browser; the normalized campaign copy can lag
+  // while its larger mirror finishes. Reading that copy alone made a newly
+  // submitted film disappear after refresh.
+  const workspace = await loadWorkspaceDb(workspaceId);
+  const canonical = workspace.campaigns.find((item) => item.id === id);
+  if (!canonical) return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
   // Persisted job/run diagnostics predate write-time scrubbing in older
   // rows: operational detail is scrubbed at read time so the queue never
   // renders usernames, paths, hosts, or transport internals.
   const campaign = {
-    ...normalized.campaign,
-    status: effectiveCampaignStatus(normalized.campaign),
-    jobs: (normalized.campaign.jobs ?? []).map((j) => ({
+    ...canonical,
+    status: effectiveCampaignStatus(canonical),
+    jobs: (canonical.jobs ?? []).map((j) => ({
       ...j,
       ...(typeof j.error === "string"
         ? { error: scrubStoredText(j.error, "This step failed - diagnostic detail was withheld. Retry the stage.") }
@@ -70,7 +69,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
         ? { lastTransientError: scrubStoredText(j.lastTransientError, "Submit hiccup - retrying automatically.") }
         : {})
     })),
-    runs: (normalized.campaign.runs ?? []).map((r) => ({
+    runs: (canonical.runs ?? []).map((r) => ({
       ...r,
       ...(typeof r.note === "string"
         ? { note: scrubStoredText(r.note, "Run finished - diagnostic detail was withheld.") }
@@ -79,9 +78,9 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   };
   return NextResponse.json({
     campaign,
-    sourceMedia: normalized.sourceMedia,
-    passport: normalized.passport,
-    productFacts: normalized.productFacts,
+    sourceMedia: workspace.sourceMedia.find((item) => item.id === canonical.sourceMediaId) ?? null,
+    passport: workspace.passports.find((item) => item.id === canonical.passportId) ?? null,
+    productFacts: workspace.productFacts.find((item) => item.id === canonical.productFactsId) ?? null,
     deletion: { ...deletionEligibility(campaign), force: forceDeleteEligibility(campaign) }
   });
 }

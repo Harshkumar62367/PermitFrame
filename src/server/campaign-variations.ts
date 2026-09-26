@@ -5,6 +5,8 @@ import { revalidateCampaignAuthorization } from "./policy/authorization";
 import { composeStagePrompt } from "./policy/engine";
 import { requestMetaFor } from "./livepeer/pipeline";
 import { loadCampaign, throwIfArchived } from "./campaign-lifecycle";
+import { withCampaignLock } from "./livepeer/mutex";
+import { writeWorkspace } from "./livepeer/run-store";
 
 /**
  * Explicit derivatives: reviewer refinements (reviseStage) and the
@@ -16,7 +18,13 @@ import { loadCampaign, throwIfArchived } from "./campaign-lifecycle";
  */
 
 /** Reviewer refinement: regenerate one stage with new instructions. */
-export async function reviseStage(id: string, stageId: string, instructions: string): Promise<{ started: boolean; error?: string }> {
+export async function reviseStage(
+  id: string,
+  stageId: string,
+  instructions: string,
+  sourceJobId?: string,
+  requestKey?: string
+): Promise<{ started: boolean; jobId?: string; workspaceId?: string; error?: string }> {
   const campaign = await loadCampaign(id);
   if (!campaign) return { started: false, error: "Campaign not found" };
   try {
@@ -27,12 +35,22 @@ export async function reviseStage(id: string, stageId: string, instructions: str
   const stage = campaign.preflight?.plan.find((s) => s.id === stageId);
   if (!stage) return { started: false, error: "Unknown stage" };
 
-  // Refinements vary the latest usable output when one exists (controlled
-  // alternative via create_variations); otherwise they generate normally.
-  const priorOutput = [...campaign.jobs]
-    .reverse()
-    .find((j) => j.stageId === stageId && (j.providerOutputUrl ?? j.outputUrl));
+  const { workspaceId } = await requireCurrentSession();
+  const key = requestKey?.trim() || undefined;
+  const priorRequest = key ? campaign.jobs.find((job) => job.refinementRequestKey === key) : undefined;
+  if (priorRequest) {
+    if (priorRequest.stageId !== stageId) return { started: false, error: "Refinement request belongs to another stage." };
+    return { started: true, jobId: priorRequest.id, workspaceId };
+  }
+
+  // The selected queue card owns the refinement source. Older callers that
+  // send only a stage still use its newest completed output.
+  const priorOutput = sourceJobId
+    ? campaign.jobs.find((job) => job.id === sourceJobId && job.stageId === stageId && job.status === "ready_to_share")
+    : [...campaign.jobs].reverse().find((job) => job.stageId === stageId && job.status === "ready_to_share");
+  if (!priorOutput) return { started: false, error: "The selected output is no longer ready. Refresh the queue before refining." };
   const variationSourceUrl = priorOutput?.providerOutputUrl ?? priorOutput?.outputUrl;
+  if (!variationSourceUrl) return { started: false, error: "The selected output has no usable source URL." };
 
   const revised: ProductionJob = {
     id: newId("job"),
@@ -51,15 +69,20 @@ export async function reviseStage(id: string, stageId: string, instructions: str
     // create_variations. Set only here (and the variations action) - never
     // on initial production, so automatic variation is impossible.
     variationExplicit: true,
+    ...(key ? { refinementRequestKey: key } : {}),
     ...(variationSourceUrl ? { variationSourceUrl } : {})
   };
-  await updateDb((d) => {
+  let jobId = revised.id;
+  await withCampaignLock(id, () => writeWorkspace(workspaceId, (d) => {
     const c = d.campaigns.find((x) => x.id === id);
-    if (c) c.jobs.push(revised);
-  });
-  const { workspaceId } = await requireCurrentSession();
-  void runSingleJob(id, revised.id, workspaceId).catch(() => undefined);
-  return { started: true };
+    if (!c) return;
+    const replay = key ? c.jobs.find((job) => job.refinementRequestKey === key) : undefined;
+    if (replay) { jobId = replay.id; return; }
+    c.jobs.push(revised);
+    c.status = "generating";
+    c.updatedAt = nowIso();
+  }, { mirror: false }));
+  return { started: true, jobId, workspaceId };
 }
 
 /**
@@ -205,22 +228,24 @@ export async function createVariationRun(
   return { started: true, jobIds: jobs.map((j) => j.id), runId: submitted.run.id };
 }
 
-async function runSingleJob(campaignId: string, jobId: string, workspaceId?: string): Promise<string | undefined> {
-  // Exact-job run: only the target job dispatches, is polled, and settles -
-  // siblings sharing its stageId are never selected, reset, failed, or
-  // counted merely for sharing it (no more stage-filtered re-runs).
-  await updateDb((d) => {
-    const c = d.campaigns.find((x) => x.id === campaignId);
-    if (!c) return;
-    const target = c.jobs.find((j) => j.id === jobId);
-    if (target) target.status = "queued";
-    c.status = "generating";
-  });
+/** Complete the acknowledged refinement after the HTTP response. */
+export async function startRefinementJob(
+  workspaceId: string,
+  campaignId: string,
+  jobId: string,
+  requestKey?: string
+): Promise<void> {
   const { submitRun, pumpRun } = await import("./livepeer/runner");
-  const submitted = await submitRun({ campaignId, jobIds: [jobId], workspaceId }).catch(
-    (): { run?: undefined; created: boolean; workspaceId?: string } => ({ created: false })
-  );
-  if (!submitted.run) return undefined;
-  void pumpRun(submitted.workspaceId ?? workspaceId ?? "", campaignId, { runId: submitted.run.id, budgetMs: 8 * 60 * 1000 }).catch(() => undefined);
-  return submitted.run.id;
+  const submitted = await submitRun({ campaignId, jobIds: [jobId], idempotencyKey: requestKey, workspaceId });
+  if (!submitted.run) {
+    await withCampaignLock(campaignId, () => writeWorkspace(workspaceId, (d) => {
+      const job = d.campaigns.find((c) => c.id === campaignId)?.jobs.find((j) => j.id === jobId);
+      if (!job || job.status !== "queued") return;
+      job.status = "failed";
+      job.error = submitted.error ?? "Refinement could not enter the generation queue.";
+      job.finishedAt = nowIso();
+    }, { mirror: false }));
+    return;
+  }
+  await pumpRun(workspaceId, campaignId, { runId: submitted.run.id, budgetMs: 8 * 60 * 1000 });
 }

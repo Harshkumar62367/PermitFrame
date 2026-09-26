@@ -11,13 +11,13 @@ import { loadWorkspaceDb, updateWorkspaceDb } from "../store";
 
 export interface RunStore {
   loadWorkspace(workspaceId: string): Promise<Database>;
-  writeWorkspace(workspaceId: string, mutator: (db: Database) => void): Promise<void>;
+  writeWorkspace(workspaceId: string, mutator: (db: Database) => void, options?: { mirror?: boolean }): Promise<void>;
 }
 
 const liveStore: RunStore = {
   loadWorkspace: (workspaceId: string) => loadWorkspaceDb(workspaceId),
-  writeWorkspace: (workspaceId: string, mutator: (db: Database) => void) =>
-    updateWorkspaceDb(workspaceId, mutator).then(() => undefined)
+  writeWorkspace: (workspaceId: string, mutator: (db: Database) => void, options?: { mirror?: boolean }) =>
+    updateWorkspaceDb(workspaceId, mutator, options).then(() => undefined)
 };
 
 let active: RunStore = liveStore;
@@ -31,8 +31,8 @@ export function readWorkspace(workspaceId: string): Promise<Database> {
   return active.loadWorkspace(workspaceId);
 }
 
-export function writeWorkspace(workspaceId: string, mutator: (db: Database) => void): Promise<void> {
-  return active.writeWorkspace(workspaceId, mutator);
+export function writeWorkspace(workspaceId: string, mutator: (db: Database) => void, options?: { mirror?: boolean }): Promise<void> {
+  return active.writeWorkspace(workspaceId, mutator, options);
 }
 
 /** In-memory store for tests. Returns the handle plus a reader for assertions. */

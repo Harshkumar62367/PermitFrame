@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { AuthenticationRequiredError, requireCurrentSession } from "@/server/auth";
 import { loadCampaign } from "@/server/campaigns";
 import { pumpCaptionJob } from "@/server/livepeer/film-caption-pump";
@@ -8,6 +8,7 @@ import { writeWorkspace } from "@/server/livepeer/run-store";
 import type { Database } from "@/server/types";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 630;
 
 /**
  * Resume a failed caption job that never reached the provider: only jobs
@@ -49,6 +50,6 @@ export async function POST(
       target.finishedAt = undefined;
     })
   );
-  void pumpCaptionJob(workspaceId, id, filmRunId, captionJobId).catch(() => undefined);
+  after(() => pumpCaptionJob(workspaceId, id, filmRunId, captionJobId).catch(() => console.error("Caption pump failed")));
   return NextResponse.json({ ok: true, captionJobId });
 }

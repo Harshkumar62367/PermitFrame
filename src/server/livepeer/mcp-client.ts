@@ -88,6 +88,14 @@ export interface MediaStatusResult {
   raw: Record<string, unknown>;
 }
 
+export interface AssembleResult {
+  outputUrl?: string;
+  jobId?: string;
+  status: string;
+  costUsd?: number;
+  raw: Record<string, unknown>;
+}
+
   export interface VariationResult {
   outputUrls: string[];
   /** Async provider handle when the tool backgrounds the job (no inline output). */
@@ -388,6 +396,36 @@ export class LivepeerMcpClient {
     };
   }
 
+  /** Assemble already-rendered, public video clips. This never generates a
+   * scene or substitutes source media; it only requests the final stitch. */
+  async assembleClips(input: {
+    clips: Array<{ url: string; title?: string }>;
+    title: string;
+    sessionId: string;
+  }): Promise<AssembleResult> {
+    const payload = await this.callTool("assemble", {
+      clips: input.clips.map((clip) => ({ src: clip.url, ...(clip.title ? { title: clip.title } : {}), type: "video" })),
+      title: input.title,
+      transition: "cut",
+      stitch: true,
+      session_id: `permitframe_${sanitize(input.sessionId)}`
+    }, 120_000);
+    assertToolOk(payload, "assemble");
+    const s = structured(payload);
+    const outputUrl = extractReference(payload);
+    const jobId = extractJobId(payload);
+    if (!outputUrl && !jobId) {
+      throw new Error(`Livepeer assembly returned no reel URL and no job id: ${resultText(payload).slice(0, 300)}`);
+    }
+    return {
+      ...(outputUrl ? { outputUrl } : {}),
+      ...(jobId ? { jobId } : {}),
+      status: extractStatus(payload) || (outputUrl ? "completed" : "submitted"),
+      costUsd: num(s.cost_paid_usd ?? s.cost_usd_estimated ?? s.cost_usd ?? s.total_cost_usd),
+      raw: s
+    };
+  }
+
   /**
    * Hold one call open up to budgetSeconds for provider-side progress
    * (mjob_* ids). Returns the latest status snapshot; non-terminal means
@@ -589,8 +627,8 @@ export class LivepeerMcpClient {
 
   /**
    * Narrated-reel mux (create_media action=mux_audio): one async call
-   * carrying only source/audio URLs, audio_fill none (narration never
-   * loops), plus shared cost/idempotency fields. Video URLs parse
+   * carrying only source/audio URLs, audio_fill pad (silence after speech
+   * preserves the full reel), plus shared cost/idempotency fields. Video URLs parse
    * defensively (source echo excluded by the caller).
    */
   async submitMuxAudio(input: {
@@ -606,7 +644,7 @@ export class LivepeerMcpClient {
         action: "mux_audio",
         source_url: input.sourceUrl,
         audio_url: input.audioUrl,
-        audio_fill: "none",
+        audio_fill: "pad",
         async: true,
         session_id: input.sessionId,
         idempotency_key: input.idempotencyKey,
@@ -899,7 +937,10 @@ function extractReferences(payload: Record<string, unknown>): string[] {
     url.startsWith("http") && !excluded.includes(url);
   const found: string[] = [];
   // structured output fields, in trust order
-  for (const candidate of [s?.url, s?.output_url, s?.video_url, s?.image_url, s?.audio_url]) {
+  for (const candidate of [
+    s?.url, s?.output_url, s?.video_url, s?.image_url, s?.audio_url,
+    s?.preview_url, s?.previewUrl, s?.reel_url, s?.reelUrl, s?.stitched_url, s?.stitchedUrl
+  ]) {
     if (typeof candidate === "string" && isOutput(candidate) && !found.includes(candidate)) found.push(candidate);
   }
   const haystack = `${resultText(payload)}\n${JSON.stringify(payload.result ?? {})}`;

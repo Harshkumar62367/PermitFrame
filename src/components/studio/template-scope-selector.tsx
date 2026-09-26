@@ -12,6 +12,7 @@ interface TemplateScopeSelectorProps {
   onUseRecommended: () => void;
   onClearStages: () => void;
   recipes: TemplateRecipeMeta[];
+  formats: string[];
 }
 
 /** Pack-size radiogroup plus the custom-stage picker. Stateless: no API, no selection state. */
@@ -22,7 +23,8 @@ export function TemplateScopeSelector({
   onToggleStage,
   onUseRecommended,
   onClearStages,
-  recipes
+  recipes,
+  formats
 }: TemplateScopeSelectorProps) {
   const outputCount = (scope: string) => {
     const executable = recipes.filter((recipe) => recipe.execution === "create_media");
@@ -31,7 +33,11 @@ export function TemplateScopeSelector({
       : scope === "campaign"
         ? executable.filter((recipe) => !recipe.optional)
         : executable;
-    return `${selected.length} asset${selected.length === 1 ? "" : "s"}`;
+    const selectedFormats = new Set(formats);
+    const formatFiltered = formats.length === 0
+      ? selected
+      : selected.filter((recipe) => recipe.assetType !== "image" || selectedFormats.has(recipe.format));
+    return `${formatFiltered.length} asset${formatFiltered.length === 1 ? "" : "s"}`;
   };
 
   return (

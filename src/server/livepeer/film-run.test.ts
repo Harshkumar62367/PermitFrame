@@ -13,7 +13,7 @@ import {
   parseCreativeSubmit,
   SCENE_PROMPT_MAX_CHARS
 } from "./film-job";
-import { checkFilmCap, filmDisplayLabel, nextFilmAction } from "./film-run";
+import { checkFilmCap, filmDisplayLabel, filmProviderWatchdogSeconds, isActiveFilmStatus, nextFilmAction } from "./film-run";
 import {
   cancelFilmRun,
   pumpFilmRun,
@@ -82,6 +82,14 @@ function seedDb(plan: FilmPlan | null, tag: string): { db: Database; campaignId:
     updatedAt: new Date().toISOString()
   } as Campaign;
   db.campaigns.push(campaign);
+  db.sourceMedia.push({
+    id: "m1",
+    creatorId: "c1",
+    title: "Approved shoe source",
+    type: "image",
+    url: "https://source.example/approved-shoe.png",
+    hash: "source-hash"
+  });
   return { db, campaignId };
 }
 
@@ -152,6 +160,25 @@ afterEach(() => {
 });
 
 describe("submit returns fast with a durable run", () => {
+  it("serializes concurrent submissions and saves before the full workspace mirror", async () => {
+    const { store, read } = memoryStore(seedDb(filmPlan(), "concurrent").db);
+    const mirrorOptions: Array<boolean | undefined> = [];
+    setRunStore({
+      loadWorkspace: store.loadWorkspace,
+      writeWorkspace: async (workspaceId, mutate, options) => {
+        mirrorOptions.push(options?.mirror);
+        await store.writeWorkspace(workspaceId, mutate, options);
+      }
+    });
+    const [first, second] = await Promise.all([
+      submitFilmRun({ workspaceId: WS, campaignId: "cmp_concurrent", idempotencyKey: "one" }),
+      submitFilmRun({ workspaceId: WS, campaignId: "cmp_concurrent", idempotencyKey: "two" })
+    ]);
+    assert.equal((read().campaigns[0].filmRuns ?? []).length, 1);
+    assert.equal(first.run?.id, second.run?.id);
+    assert.deepEqual(mirrorOptions, [false]);
+  });
+
   it("creates one confirmed run from the saved plan", async () => {
     const { store, read } = memoryStore(seedDb(filmPlan(), "submit").db);
     setRunStore(store);
@@ -206,17 +233,22 @@ describe("submit sends only confirmed product fields", () => {
     const submits = client.calls.filter((c) => c.kind === "submit");
     assert.equal(submits.length, 1);
     const args = submits[0].args as Record<string, unknown>;
-    assert.deepEqual(Object.keys(args).sort(), ["aspect_ratio", "budget_usd", "deliver", "scenes", "session_id", "target_duration_sec", "title"]);
+    assert.deepEqual(Object.keys(args).sort(), ["aspect_ratio", "budget_usd", "character_anchor", "deliver", "delivery_promise", "global_model_override", "scenes", "session_id", "shot_strategy", "target_duration_sec", "title", "verify"]);
     assert.equal(args.title, "Test reel");
     assert.equal(args.target_duration_sec, 45);
     assert.equal(args.aspect_ratio, "9:16");
     assert.equal(args.deliver, "reel");
     assert.equal(args.budget_usd, 25);
+    assert.equal(args.character_anchor, "https://source.example/approved-shoe.png");
+    assert.equal(args.shot_strategy, "t2v");
+    assert.equal(args.verify, "on");
+    assert.equal(args.delivery_promise, "motion_led");
+    assert.equal(args.global_model_override, "kling-v3-turbo-t2v");
     const scenes = args.scenes as { title: string; prompt: string; duration: number }[];
     assert.equal(scenes.length, 6);
     assert.ok(scenes.every((s) => typeof s.prompt === "string" && s.prompt.length > 0 && Number.isInteger(s.duration)));
     assert.equal(scenes[0].duration, 8);
-    for (const banned of ["auto_plan", "generation_mode", "quality", "style", "brief", "character_anchor", "cast", "model_override", "soundtrack", "music", "checkpoint_every_n", "keyframe_review", "idempotency_key"]) {
+    for (const banned of ["auto_plan", "generation_mode", "quality", "style", "brief", "cast", "model_override", "soundtrack", "music", "checkpoint_every_n", "keyframe_review", "idempotency_key"]) {
       assert.ok(!(banned in args), `${banned} must not be sent`);
     }
   });
@@ -225,7 +257,7 @@ describe("submit sends only confirmed product fields", () => {
     assert.equal(filmAspectForProvider("2:1" as TemplateFormat), undefined);
     assert.equal(filmAspectForProvider("9:16"), "9:16");
     const plan = filmPlan();
-    const args = buildCreativeSubmitArgs({ ...plan, aspectRatio: "2:1" as TemplateFormat }, "permitframe_filmrun_x");
+    const args = buildCreativeSubmitArgs({ ...plan, aspectRatio: "2:1" as TemplateFormat }, "permitframe_filmrun_x", "https://source.example/approved.png");
     assert.ok(!("aspect_ratio" in args));
   });
 
@@ -238,6 +270,69 @@ describe("submit sends only confirmed product fields", () => {
     assert.ok(prompt.length <= SCENE_PROMPT_MAX_CHARS);
     assert.ok(prompt.startsWith("Hook: "));
     assert.ok(prompt.endsWith("Approved source media as the visual reference."));
+  });
+});
+
+describe("source-bound Film execution", () => {
+  it("does not restart a failed run during a status poll", async () => {
+    const { store, read } = memoryStore(seedDb(filmPlan(), "failed_poll").db);
+    setRunStore(store);
+    const submittedRun = await submitFilmRun({ workspaceId: WS, campaignId: "cmp_failed_poll" });
+    assert.ok(submittedRun.run);
+    await store.writeWorkspace(WS, (db) => {
+      const run = db.campaigns[0].filmRuns?.[0];
+      if (run) { run.status = "failed"; run.error = "Provider refused scene."; }
+    });
+    let providerCalls = 0;
+    const client: FilmMcpClient = {
+      submitCreativeJob: async () => { throw new Error("unexpected creative submit"); },
+      confirmCreativeJob: async () => { throw new Error("unexpected creative confirm"); },
+      getCreativeJob: async () => { throw new Error("unexpected creative poll"); },
+      cancelCreativeJob: async () => ({ cancelled: true, note: "cancelled" }),
+      submitMedia: async () => { providerCalls += 1; throw new Error("unexpected media submit"); },
+      getMediaStatus: async () => { providerCalls += 1; throw new Error("unexpected media poll"); },
+      assembleClips: async () => { providerCalls += 1; throw new Error("unexpected assembly"); }
+    };
+    await pumpFilmRun(WS, "cmp_failed_poll", submittedRun.run.id, { allowSubmit: false }, client);
+    assert.equal(providerCalls, 0);
+    assert.equal(read().campaigns[0].filmRuns?.[0].status, "failed");
+  });
+
+  it("renders each scene from the approved source then assembles only returned videos", async () => {
+    const { store, read } = memoryStore(seedDb(filmPlan(), "source_bound").db);
+    setRunStore(store);
+    const calls: Array<{ kind: string; args: Record<string, unknown> }> = [];
+    const client: FilmMcpClient = {
+      submitCreativeJob: async () => { throw new Error("legacy creative job must not be used"); },
+      confirmCreativeJob: async () => { throw new Error("legacy creative job must not be used"); },
+      getCreativeJob: async () => { throw new Error("legacy creative job must not be used"); },
+      cancelCreativeJob: async () => ({ cancelled: true, note: "cancelled" }),
+      submitMedia: async (args) => {
+        calls.push({ kind: "scene", args: args as Record<string, unknown> });
+        const sceneNumber = calls.filter((call) => call.kind === "scene").length;
+        return { outputUrl: `https://cdn.example/scene-${sceneNumber}.mp4`, status: "completed", raw: {}, capability: "kling-v3-turbo-i2v" };
+      },
+      getMediaStatus: async () => { throw new Error("inline scene outputs do not poll"); },
+      assembleClips: async (args) => {
+        calls.push({ kind: "assemble", args: args as unknown as Record<string, unknown> });
+        return { outputUrl: REEL, status: "completed", raw: {} };
+      }
+    };
+    const submittedRun = await submitFilmRun({ workspaceId: WS, campaignId: "cmp_source_bound" });
+    assert.ok(submittedRun.run);
+    await pumpFilmRun(WS, "cmp_source_bound", submittedRun.run.id, { budgetMs: 500 }, client);
+    const scenes = calls.filter((call) => call.kind === "scene");
+    assert.equal(scenes.length, 6);
+    assert.ok(scenes.every((call) => call.args.capability === "kling-v3-turbo-i2v"));
+    assert.ok(scenes.every((call) => call.args.sourceUrl === "https://source.example/approved-shoe.png"));
+    assert.ok(scenes.every((call) => /^[A-Za-z0-9_-]+$/.test(String(call.args.idempotencyKey))));
+    assert.equal(new Set(scenes.map((call) => call.args.idempotencyKey)).size, 6);
+    assert.ok(scenes.every((call) => String(call.args.prompt).includes("same product, colorway")));
+    const assemble = calls.find((call) => call.kind === "assemble");
+    assert.equal((assemble?.args.clips as unknown[]).length, 6);
+    const stored = read().campaigns[0].filmRuns?.[0];
+    assert.equal(stored?.status, "ready");
+    assert.equal(stored?.reelUrl, REEL);
   });
 });
 
@@ -429,14 +524,26 @@ describe("provider scene outputs are optional", () => {
       result: {
         status: "completed",
         reel_url: REEL,
+        viewer_url: "https://viewer.example/creative/cjob_abc123",
         scenes: [
           { title: "Hook", url: SCENE1, status: "completed" },
           { title: "Context", url: "http://insecure.example/s2.mp4", status: "completed" }
         ]
       }
     });
-    assert.equal(parsed.sceneOutputs.length, 1);
+    // The Queue retains a provider status even when its URL is unsafe, but
+    // the insecure URL itself is never persisted as playable output.
+    assert.equal(parsed.sceneOutputs.length, 2);
     assert.equal(parsed.sceneOutputs[0].url, SCENE1);
+    assert.equal(parsed.sceneOutputs[1].url, undefined);
+    assert.equal(parsed.viewerUrl, "https://viewer.example/creative/cjob_abc123");
+  });
+
+  it("keeps scene progress even before the provider returns a media URL", () => {
+    const parsed = parseCreativeStatus({
+      result: { structuredContent: { status: "rendering_scenes", scenes: [{ title: "Hook", status: "generating" }] } }
+    });
+    assert.deepEqual(parsed.sceneOutputs, [{ index: 0, title: "Hook", status: "generating" }]);
   });
 });
 
@@ -467,6 +574,21 @@ describe("malformed provider responses fail honestly", () => {
 });
 
 describe("cancellation isolation", () => {
+  it("does not submit again while a durable provider acknowledgement claim exists", async () => {
+    const { store, read } = memoryStore(seedDb(filmPlan(), "claimed").db);
+    setRunStore(store);
+    const result = await submitFilmRun({ workspaceId: WS, campaignId: "cmp_claimed" });
+    assert.ok(result.run);
+    const stored = read().campaigns[0].filmRuns![0];
+    stored.status = "submitting";
+    stored.submissionClaimedAt = new Date().toISOString();
+    stored.dispatchStartedAt = stored.submissionClaimedAt;
+    const client = fakeClient({});
+    const pumped = await pumpFilmRun(WS, "cmp_claimed", result.run.id, { budgetMs: 100 }, client);
+    assert.equal(pumped.reason, "settled");
+    assert.equal(client.calls.filter((call) => call.kind === "submit").length, 0);
+  });
+
   it("expires a stuck film provider job once and clears the active provider id", async () => {
     const { store, read } = memoryStore(seedDb(filmPlan(), "watchdog").db);
     setRunStore(store);
@@ -579,14 +701,30 @@ describe("unsupported film aspects never reach the provider", () => {
 });
 
 describe("pure transitions and labels", () => {
+  it("marks every billable or pending film state active, and every settled state unlocked", () => {
+    for (const status of ["confirmed", "submitting", "generating_scenes", "assembling_reel"] as const) {
+      assert.equal(isActiveFilmStatus(status), true, `${status} locks the submitted storyboard`);
+    }
+    for (const status of ["ready", "failed", "cancelled"] as const) {
+      assert.equal(isActiveFilmStatus(status), false, `${status} releases the storyboard`);
+    }
+  });
+
   it("nextFilmAction never resubmits a tracked id", () => {
     assert.equal(nextFilmAction({ status: "confirmed" }), "submit");
     assert.equal(nextFilmAction({ status: "submitting", providerJobId: "cjob_x" }), "poll");
     assert.equal(nextFilmAction({ status: "submitting", providerJobId: "cjob_x", providerStatus: "awaiting_confirmation" }), "confirm_staged");
+    assert.equal(nextFilmAction({ status: "submitting", submissionClaimedAt: new Date().toISOString() }), "none");
     assert.equal(nextFilmAction({ status: "generating_scenes", providerJobId: "cjob_x" }), "poll");
     assert.equal(nextFilmAction({ status: "ready", providerJobId: "cjob_x" }), "none");
     assert.equal(nextFilmAction({ status: "failed", providerJobId: "cjob_x" }), "none");
     assert.equal(nextFilmAction({ status: "cancelled" }), "none");
+  });
+
+  it("gives a storyboard film a longer watchdog than a short provider job", () => {
+    assert.equal(filmProviderWatchdogSeconds(), 8 * 60);
+    assert.equal(filmProviderWatchdogSeconds(120), 8 * 60);
+    assert.equal(filmProviderWatchdogSeconds(1200), 15 * 60);
   });
 
   it("cap check refuses known over-cap estimates, passes unknown ones", () => {

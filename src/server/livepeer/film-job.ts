@@ -43,6 +43,16 @@ export interface CreativeSubmitArgs {
   deliver: "reel";
   budget_usd: number;
   session_id: string;
+  /** Approved source media supplied as the provider's cross-shot reference. */
+  character_anchor: string;
+  /** Film scenes must render as short video shots, not keyframe-only images. */
+  shot_strategy: "t2v";
+  /** Provider grades each scene against the approved anchor and may re-render drift. */
+  verify: "on";
+  /** The job must deliver real motion rather than silently routing to stills. */
+  delivery_promise: "motion_led";
+  /** Text-to-video route; i2v is unsuitable here because scenes have no per-shot source frame. */
+  global_model_override: "kling-v3-turbo-t2v";
 }
 
 /** Provider aspect values from the observed submit_creative_job schema. */
@@ -53,8 +63,8 @@ export const SCENE_PROMPT_MAX_CHARS = 4000;
 
 /**
  * Deterministic provider scene prompt from the confirmed scene: beat +
- * visual direction + source intent. Text only - no reference image is ever
- * attached, so no identity preservation is claimed downstream.
+ * visual direction + source intent. The actual approved image/video is also
+ * supplied separately as the provider anchor at dispatch time.
  */
 export function buildScenePrompt(scene: Pick<FilmScene, "title" | "visualDirection" | "sourceIntent">): string {
   const base = `${scene.title}: ${scene.visualDirection} Reference: ${scene.sourceIntent}`;
@@ -68,15 +78,14 @@ export function buildScenePrompt(scene: Pick<FilmScene, "title" | "visualDirecti
 /**
  * Submit arguments from the confirmed plan: exactly the product-required
  * fields (title, scenes, target_duration_sec, aspect_ratio, deliver reel,
- * budget_usd) plus the stable per-run session tag. Deliberately absent:
- * auto_plan (we pass explicit scenes), generation_mode (undocumented for
- * this product - provider auto-fallback applies), quality/style/brief
- * (unconfirmed), character_anchor/cast (no reference image leaves us),
- * checkpoint/keyframe gates, and any audio/finishing fields.
+ * budget_usd, approved source anchor, explicit video strategy, verification,
+ * stable session tag). Deliberately absent: auto_plan, model overrides,
+ * audio, and finishing fields.
  */
 export function buildCreativeSubmitArgs(
   plan: Pick<FilmPlan, "title" | "targetDurationSeconds" | "aspectRatio" | "budgetCapUsd" | "scenes">,
-  sessionId: string
+  sessionId: string,
+  sourceUrl: string
 ): CreativeSubmitArgs {
   return {
     title: plan.title,
@@ -89,7 +98,12 @@ export function buildCreativeSubmitArgs(
     ...(PROVIDER_ASPECTS.includes(plan.aspectRatio) ? { aspect_ratio: plan.aspectRatio } : {}),
     deliver: "reel",
     budget_usd: plan.budgetCapUsd,
-    session_id: sessionId
+    session_id: sessionId,
+    character_anchor: sourceUrl,
+    shot_strategy: "t2v",
+    verify: "on",
+    delivery_promise: "motion_led",
+    global_model_override: "kling-v3-turbo-t2v"
   };
 }
 
@@ -115,7 +129,7 @@ export interface CreativeSubmitParsed {
 export interface CreativeSceneOutputParsed {
   index: number;
   title?: string;
-  url: string;
+  url?: string;
   status?: string;
 }
 
@@ -128,6 +142,8 @@ export interface CreativeStatusParsed {
   providerJobId?: string;
   /** Final reel file URL (HTTPS-verified by the caller, never here). */
   reelUrl?: string;
+  /** Provider-hosted progress page; useful for inspection, never a deliverable. */
+  viewerUrl?: string;
   /** Provider-reported per-scene outputs (HTTPS-verified entries only). */
   sceneOutputs: CreativeSceneOutputParsed[];
   costUsd?: number;
@@ -217,6 +233,15 @@ function extractReelUrl(payload: Record<string, unknown>): string | undefined {
   return undefined;
 }
 
+/** A viewer page is useful for live inspection but never substitutes for a reel file. */
+function extractViewerUrl(payload: Record<string, unknown>): string | undefined {
+  const s = structuredOf(payload);
+  for (const candidate of [s.viewer_url, s.viewerUrl, s.project_url, s.projectUrl]) {
+    if (isHttpsUrl(candidate)) return candidate;
+  }
+  return undefined;
+}
+
 /** Provider-reported per-scene outputs: HTTPS entries only, index-stable. */
 function extractSceneOutputs(payload: Record<string, unknown>): CreativeSceneOutputParsed[] {
   const s = structuredOf(payload);
@@ -225,12 +250,15 @@ function extractSceneOutputs(payload: Record<string, unknown>): CreativeSceneOut
   scenes.forEach((entry, i) => {
     if (!isRecord(entry)) return;
     const url = [entry.url, entry.video_url, entry.output_url, entry.reel_url].find(isHttpsUrl);
-    if (!url) return;
+    const status = str(entry.status ?? entry.state);
+    // Preserve a provider scene state even before it has a playable URL: this
+    // feeds the in-app Queue inspector without inventing output media.
+    if (!url && !status) return;
     out.push({
       index: typeof entry.index === "number" ? entry.index : i,
       ...(str(entry.title ?? entry.name) ? { title: str(entry.title ?? entry.name) as string } : {}),
-      url,
-      ...(str(entry.status ?? entry.state) ? { status: str(entry.status ?? entry.state) as string } : {})
+      ...(url ? { url } : {}),
+      ...(status ? { status } : {})
     });
   });
   return out;
@@ -305,6 +333,7 @@ export function parseCreativeStatus(payload: Record<string, unknown>): CreativeS
     failed: FAILED_STATES.includes(statusText),
     ...(extractCreativeJobId(payload) ? { providerJobId: extractCreativeJobId(payload) as string } : {}),
     ...(extractReelUrl(payload) ? { reelUrl: extractReelUrl(payload) as string } : {}),
+    ...(extractViewerUrl(payload) ? { viewerUrl: extractViewerUrl(payload) as string } : {}),
     sceneOutputs: extractSceneOutputs(payload),
     costUsd: extractCost(payload),
     estimateUsd: num(raw.estimate_usd ?? raw.estimateUsd),

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Check, CircleDashed, Hourglass, Loader2, RotateCcw, Wand2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -72,6 +72,7 @@ export function QueuePanel({ campaign, allowed, onChanged }: QueuePanelProps) {
   const [error, setError] = useState<string | null>(null);
   const [refineFor, setRefineFor] = useState<string | null>(null);
   const [instructions, setInstructions] = useState("");
+  const refinementKey = useRef<string | null>(null);
   const [detailsFor, setDetailsFor] = useState<string | null>(null);
   const [backupConfirmFor, setBackupConfirmFor] = useState<string | null>(null);
   const [cancelNote, setCancelNote] = useState<string | null>(null);
@@ -192,14 +193,17 @@ export function QueuePanel({ campaign, allowed, onChanged }: QueuePanelProps) {
     if (busy || !instructions.trim()) return;
     setBusy(`refine-${jobId}`);
     setError(null);
+    const key = refinementKey.current ?? newRunKey("refine");
+    refinementKey.current = key;
     try {
-      await apiPost(`/api/campaigns/${campaign.id}/revise`, { stageId, instructions: instructions.trim() });
+      await apiPost(`/api/campaigns/${campaign.id}/revise`, { stageId, jobId, instructions: instructions.trim(), idempotencyKey: key });
+      refinementKey.current = null;
       setRefineFor(null);
       setInstructions("");
       invalidateSnapshot();
-      await onChanged();
-     } catch {
-       setError("Refinement could not start. Your instructions are preserved.");
+      await onChanged().catch(() => setError("Refinement started. Refresh the queue to follow its progress."));
+     } catch (cause) {
+       setError(cause instanceof Error ? cause.message : "Refinement could not start. Your instructions are preserved.");
      } finally {
       setBusy(null);
     }
@@ -241,6 +245,7 @@ export function QueuePanel({ campaign, allowed, onChanged }: QueuePanelProps) {
              const shown = queueStatusForJob(displayStatus(job, plan, readyStages), blocked);
              const customerMessage = queueCustomerMessage(job, shown);
              const meta = STATUS_META[shown] ?? STATUS_META.queued;
+             const statusLabel = shown === "preview_ready" && job.kind === "image-to-video" ? "Checking output" : meta.label;
             const refining = refineFor === job.id;
             // A rejected submit has no provider id even though its local
             // status was advanced to generating. It has never been billed
@@ -261,7 +266,7 @@ export function QueuePanel({ campaign, allowed, onChanged }: QueuePanelProps) {
                   {job.status === "cancelled" && <X className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />}
                   <p className="min-w-0 flex-1 truncate text-[12.5px] font-medium">{stage?.label ?? job.stageId}</p>
                   <span className={cn("shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ring-1", meta.className)}>
-                    {meta.label}
+                    {statusLabel}
                   </span>
                   {attentionJobIds.has(job.id) && (
                     <span
@@ -290,7 +295,7 @@ export function QueuePanel({ campaign, allowed, onChanged }: QueuePanelProps) {
                  )}
                  {isActiveJobStatus(job.status) && shown !== "recovering" && (
                   <p className="mt-1 animate-pulse text-[12px] font-medium text-amber-700 dark:text-amber-300" role="status">
-                    {plainActivity(job.stageId, stage?.label ?? job.stageId, shown)}
+                    {plainActivity(job.stageId, stage?.label ?? job.stageId, shown, job.kind)}
                   </p>
                 )}
                 {job.outputUrl && (job.status === "ready_to_share" || job.status === "preview_ready" || job.status === "storage_pending" || job.status === "storage_retry_needed") && (
@@ -304,7 +309,11 @@ export function QueuePanel({ campaign, allowed, onChanged }: QueuePanelProps) {
                   </div>
                 )}
                 {job.status === "preview_ready" && (
-                  <p className="mt-1.5 text-[11px] text-muted-foreground">Output received - checking quality and saving securely. Not share-ready yet.</p>
+                  <p className="mt-1.5 text-[11px] text-muted-foreground">
+                    {job.kind === "image-to-video"
+                      ? "Output received - checking its dimensions and saving securely. Not share-ready yet."
+                      : "Output received - checking quality and saving securely. Not share-ready yet."}
+                  </p>
                 )}
                 {job.status === "storage_pending" && (
                   <p className="mt-1.5 text-[11px] text-muted-foreground">Saving securely. Not share-ready yet.</p>
@@ -482,13 +491,13 @@ export function QueuePanel({ campaign, allowed, onChanged }: QueuePanelProps) {
                           >
                             {busy === `refine-${job.id}` ? "Starting…" : "Regenerate"}
                           </Button>
-                          <Button variant="ghost" size="sm" onClick={() => { setRefineFor(null); setInstructions(""); }} disabled={busy !== null} className="h-7 rounded-full px-2.5 text-[11.5px]">
+                          <Button variant="ghost" size="sm" onClick={() => { setRefineFor(null); setInstructions(""); refinementKey.current = null; }} disabled={busy !== null} className="h-7 rounded-full px-2.5 text-[11.5px]">
                             Cancel
                           </Button>
                         </div>
                       </div>
                     ) : (
-                      <Button variant="ghost" size="sm" onClick={() => { setRefineFor(job.id); setInstructions(""); }} disabled={busy !== null} className="h-7 rounded-full px-2.5 text-[11.5px] text-muted-foreground hover:text-foreground">
+                      <Button variant="ghost" size="sm" onClick={() => { setRefineFor(job.id); setInstructions(""); refinementKey.current = null; }} disabled={busy !== null} className="h-7 rounded-full px-2.5 text-[11.5px] text-muted-foreground hover:text-foreground">
                         <Wand2 className="h-3 w-3" aria-hidden /> Refine
                       </Button>
                     )}

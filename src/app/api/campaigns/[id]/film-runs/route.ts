@@ -1,10 +1,31 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { AuthenticationRequiredError, requireCurrentSession } from "@/server/auth";
 import { loadCampaign } from "@/server/campaigns";
 import { pumpFilmRun, submitFilmRun } from "@/server/livepeer/film-pump";
 import { newRunKey } from "@/lib/idempotency-key";
+import { redactSecrets } from "@/server/dkg/edge-node-adapter";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 600;
+
+/** Check an uncertain submit by its stable client key after a timeout or reload. */
+export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  try {
+    await requireCurrentSession();
+  } catch (error) {
+    if (error instanceof AuthenticationRequiredError) {
+      return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+    }
+    throw error;
+  }
+  const key = request.nextUrl.searchParams.get("idempotencyKey")?.trim();
+  if (!key) return NextResponse.json({ error: "Submission key is required" }, { status: 400 });
+  const campaign = await loadCampaign(id);
+  if (!campaign) return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
+  const run = campaign.filmRuns?.find((item) => item.idempotencyKey === key);
+  return NextResponse.json({ found: Boolean(run), filmRunId: run?.id ?? null, status: run?.status ?? null });
+}
 
 /**
  * Submit a film run from the saved (confirmed) film plan. Fast: the
@@ -29,12 +50,13 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     }
     throw error;
   }
-  const campaign = await loadCampaign(id);
-  if (!campaign) return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
   const submitted = await submitFilmRun({ workspaceId, campaignId: id, idempotencyKey });
   if (!submitted.run) return NextResponse.json({ error: submitted.error ?? "Film submission failed" }, { status: 400 });
   if (submitted.created) {
-    void pumpFilmRun(workspaceId, id, submitted.run.id, { budgetMs: 8 * 60 * 1000 }).catch(() => undefined);
+    const filmRunId = submitted.run.id;
+    after(() => pumpFilmRun(workspaceId, id, filmRunId, { budgetMs: 8 * 60 * 1000 }).catch((error) => {
+      console.error("[film-run:pump]", redactSecrets(error instanceof Error ? error.message : String(error)).slice(0, 500));
+    }));
   }
   return NextResponse.json({ started: true, filmRunId: submitted.run.id, created: submitted.created });
 }

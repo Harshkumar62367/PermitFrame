@@ -61,6 +61,7 @@ export function CampaignExtras({ campaign, hideVariants = false }: { campaign: C
   const [timeline, setTimeline] = useState<TimelineEntry[] | null>(null);
   const [timelineError, setTimelineError] = useState<string | null>(null);
   const [timelineOpen, setTimelineOpen] = useState(false);
+  const [timelineVisible, setTimelineVisible] = useState(12);
   const [comment, setComment] = useState("");
   const [commentError, setCommentError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -394,7 +395,7 @@ export function CampaignExtras({ campaign, hideVariants = false }: { campaign: C
                 <button type="button" onClick={loadTimeline} className="font-medium underline underline-offset-2">Retry</button>
               </p>
             )}
-            {(timeline ?? []).slice(0, 12).map((entry, idx, arr) => (
+            {(timeline ?? []).slice(0, timelineVisible).map((entry, idx, arr) => (
               <div key={entry.id} className="relative flex gap-3 pb-4 last:pb-0">
                 {!arr.slice(idx + 1).length || <span className="absolute left-[5px] top-4 h-full w-px bg-border" />}
                 <span className={cn("relative z-10 mt-1 h-2.5 w-2.5 shrink-0 rounded-full", entry.kind === "comment" ? "bg-violet-500" : entry.kind.includes("block") || entry.kind.includes("revoked") ? "bg-rose-500" : "bg-emerald-500")} />
@@ -407,6 +408,32 @@ export function CampaignExtras({ campaign, hideVariants = false }: { campaign: C
               </div>
             ))}
             {timeline && timeline.length === 0 && <p className="text-[12.5px] text-muted-foreground">No events yet.</p>}
+            {timeline && timeline.length > 12 && (
+              <div className="mt-3 flex flex-wrap gap-2">
+                {timelineVisible < timeline.length && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setTimelineVisible((current) => Math.min(current + 12, timeline.length))}
+                    className="rounded-full text-[11.5px]"
+                  >
+                    Show {Math.min(12, timeline.length - timelineVisible)} older {timeline.length - timelineVisible === 1 ? "entry" : "entries"}
+                  </Button>
+                )}
+                {timelineVisible > 12 && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setTimelineVisible(12)}
+                    className="rounded-full text-[11.5px]"
+                  >
+                    Show fewer
+                  </Button>
+                )}
+              </div>
+            )}
           </div>
           </div>
           )}

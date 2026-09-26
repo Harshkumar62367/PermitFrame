@@ -86,6 +86,16 @@ A transcript-only result is not described as burned captions. Review the resulti
 
 Burned-caption derivatives remain private. Review their spend separately from narration and from the original film run.
 
+### Known provider issue — September 26, 2026
+
+For a narrated 30-second Campaign Film, PermitFrame submitted `transcribe` with the provider's documented `burn: true` option and an explicit `en` language hint. The provider correctly returned the spoken transcript, but returned neither a captioned-video URL nor a burn-job ID. PermitFrame therefore records the action as **Transcript received; captions were not burned into a video** and leaves the original reel unchanged.
+
+This confirms that source selection and speech recognition worked; the missing result is the provider's caption-rendering step. Before retrying, ask the provider team:
+
+- Why can `transcribe` with `burn: true` return transcript-only for a public MP4 with speech?
+- Is `ffmpeg-burn-subtitles` intended to be directly callable, and if so, what are its public MCP tool name and input schema?
+- If burning is asynchronous, which response field contains the job ID and which status endpoint should be polled?
+
 ## Current limitation: no music mixing
 
 Music and soundtrack mixing are not available yet in PermitFrame's film finishing flow.

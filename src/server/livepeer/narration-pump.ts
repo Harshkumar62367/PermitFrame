@@ -31,7 +31,7 @@ import type { FilmRun } from "./film-run";
  * only (audio-contract.ts gates both dispatches). The original reel is
  * never overwritten - a playable narrated file becomes a NEW local-only
  * derivative receipt linked to the reel (no DKG publication, no storage
- * claims). Narration never loops (audio_fill none), and muxing waits for
+ * claims). Narration pads with silence after speech, and muxing waits for
  * a verified audio file plus a known remaining cap. Short-clip jobs,
  * caption jobs, receipts, and plans are never read or written here.
  */
@@ -236,7 +236,7 @@ function buildNarratedReceipt(
     id: newId("rcpt"),
     campaignId: campaign.id,
     jobId: job.id,
-    label: `Campaign film reel · narration · ${run.targetDurationSeconds}s`,
+    label: "Campaign film reel · narration",
     mediaType: "video",
     format: run.aspectRatio,
     outputUrl: narratedUrl,

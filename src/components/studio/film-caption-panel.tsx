@@ -59,6 +59,9 @@ export function FilmCaptionPanel({ campaignId, run, allowed, onChanged }: FilmCa
   useFilmCaptionProgress(campaignId, run.id, run.captionJobs, onChanged);
 
   const eligible = run.status === "ready" && typeof run.reelUrl === "string";
+  const narratedSources = (run.narrationJobs ?? [])
+    .filter((job) => job.status === "ready" && job.narratedUrl)
+    .toSorted((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
   if (!eligible && jobs.length === 0) return null;
 
   async function retry(captionJobId: string) {
@@ -171,7 +174,9 @@ export function FilmCaptionPanel({ campaignId, run, allowed, onChanged }: FilmCa
       {confirming && (
         <CaptionConfirm
           busy={busy === "submit"}
-          onConfirm={(language) => {
+          narratedSources={narratedSources}
+          targetDurationSeconds={run.targetDurationSeconds}
+          onConfirm={(language, narrationJobId) => {
             setConfirming(false);
             void (async () => {
               setBusy("submit");
@@ -180,11 +185,11 @@ export function FilmCaptionPanel({ campaignId, run, allowed, onChanged }: FilmCa
               try {
                 await apiPost(
                   `/api/campaigns/${campaignId}/film-runs/${run.id}/captions`,
-                  { language, idempotencyKey: newRunKey("filmcap") },
+                  { language, narrationJobId, idempotencyKey: newRunKey("filmcap") },
                   undefined,
                   30000
                 );
-                setNote("Caption job submitted - transcribing the delivered reel.");
+                setNote(`Caption job submitted - transcribing the ${narrationJobId ? "narrated copy" : "original reel"}.`);
                 invalidateSnapshot();
                 await onChanged();
               } catch (e) {
@@ -217,11 +222,11 @@ function CaptionJobCard({
   onRecover: () => void;
 }) {
   const active = !isTerminalStatus(job.status);
-  const retryable = job.status === "failed" && !job.providerJobId;
+  const retryable = job.status === "failed" && !job.providerJobId && !job.transcriptText;
   // Derived display: a stale claimed job renders outcome-unknown while the
   // stored record keeps its last known state until explicit recovery.
   const display = captionDisplayStatus(job);
-  const recoverable = display === "outcome_unknown" && (job.status === "queued" || job.status === "transcribing");
+  const recoverable = display === "outcome_unknown" && active;
   return (
     <li className="rounded-lg bg-muted/60 px-2.5 py-2 ring-1 ring-border">
       <p className="flex items-center justify-between gap-2 text-[12px]">
@@ -243,12 +248,17 @@ function CaptionJobCard({
         </p>
       )}
       {job.status === "ready" && job.captionedUrl && (
-        <div className="mt-1.5">
-          <video src={job.captionedUrl} controls preload="metadata" className="aspect-video w-full rounded-lg bg-black" />
-          <p className="mt-1 text-[10.5px] text-muted-foreground">
-            Captioned derivative - saved as a linked receipt in Review. The original reel is unchanged.
-          </p>
-        </div>
+        <details className="mt-1.5 rounded-md bg-background/50 px-2.5 py-2 ring-1 ring-border">
+          <summary className="cursor-pointer text-[11.5px] font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline">
+            Show captioned result
+          </summary>
+          <div className="mt-2">
+            <video src={job.captionedUrl} controls preload="metadata" className="aspect-video w-full rounded-lg bg-black" />
+            <p className="mt-1 text-[10.5px] text-muted-foreground">
+              Captioned derivative - saved as a linked receipt in Review. The original reel is unchanged.
+            </p>
+          </div>
+        </details>
       )}
       {job.transcriptText && job.status !== "ready" && (
         <details className="mt-1.5 text-[11.5px]">
@@ -259,6 +269,9 @@ function CaptionJobCard({
             {job.transcriptText}
           </p>
         </details>
+      )}
+      {job.status === "failed" && job.transcriptText && !job.providerJobId && (
+        <p className="mt-1.5 text-[11.5px] text-muted-foreground">Repeating this same source would repeat the transcript-only result. Use Burn captions above to select a narrated video instead.</p>
       )}
       {job.transcriptText && job.status === "ready" && (
         <details className="mt-1.5 text-[11.5px]">
@@ -352,15 +365,23 @@ function RecoveryConfirm({
 
 function CaptionConfirm({
   busy,
+  narratedSources,
+  targetDurationSeconds,
   onConfirm,
   onCancel
 }: {
   busy: boolean;
-  onConfirm: (language: string) => void;
+  narratedSources: NonNullable<FilmRun["narrationJobs"]>;
+  targetDurationSeconds: number;
+  onConfirm: (language: string, narrationJobId?: string) => void;
   onCancel: () => void;
 }) {
   const titleId = useId();
   const [language, setLanguage] = useState("");
+  const [sourceId, setSourceId] = useState(narratedSources[0]?.id ?? "original");
+  const [sourceDuration, setSourceDuration] = useState<number | null>(null);
+  const selectedNarration = narratedSources.find((job) => job.id === sourceId);
+  const sourceTooShort = !!selectedNarration && sourceDuration !== null && sourceDuration < targetDurationSeconds * 0.8;
   const cancelRef = useRef<HTMLButtonElement>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
 
@@ -392,6 +413,23 @@ function CaptionConfirm({
           delivery, if at all.
         </p>
         <label className="mt-3 block">
+          <span className="text-[12px] font-medium text-muted-foreground">Video to caption</span>
+          <select value={sourceId} onChange={(event) => { setSourceId(event.target.value); setSourceDuration(null); }} aria-label="Video to caption" className="mt-1.5 w-full rounded-lg border border-border bg-card px-3 py-1.5 text-[13px]">
+            <option value="original">Original reel (may be silent)</option>
+            {narratedSources.map((job, index) => (
+              <option key={job.id} value={job.id}>
+                {index === 0 ? "Latest narrated copy" : "Older narrated copy"} · {formatNarrationDate(job.createdAt)}
+              </option>
+            ))}
+          </select>
+        </label>
+        {selectedNarration?.narratedUrl && <video key={selectedNarration.id} src={selectedNarration.narratedUrl} preload="metadata" onLoadedMetadata={(event) => setSourceDuration(event.currentTarget.duration)} className="hidden" aria-hidden />}
+        {sourceTooShort ? (
+          <p role="alert" className="mt-1.5 text-[12px] text-rose-600 dark:text-rose-300">This narrated copy is only {sourceDuration?.toFixed(1)}s, shorter than the {targetDurationSeconds}s reel. Create a full-length narrated copy before burning captions.</p>
+        ) : sourceId === "original" ? (
+          <p className="mt-1.5 text-[12px] text-amber-700 dark:text-amber-300">Captions require speech in the selected video. A silent original reel may return a transcript but no captioned video.</p>
+        ) : null}
+        <label className="mt-3 block">
           <span className="text-[12px] font-medium text-muted-foreground">Caption language (required)</span>
           <select
             value={language}
@@ -410,8 +448,8 @@ function CaptionConfirm({
             Keep as is
           </Button>
           <Button
-            onClick={() => language && onConfirm(language)}
-            disabled={busy || !language}
+            onClick={() => language && onConfirm(language, sourceId === "original" ? undefined : sourceId)}
+            disabled={busy || !language || sourceTooShort || (!!selectedNarration && sourceDuration === null)}
             aria-busy={busy}
             title={!language ? "Choose a caption language first" : undefined}
             className="rounded-full bg-emerald-700 font-medium text-emerald-50 hover:bg-emerald-600 disabled:opacity-50 dark:bg-emerald-500 dark:text-emerald-950 dark:hover:bg-emerald-400"
@@ -422,4 +460,10 @@ function CaptionConfirm({
       </div>
     </div>
   );
+}
+
+function formatNarrationDate(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "date unavailable";
+  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(date);
 }
