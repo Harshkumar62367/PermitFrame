@@ -380,8 +380,15 @@ export class LivepeerMcpClient {
   /** Poll the status endpoint for one async job (resume-safe, no side effects). */
   async getMediaStatus(jobId: string): Promise<MediaStatusResult> {
     const payload = await this.callTool("get_create_media", { job_id: jobId });
-    assertToolOk(payload, "get_create_media");
-    const status = extractStatus(payload) || "unknown";
+    const text = resultText(payload);
+    const providerReportedFailure = /\bfailed\b|no media was produced|runner_abandoned/i.test(text);
+    // get_create_media marks a terminal provider failure as an MCP error.
+    // That is still a valid status response, not a transient transport
+    // failure: return it so the narration/film pumps can settle the job.
+    if ((payload.error || (payload.result as { isError?: boolean } | undefined)?.isError) && !providerReportedFailure) {
+      assertToolOk(payload, "get_create_media");
+    }
+    const status = extractStatus(payload) || (providerReportedFailure ? "failed" : "unknown");
     const s = structured(payload) as Record<string, unknown>;
     return {
       status,

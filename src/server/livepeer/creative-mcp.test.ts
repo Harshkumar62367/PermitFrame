@@ -332,6 +332,20 @@ describe("creative result parsing", () => {
   });
 });
 
+describe("terminal provider status polling", () => {
+  afterEach(() => restoreFetch());
+
+  it("returns a provider-declared failed media job so the caller can settle it", async () => {
+    stubFetch((tool) => {
+      assert.equal(tool, "get_create_media");
+      return errTool("Media job mjob_dead: failed. Runner: err runner_abandoned. No media was produced.");
+    });
+    const status = await new LivepeerMcpClient(livepeerConfig()).getMediaStatus("mjob_dead");
+    assert.equal(status.status, "failed");
+    assert.equal(status.terminal, true);
+  });
+});
+
 describe("honest creative failures", () => {
   afterEach(() => restoreFetch());
 

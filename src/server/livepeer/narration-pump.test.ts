@@ -295,7 +295,7 @@ describe("TTS-to-mux success", () => {
     assert.ok(job?.receiptId);
     assert.equal(after.receipts.length, 1);
     const receipt = after.receipts[0];
-    assert.equal(receipt.label, "Campaign film reel · narration · 45s");
+    assert.equal(receipt.label, "Campaign film reel · narration");
     assert.equal(receipt.mediaType, "video");
     assert.equal(receipt.format, "9:16");
     assert.equal(receipt.outputUrl, NARRATED);
