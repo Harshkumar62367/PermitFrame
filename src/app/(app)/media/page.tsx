@@ -431,7 +431,7 @@ export default function MediaLibraryPage() {
             )}
             {uploadBusy && uploadProgress?.phase === "processing" && (
               <p role="status" className="mt-2 text-[12px] text-muted-foreground">
-                Upload complete — securing and registering your asset… This can take a minute for large files.
+                Upload complete - securing and registering your asset… This can take a minute for large files.
               </p>
             )}
             {uploadError && <p role="alert" className="mt-2 text-[12px] text-rose-600 dark:text-rose-300">{uploadError}</p>}

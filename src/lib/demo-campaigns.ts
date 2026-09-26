@@ -57,7 +57,7 @@ export const DEMO_CAMPAIGNS: readonly DemoCampaign[] = [
       { ratio: "16:9", placement: "Listing header - portal hero and wide campaign banner" },
       { ratio: "4:3", placement: "Property feature detail - one verified feature per still" }
     ],
-    motionNote: "Planned — identity-safe property motion is not available for dispatch yet.",
+    motionNote: "Planned - identity-safe property motion is not available for dispatch yet.",
     workflow: [
       "Start from approved property media - the listing photographs the owner provided, never stock swaps.",
       "Attach verified facts: address, area, bedrooms, and the features the stills may show.",

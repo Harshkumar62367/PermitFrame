@@ -64,7 +64,7 @@ describe("demo campaign set", () => {
   it("states the identity-safe motion limit verbatim on the listing card", () => {
     assert.equal(
       DEMO_CAMPAIGNS.find((d) => d.id === "premium-listing-launch")?.motionNote,
-      "Planned — identity-safe property motion is not available for dispatch yet."
+      "Planned - identity-safe property motion is not available for dispatch yet."
     );
   });
 

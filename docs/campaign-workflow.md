@@ -153,7 +153,7 @@ Livepeer performs the selected supported media work, which can include image gen
 - Store completed assets for delivery.
 - Create derivative receipts.
 
-Only selected active-plan stages are submitted. A stage absent from the active plan—for example `4:3` on the automatic starter plan—cannot be selected until you apply a plan that includes it. Failed provider work is shown honestly and can be retried under the available controls.
+Only selected active-plan stages are submitted. A stage absent from the active plan - for example `4:3` on the automatic starter plan - cannot be selected until you apply a plan that includes it. Failed provider work is shown honestly and can be retried under the available controls.
 
 :::details Example: completed multi-format creative pack
 
