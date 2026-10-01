@@ -1,7 +1,6 @@
 import {
   BadgeCheck,
   BookOpen,
-  Compass,
   FolderKanban,
   Images,
   LayoutDashboard,
@@ -45,7 +44,6 @@ export const APP_NAV: NavGroup[] = [
   {
     section: "Resources",
     items: [
-      { href: "/demo-campaigns", label: "Demo workflows", icon: Compass },
       { href: "/docs/getting-started", label: "Docs / Getting started", icon: BookOpen }
     ]
   }
