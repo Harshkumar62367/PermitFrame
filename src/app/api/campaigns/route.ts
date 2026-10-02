@@ -94,7 +94,9 @@ export async function POST(request: NextRequest) {
     sourceMediaId: media.id,
     passportId: passport.id,
     productFactsId: facts.id,
-    request: req
+    request: req,
+    selectedPermission: passport,
+    selectedFacts: facts
   };
   // Keyed submissions are idempotent: a retry after a network failure (the
   // client may have aborted after the server already persisted) replays the

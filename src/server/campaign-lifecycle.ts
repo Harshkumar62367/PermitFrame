@@ -1,11 +1,11 @@
-import type { Campaign, CampaignRequest, Platform, PublicationStatus } from "./types";
+import type { Campaign, CampaignRequest, PermissionPassport, Platform, ProductFacts, PublicationStatus } from "./types";
 import { hasSharableReceipt, isPublicDeliverableReceipt } from "./types";
-import { loadDb, newId, nowIso, updateDb } from "./store";
-import { eq } from "drizzle-orm";
+import { loadDb, loadWorkspaceDb, newId, nowIso, updateDb, updateWorkspaceDb } from "./store";
+import { and, eq } from "drizzle-orm";
 import { getDb } from "./db/client";
-import { workspaces } from "./db/schema";
+import { campaigns, workspaces } from "./db/schema";
 import { requireCurrentSession } from "./auth";
-import { preflight } from "./policy/engine";
+import { knownSelectionBlock, preflight } from "./policy/engine";
 import {
   revalidateCampaignAuthorization,
   type AuthorizationRevalidation
@@ -80,6 +80,9 @@ export interface CreateCampaignInput {
   productFactsId: string;
   request: CampaignRequest;
   contextNote?: string;
+  /** Existing workspace records can only produce an immediate block; allows always query live DKG. */
+  selectedPermission?: PermissionPassport;
+  selectedFacts?: ProductFacts;
 }
 
 export async function createCampaign(input: CreateCampaignInput): Promise<Campaign> {
@@ -103,13 +106,20 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Campai
     updatedAt: nowIso(),
     contextNote: input.contextNote
   };
-  campaign.preflight = await preflight(campaign);
+  const immediateBlock =
+    input.selectedPermission && input.selectedFacts
+      ? knownSelectionBlock(campaign, input.selectedPermission, input.selectedFacts)
+      : null;
+  campaign.preflight = immediateBlock ?? await preflight(campaign);
   if (campaign.preflight.decision === "block") campaign.status = "blocked";
   const createdEvent = preflightEvent(campaign, campaign.preflight);
   await updateDb((d) => {
     d.campaigns.push(campaign);
     d.events.push(createdEvent);
-  });
+  // An immediate mismatch is a blocked local draft. Persist it without a
+  // full workspace projection pass so the user can see the decision now;
+  // the next normal workspace write reconciles normalized projections.
+  }, immediateBlock ? { mirror: false } : undefined);
   return campaign;
 }
 
@@ -152,15 +162,15 @@ export async function createCampaignIdempotent(
     let reserved: ReturnType<typeof reserveIdempotencySlot> | undefined;
     await updateDb((d) => {
       reserved = reserveIdempotencySlot(d, key, fingerprint, now);
-    });
+    }, { mirror: false });
     if (!reserved || reserved.outcome === "reserved" || reserved.outcome === "takeover") {
       try {
         const campaign = await createCampaign(input);
-        await updateDb((d) => completeIdempotencySlot(d, key, campaign.id, nowIso()));
+        await updateDb((d) => completeIdempotencySlot(d, key, campaign.id, nowIso()), { mirror: false });
         return { campaign, deduplicated: false };
       } catch (error) {
         // Never leave a poisoned "processing" row: the next retry may take over.
-        await updateDb((d) => failIdempotencySlot(d, key, nowIso())).catch(() => undefined);
+        await updateDb((d) => failIdempotencySlot(d, key, nowIso()), { mirror: false }).catch(() => undefined);
         throw error;
       }
     }
@@ -176,7 +186,7 @@ export async function createCampaignIdempotent(
       throw new CampaignDeletedError(deletedTitle(db, reserved.campaignId) ?? reserved.campaignId);
     }
     const healed = await createCampaign(input);
-    await updateDb((d) => completeIdempotencySlot(d, key, healed.id, nowIso()));
+    await updateDb((d) => completeIdempotencySlot(d, key, healed.id, nowIso()), { mirror: false });
     return { campaign: healed, deduplicated: false };
   });
 }
@@ -518,13 +528,16 @@ export async function deleteCampaign(
   id: string,
   opts?: { force?: boolean }
 ): Promise<{ deleted: true; alreadyDeleted: boolean; title: string }> {
-  await requireWorkspaceOwner();
-  const tombstoned = isDeleted(await loadDb(), id);
+  const { workspaceId } = await requireWorkspaceOwner();
+  // One workspace read is enough for the whole decision. The former path
+  // performed up to three session-scoped reads before the write.
+  const db = await loadWorkspaceDb(workspaceId);
+  const tombstoned = isDeleted(db, id);
   if (tombstoned) {
-    const title = deletedTitle(await loadDb(), id) ?? id;
+    const title = deletedTitle(db, id) ?? id;
     return { deleted: true, alreadyDeleted: true, title };
   }
-  const campaign = await loadCampaign(id);
+  const campaign = db.campaigns.find((item) => item.id === id);
   if (!campaign) throw new CampaignNotFoundError(id);
   if (campaign.status === "archived") {
     if (!opts?.force) {
@@ -547,9 +560,21 @@ export async function deleteCampaign(
   const now = nowIso();
   const eventId = newId("evt");
   let result: { deleted: true; alreadyDeleted: boolean; title: string } | undefined;
-  await updateDb((d) => {
+  // Hard-deleting a draft needs no full workspace mirror. Mirroring every
+  // campaign and event made this small operation exceed the browser timeout
+  // in large workspaces. Remove the one indexed campaign row separately.
+  await updateWorkspaceDb(workspaceId, (d) => {
     result = applyDeleteToDb(d, id, now, eventId);
-  });
+  }, { mirror: false });
+  await getDb()
+    .delete(campaigns)
+    .where(and(eq(campaigns.workspaceId, workspaceId), eq(campaigns.id, id)))
+    .catch((error) => {
+      // The canonical workspace deletion already succeeded. A later normal
+      // mirror reconciles this best-effort projection if its targeted delete
+      // is temporarily unavailable.
+      console.warn("[campaign-delete] normalized row cleanup failed:", error instanceof Error ? error.message : "unknown error");
+    });
   // applyDeleteToDb throws for unknown ids, so result is always set here.
   return result ?? { deleted: true, alreadyDeleted: true, title: campaign.title };
 }

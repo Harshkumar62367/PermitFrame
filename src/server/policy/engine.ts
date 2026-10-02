@@ -103,8 +103,10 @@ export async function preflight(campaign: Campaign): Promise<PreflightDecision> 
   // 4. Compile the constrained production brief.
   const promptConstraints = compileConstraints(facts, allowedClaims, passport);
 
-  // 5. Plan the Livepeer production pipeline (only reachable when allowed).
-  const plan = await buildPlan(campaign);
+  // 5. Live capability discovery can take seconds. A blocked campaign never
+  // reaches production, so return the policy verdict immediately instead of
+  // making an unsupported claim wait on an irrelevant provider request.
+  const plan = blockers.length === 0 ? await buildPlan(campaign) : [];
 
   return {
     decision: blockers.length === 0 ? "allow" : "block",
@@ -179,6 +181,84 @@ export async function preflight(campaign: Campaign): Promise<PreflightDecision> 
     }
     return reasons;
   }
+}
+
+/**
+ * Return an immediate, fail-closed verdict when the permission and product
+ * facts selected in this workspace already prove that the request cannot run.
+ *
+ * A live DKG read remains required before an allow verdict. This fast path is
+ * used only to surface an existing mismatch without making the user wait for
+ * an unavailable or slow DKG node. It never permits production.
+ */
+export function knownSelectionBlock(
+  campaign: Campaign,
+  passport: PermissionPassport,
+  facts: ProductFacts
+): PreflightDecision | null {
+  const { platform, country, requestedClaims, transformation } = campaign.request;
+  const blockers: PreflightBlocker[] = [];
+
+  if (!passport.platforms.some((value) => value.toLowerCase() === platform.toLowerCase())) {
+    blockers.push({
+      code: "PLATFORM_NOT_PERMITTED",
+      message: `${platform} is not in this creator's selected permission (permitted: ${passport.platforms.join(", ")}).`,
+      evidenceRefs: [passport.ual ?? passport.id]
+    });
+  }
+  if (!passport.countries.some((value) => value.toLowerCase() === country.toLowerCase())) {
+    blockers.push({
+      code: "COUNTRY_NOT_PERMITTED",
+      message: `${country} is not covered by this creator's selected permission (covered: ${passport.countries.join(", ")}).`,
+      evidenceRefs: [passport.ual ?? passport.id]
+    });
+  }
+  if (!passport.allowedTransformations.includes("edit" as Transformation)) {
+    blockers.push({
+      code: "TRANSFORMATION_NOT_PERMITTED",
+      message: `Permission passport ${passport.id} does not allow editing the creator's content.`,
+      evidenceRefs: [passport.ual ?? passport.id]
+    });
+  } else if (transformation === "video" && !passport.allowedTransformations.includes("animate" as Transformation)) {
+    blockers.push({
+      code: "TRANSFORMATION_NOT_PERMITTED",
+      message: `Permission passport ${passport.id} does not allow animating the creator's content into video.`,
+      evidenceRefs: [passport.ual ?? passport.id]
+    });
+  }
+
+  for (const claim of requestedClaims) {
+    const normalized = claim.toLowerCase();
+    if (facts.prohibitedClaims.some((value) => value.toLowerCase() === normalized)) {
+      blockers.push({
+        code: "CLAIM_PROHIBITED",
+        message: `"${claim}" is on the prohibited-claims list for ${campaign.productName}.`,
+        evidenceRefs: [facts.ual ?? facts.id]
+      });
+    } else if (!facts.approvedClaims.some((value) => value.toLowerCase() === normalized)) {
+      blockers.push({
+        code: "CLAIM_NOT_SUPPORTED",
+        message: `"${claim}" is not supported by any verified product fact for ${campaign.productName}.`,
+        evidenceRefs: [facts.ual ?? facts.id]
+      });
+    }
+  }
+
+  if (blockers.length === 0) return null;
+  return {
+    decision: "block",
+    checkedAt: new Date().toISOString(),
+    blockers,
+    allowedClaims: [],
+    promptConstraints: compileConstraints(facts, [], passport),
+    plan: [],
+    queriedRights: [passport.ual ?? passport.id],
+    queriedFacts: [facts.ual ?? facts.id],
+    sparqlPreview: [
+      "-- Request blocked from the selected permission and brand rule before live DKG lookup.",
+      "-- Re-check rights runs the live DKG query after the brief is corrected."
+    ].join("\n")
+  };
 }
 
 function compileConstraints(
